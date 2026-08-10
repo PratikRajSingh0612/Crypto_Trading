@@ -27,7 +27,7 @@
 - Do not add pre-commit, hosted CI, GitHub workflows, Docker, a WSL dependency, GitNexus installation/configuration, custom Skills, schemas, databases, runtime directories, or engine folders.
 - Do not add Binance, CCXT, broker, exchange, network-client, Pydantic, SQLAlchemy, Alembic, Parquet, YAML, LLM, tax, UI, or trading-engine dependencies.
 - Do not implement configuration loading, canonical domain types, dataset ingestion, strategies, experiments, adapters, engines, process supervision, persistence, artifacts, paper trading, tax logic, or LLM behavior.
-- Ordinary synchronization, focused checks, full verification, lock validation, and package builds must be independently offline: use `uv sync --frozen --offline`, `uv run --no-sync`, `uv lock --check --offline`, and `uv build --offline` as applicable.
+- Ordinary synchronization, focused checks, full verification, lock validation, and package builds must be independently offline: use `uv sync --frozen --offline`, `uv run --no-sync`, `uv lock --check --offline`, and `uv build --offline` as applicable. Every complete or full quality gate must validate the lock offline before synchronizing the environment.
 - The only non-offline `uv` commands permitted are the exact one-time user-approved Task 2 bootstrap commands `uv lock` and dependency-acquisition `uv sync --frozen`; before the source scaffold exists, that synchronization command must include `--no-install-project`. Never request permanent or unrestricted network access, and never use a bootstrap approval as verification evidence.
 - Do not inspect, print, persist, or log ambient environment-variable values, credentials, browser data, credential-store contents, suspected secret contents, or private keys. Application code must not use ambient environment variables for implicit configuration or credentials. The future `AGENTS.md` makes only the reviewed non-secret GitNexus MCP control-variable exception required by ADR 0001; those values remain developer-tool configuration, never application configuration, credentials, or runtime product inputs.
 - Keep GitNexus optional and outside product, runtime, build, package, and test dependencies; do not install, configure, or invoke it in Stage 1.
@@ -879,6 +879,14 @@ Expected: all tests pass. This is the fresh-process import guard's first permitt
 - [ ] **Step 11: Run the broader source checks**
 
 ```powershell
+uv lock --check --offline
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+uv sync --frozen --offline
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
 uv run --no-sync ruff format --check src tests/unit tests/conftest.py
 uv run --no-sync ruff check src tests/unit tests/conftest.py
 uv run --no-sync mypy src tests
@@ -887,11 +895,11 @@ uv build --offline
 git diff --check
 ```
 
-Expected: every command exits `0` without network access; the full pytest command, not the focused `addopts`-overridden slices, proves branch coverage of at least 90 percent; the source-level PEP 561 marker test passes; and the sdist and wheel build offline without introducing a runtime dependency. Review the package modules directly alongside the bounded fresh-process guard; the guard is not an operating-system sandbox or proof against every possible import side effect.
+Expected: every command exits `0` without network access; offline lock validation proves that `uv.lock` matches the current project metadata before offline synchronization; the full pytest command, not the focused `addopts`-overridden slices, proves branch coverage of at least 90 percent; the source-level PEP 561 marker test passes; and the sdist and wheel build offline without introducing a runtime dependency. Review the package modules directly alongside the bounded fresh-process guard; the guard is not an operating-system sandbox or proof against every possible import side effect.
 
 **Focused verification:** The initial package-layout command is red because the package does not exist, the CLI command is red before the CLI modules exist, and the combined command turns both green only after the complete package and CLI scaffold exists. Focused runs disable repository coverage options and therefore do not establish the coverage threshold.
 
-**Broader verification:** No-sync Ruff format/lint, strict mypy, all unit tests with coverage, offline package build, exact source review, and whitespace check.
+**Broader verification:** Offline lock consistency before offline synchronization, no-sync Ruff format/lint, strict mypy, all unit tests with coverage, offline package build, exact source review, and whitespace check.
 
 **Commit:**
 
@@ -1650,6 +1658,10 @@ Expected: exit `0` with no network, engine, database, Docker, WSL, credential, o
 - [ ] **Step 14: Format and run the complete quality gate**
 
 ```powershell
+uv lock --check --offline
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
 uv sync --frozen --offline
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
@@ -1662,11 +1674,11 @@ uv build --offline
 git diff --check
 ```
 
-Expected: every command exits `0` without network access. Offline synchronization installs exactly the locked environment, every tool runs with `--no-sync`, branch coverage is at least 90 percent, and both package distributions build offline from the synchronized Hatchling without an isolated resolver. A missing local package stops the task and returns to the Task 2 bootstrap gate.
+Expected: every command exits `0` without network access. Offline lock validation first proves that `uv.lock` matches the current project metadata, offline synchronization then installs exactly that locked environment, every tool runs with `--no-sync`, branch coverage is at least 90 percent, and both package distributions build offline from the synchronized Hatchling without an isolated resolver. A stale lock stops before synchronization; a missing local package stops the task and returns to the Task 2 bootstrap gate.
 
 **Focused verification:** Three independent red-green cycles: AST import boundary, dependency classification, and filename/Git-ignore safety.
 
-**Broader verification:** Combined architecture/safety slice, full Ruff, strict mypy, complete pytest with coverage, package build, and whitespace check.
+**Broader verification:** Offline lock consistency before synchronization, combined architecture/safety slice, full Ruff, strict mypy, complete pytest with coverage, offline package build, and whitespace check.
 
 **Commit:**
 
@@ -1688,7 +1700,7 @@ Expected: one test-only commit containing exactly the three guardrail files.
 
 **Interfaces:**
 - Consumes: the locked environment, package/CLI commands, quality configuration, and guardrail tests from Tasks 2–4
-- Produces: repository instructions for coding agents; local operator guidance; and `scripts/verify.ps1`, a parameterless command that exits `0` only when all seven required checks exit `0` and otherwise returns the first failing native exit code
+- Produces: repository instructions for coding agents; local operator guidance; and `scripts/verify.ps1`, a parameterless command that exits `0` only when all eight required checks exit `0` and otherwise returns the first failing native exit code
 
 This task uses the documentation/automation exception declared above. It adds no production Python behavior.
 
@@ -1711,7 +1723,7 @@ Create `AGENTS.md` with exactly:
 - Use test-driven development for production behavior: focused failing test, minimum implementation, focused passing test, then broader verification.
 - Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` before claiming completion.
 - Report every skipped check, warning, and failure; do not infer success from a partial verification run.
-- Ordinary development and verification are offline: synchronize with `uv sync --frozen --offline`, run installed tools with `uv run --no-sync`, build with `uv build --offline`, and validate the lock with `uv lock --check --offline`.
+- Ordinary development and verification are offline: validate the lock with `uv lock --check --offline` before synchronizing with `uv sync --frozen --offline`, run installed tools with `uv run --no-sync`, and build with `uv build --offline`.
 - If locked packages are absent locally, stop and return to the separately approved Task 2 bootstrap procedure. Only its exact, one-time-approved `uv lock` and dependency-acquisition `uv sync --frozen` commands may access the network; use `--no-install-project` before the source scaffold exists, and never enable unrestricted or permanent network access.
 
 ## Architecture rules
@@ -1799,7 +1811,7 @@ Both version commands print `crypto-lab 0.1.0`. Always try the offline synchroni
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 ```
 
-The workflow checks the locked environment, formatting, linting, strict typing, tests and coverage, package builds, and Git whitespace. See [development verification](docs/development/verification.md) for focused commands and the dependency network gate.
+The workflow checks that `uv.lock` matches the current project metadata before synchronizing the locked environment, then checks formatting, linting, strict typing, tests and coverage, package builds, and Git whitespace. See [development verification](docs/development/verification.md) for focused commands and the dependency network gate.
 
 ## Architecture references
 
@@ -1847,6 +1859,10 @@ function Invoke-VerificationStep {
 
 Push-Location -LiteralPath $repositoryRoot
 try {
+    Invoke-VerificationStep `
+        "Check lockfile consistency" `
+        "uv" `
+        @("lock", "--check", "--offline")
     Invoke-VerificationStep "Sync locked environment" "uv" @("sync", "--frozen", "--offline")
     Invoke-VerificationStep "Check formatting" "uv" @("run", "--no-sync", "ruff", "format", "--check", ".")
     Invoke-VerificationStep "Run lint checks" "uv" @("run", "--no-sync", "ruff", "check", ".")
@@ -1870,15 +1886,16 @@ exit $verificationExitCode
 
 This executes, in exact logical order:
 
-1. `uv sync --frozen --offline`
-2. `uv run --no-sync ruff format --check .`
-3. `uv run --no-sync ruff check .`
-4. `uv run --no-sync mypy src tests`
-5. `uv run --no-sync pytest`
-6. `uv build --offline`
-7. `git diff --check`
+1. `uv lock --check --offline`
+2. `uv sync --frozen --offline`
+3. `uv run --no-sync ruff format --check .`
+4. `uv run --no-sync ruff check .`
+5. `uv run --no-sync mypy src tests`
+6. `uv run --no-sync pytest`
+7. `uv build --offline`
+8. `git diff --check`
 
-The helper captures `$LASTEXITCODE` before throwing, stops immediately, and returns that native nonzero value after the `finally` block restores the original directory. Every package operation in the script is independently offline or `--no-sync`; it never relies on an earlier probe and contains no network enablement, engine, Docker, WSL, credential, Binance, runtime, or GitNexus operation. If a locked package is unavailable locally, synchronization fails and the operator returns to the separately approved Task 2 bootstrap procedure.
+The helper captures `$LASTEXITCODE` before throwing, stops immediately, and returns that native nonzero value after the `finally` block restores the original directory. The first operation proves offline that `uv.lock` matches the current `pyproject.toml` before synchronization. Every package operation in the script is independently offline or `--no-sync`; it never relies on an earlier probe and contains no network enablement, engine, Docker, WSL, credential, Binance, runtime, or GitNexus operation. A stale lock fails before synchronization. If a locked package is unavailable locally, synchronization fails and the operator returns to the separately approved Task 2 bootstrap procedure.
 
 - [ ] **Step 4: Create development verification guidance**
 
@@ -1918,13 +1935,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 
 The script stops at the first failure and runs, in order:
 
-1. `uv sync --frozen --offline`
-2. `uv run --no-sync ruff format --check .`
-3. `uv run --no-sync ruff check .`
-4. `uv run --no-sync mypy src tests`
-5. `uv run --no-sync pytest`
-6. `uv build --offline`
-7. `git diff --check`
+1. `uv lock --check --offline`
+2. `uv sync --frozen --offline`
+3. `uv run --no-sync ruff format --check .`
+4. `uv run --no-sync ruff check .`
+5. `uv run --no-sync mypy src tests`
+6. `uv run --no-sync pytest`
+7. `uv build --offline`
+8. `git diff --check`
 
 A successful partial command does not establish repository acceptance.
 
@@ -1976,7 +1994,7 @@ if ($verificationExitCode -ne 0) {
 }
 ```
 
-Expected: exit `0`; the script's own offline synchronization succeeds, seven headings appear in the required order, the script returns the caller to `docs`, and no lockfile changes. The script is independently offline and does not rely on a separate probe. If its offline synchronization fails because locked content is absent locally, stop and use the Task 2 one-time approval gate before rerunning the unchanged script.
+Expected: exit `0`; the script's offline lock-consistency check succeeds before its offline synchronization, eight headings appear in the required order, the script returns the caller to `docs`, and no lockfile changes. The script is independently offline and does not rely on a separate probe. A stale lock stops before synchronization. If offline synchronization fails because locked content is absent locally, stop and use the Task 2 one-time approval gate before rerunning the unchanged script.
 
 - [ ] **Step 6: Review the complete documentation and automation diff**
 
@@ -1986,11 +2004,11 @@ git diff --check
 git status --short
 ```
 
-Expected: only the four Task 5 paths are uncommitted; the instructions and README match the fixed safety scope; the script contains exactly the seven required operations; and the whitespace check exits `0`.
+Expected: only the four Task 5 paths are uncommitted; the instructions and README match the fixed safety scope; the script contains exactly the eight required operations; and the whitespace check exits `0`.
 
-**Focused verification:** Execute `scripts/verify.ps1` from `docs` and confirm root resolution, ordered headings, first-failure behavior by inspection, exit propagation by implementation, and caller-directory restoration.
+**Focused verification:** Execute `scripts/verify.ps1` from `docs` and confirm root resolution, eight ordered headings beginning with offline lock consistency and offline synchronization, first-failure behavior by inspection, exit propagation by implementation, and caller-directory restoration.
 
-**Broader verification:** The script itself runs offline frozen sync, no-sync format check, no-sync lint, no-sync strict mypy, no-sync full pytest with coverage, offline package build, and Git whitespace.
+**Broader verification:** The script itself runs offline lock consistency before offline frozen sync, no-sync format check, no-sync lint, no-sync strict mypy, no-sync full pytest with coverage, offline package build, and Git whitespace.
 
 **Commit:**
 
@@ -2011,7 +2029,7 @@ Expected: one commit containing exactly the four documentation and workflow file
 
 **Interfaces:**
 - Consumes: all committed implementation-task outputs from Tasks 2–5, including any narrow correction commits
-- Produces: fresh console, format, lint, strict-type, test/coverage, build, safety, diff, and clean-worktree evidence only; no file or API output
+- Produces: fresh lock-consistency, environment-synchronization, console, format, lint, strict-type, test/coverage, build, safety, diff, and clean-worktree evidence only; no file or API output
 
 The preferred primary structure remains these four task commits: `chore: initialize python project foundation`, `feat: add package scaffold and version command`, `test: enforce architecture and safety boundaries`, and `docs: add repository development workflow`. They are not an exact total-commit requirement. A review or verification defect may use a narrow additional correction commit under the rules below.
 
@@ -2029,7 +2047,7 @@ Expected: exit `0` with no output. If any path is present, stop and resolve it i
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 ```
 
-Expected: exit `0`; the script itself performs offline frozen synchronization, no-sync Ruff format and lint, no-sync strict mypy, no-sync full pytest with at least 90 percent branch coverage, offline sdist/wheel build, and Git whitespace. It never initiates network access or relies on an earlier probe. If local locked content is missing, it fails and the operator returns to the Task 2 approval gate.
+Expected: exit `0`; the script itself first proves offline that `uv.lock` matches the current project metadata, then performs offline frozen synchronization, no-sync Ruff format and lint, no-sync strict mypy, no-sync full pytest with at least 90 percent branch coverage, offline sdist/wheel build, and Git whitespace. It never initiates network access or relies on an earlier probe. A stale lock fails before synchronization; if local locked content is missing, synchronization fails and the operator returns to the Task 2 approval gate.
 
 - [ ] **Step 3: Prove both exact version forms**
 
@@ -2081,6 +2099,7 @@ git diff "$stage1BaseCommit..HEAD"
 
 Review every line against the normative specification, ADR, this plan, and these acceptance points:
 
+- `uv lock --check --offline` succeeds before environment synchronization and proves that `uv.lock` matches the current `pyproject.toml`;
 - the fresh-process import guard covers all fifteen planned modules, including `crypto_lab.cli.main` and `crypto_lab.cli.__main__`, and detects the named guarded calls, output, and paths below its temporary working directory; exact source review and architecture constraints cover the broader import boundary without claiming a complete operating-system side-effect detector;
 - `crypto_lab/__init__.py` contains no trading behavior or version duplication;
 - runtime dependencies and optional runtime groups are empty;
@@ -2101,7 +2120,7 @@ Expected: exit `0` with no output.
 
 **Focused verification:** Exact version, help, unknown-argument, file-map, and whitespace acceptance checks.
 
-**Broader verification:** A fresh independently offline full script run plus complete merge-base-to-HEAD diff and safety review.
+**Broader verification:** A fresh independently offline full script run beginning with lock consistency before synchronization, plus complete merge-base-to-HEAD diff and safety review.
 
 **Commit:** No commit command or commit message is permitted when this task changes no tracked evidence. Do not create an empty `chore: verify project foundation` commit. If verification exposes a defect, return to the owning task and make the narrow correction through a failing test where production behavior is involved. A correction commit is allowed; it must be non-empty, independently reviewed, and covered by the relevant focused and broader checks. Do not rewrite an already reviewed commit merely to preserve a commit count. Rerun Task 6 so the merge-base-to-HEAD review includes every primary and correction commit.
 
