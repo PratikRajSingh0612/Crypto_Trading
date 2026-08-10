@@ -6,15 +6,16 @@
 
 **Architecture:** Create a `src`-layout distribution named `crypto-trading-lab` with import package `crypto_lab`, empty runtime dependencies, side-effect-free package boundaries, and a version/help-only standard-library CLI. Keep production behavior deliberately minimal while enforcing the future domain dependency boundary and fixed safety scope through typed tests and one Windows PowerShell verification entry point.
 
-**Tech Stack:** Windows; CPython 3.12 only; `uv`; Hatchling; PEP 621; Python standard-library `argparse`, `ast`, `importlib.metadata`, and `tomllib`; pytest; pytest-cov; Ruff; strict mypy; PowerShell; Git.
+**Tech Stack:** Windows; user-local, uv-managed CPython `>=3.12,<3.13` (verified pre-Stage-1 prerequisite: CPython 3.12.13 x64); `uv`; Hatchling; PEP 621; Python standard-library `argparse`, `ast`, `importlib.metadata`, and `tomllib`; pytest; pytest-cov; Ruff; strict mypy; PowerShell; Git.
 
 ## Global Constraints
 
 - Treat `docs/superpowers/specs/2026-08-10-engine-neutral-core-design.md` at commit `4bbf58a7cb46b63e925ecd7fc00c9c88141d88fe` as the normative architecture.
 - Treat `docs/decisions/0001-gitnexus-development-tooling.md` at commit `9db208c902ab92be615fa4494f7a4bf7810d7768` as the approved developer-tooling boundary.
-- Operate on Windows with CPython `>=3.12,<3.13`; do not add a WSL requirement.
+- Operate on Windows with a user-local, uv-managed CPython `>=3.12,<3.13`; the verified pre-Stage-1 interpreter is CPython 3.12.13 x64. Discover and select it through `uv`, and do not add a WSL requirement.
 - Use `uv` for dependency and virtual-environment management, Hatchling for builds, and a `src` package layout.
-- Configure `uv` to require manual Python downloads and to build without isolation from the already-synchronized locked development environment.
+- Configure `uv` with `python-preference = "only-managed"` so it cannot silently fall back to system Python 3.13, require manual Python downloads, and build without isolation from the already-synchronized locked development environment.
+- The managed interpreter is not required to be installed by an MSI or WinGet, registered as PythonCore, discoverable through the Windows `py` launcher, or added to `PATH`. Automatic interpreter downloads remain disabled. The separately approved prerequisite installation `uv python install --no-bin --no-registry 3.12.13` occurs before and outside Stage 1; Stage 1 never installs Python.
 - Name the distribution `crypto-trading-lab`, the import package `crypto_lab`, and the initial version `0.1.0`.
 - Keep `[project].dependencies` empty and create no optional runtime dependency group.
 - Limit development dependencies to Hatchling, pytest, pytest-cov, Ruff, and mypy.
@@ -28,7 +29,7 @@
 - Do not add Binance, CCXT, broker, exchange, network-client, Pydantic, SQLAlchemy, Alembic, Parquet, YAML, LLM, tax, UI, or trading-engine dependencies.
 - Do not implement configuration loading, canonical domain types, dataset ingestion, strategies, experiments, adapters, engines, process supervision, persistence, artifacts, paper trading, tax logic, or LLM behavior.
 - Ordinary synchronization, focused checks, full verification, lock validation, and package builds must be independently offline: use `uv sync --frozen --offline`, `uv run --no-sync`, `uv lock --check --offline`, and `uv build --offline` as applicable. Every complete or full quality gate must validate the lock offline before synchronizing the environment.
-- The only non-offline `uv` commands permitted are the exact one-time user-approved Task 2 bootstrap commands `uv lock` and dependency-acquisition `uv sync --frozen`; before the source scaffold exists, that synchronization command must include `--no-install-project`. Never request permanent or unrestricted network access, and never use a bootstrap approval as verification evidence.
+- Within Stage 1, the only non-offline `uv` commands permitted are the exact one-time user-approved Task 2 bootstrap commands `uv lock` and dependency-acquisition `uv sync --frozen`; before the source scaffold exists, that synchronization command must include `--no-install-project`. The separately approved managed-interpreter prerequisite occurs before Stage 1. Never request permanent or unrestricted network access, and never use a bootstrap approval as verification evidence.
 - Do not inspect, print, persist, or log ambient environment-variable values, credentials, browser data, credential-store contents, suspected secret contents, or private keys. Application code must not use ambient environment variables for implicit configuration or credentials. The future `AGENTS.md` makes only the reviewed non-secret GitNexus MCP control-variable exception required by ADR 0001; those values remain developer-tool configuration, never application configuration, credentials, or runtime product inputs.
 - Keep GitNexus optional and outside product, runtime, build, package, and test dependencies; do not install, configure, or invoke it in Stage 1.
 - Run the complete repository verification workflow and review the full diff before a completion claim. Report every skipped check and warning.
@@ -101,7 +102,7 @@ The following files are configuration-only exceptions and may be created before 
 
 Task 1 runs in the supplied repository root and is the sole pre-worktree read-only baseline. After Task 1 passes, the execution controller uses the appropriate Superpowers worktree workflow to create an isolated Git worktree branch from local `main` before Task 2 changes a file. The worktree must begin at the same approved commit, have a clean status, and prove before the first edit that `git merge-base HEAD main` equals its current `HEAD`. Do not create a worktree during this planning task.
 
-Task 2 attempts dependency resolution and acquisition from local cache first. If the cache is insufficient, the worker shows the exact `uv lock` and/or dependency-acquisition `uv sync --frozen` command required, using `--no-install-project` while the source scaffold is absent, requests one-time approval for each exact command, and waits. These are the only non-offline commands in Stage 1. Every later development and verification command remains offline or `--no-sync`; a missing local package returns to this Task 2 bootstrap gate. Task 2 never installs CPython, `uv`, GitNexus, or any trading engine automatically.
+The user-local, uv-managed CPython 3.12 prerequisite is acquired explicitly before Stage 1 through a separately approved `uv python install --no-bin --no-registry <exact-version>` task; its current verified exact version is 3.12.13. That prerequisite acquisition is not Stage 1 execution or verification evidence. Task 2 attempts project dependency resolution and acquisition from local cache first. If the cache is insufficient, the worker shows the exact `uv lock` and/or dependency-acquisition `uv sync --frozen` command required, using `--no-install-project` while the source scaffold is absent, requests one-time approval for each exact command, and waits. These are the only non-offline commands in Stage 1. Every later development and verification command remains offline or `--no-sync`; a missing local package returns to this Task 2 bootstrap gate. Task 2 never installs CPython, `uv`, GitNexus, or any trading engine automatically.
 
 ### Task 1: Environment preflight and baseline evidence
 
@@ -111,8 +112,8 @@ Task 2 attempts dependency resolution and acquisition from local cache first. If
 - Test: none
 
 **Interfaces:**
-- Consumes: supplied repository root `C:\Users\59557\Documents\Projects\Crypto_Trading`, Git metadata, Windows Python launcher, and installed `uv` executable
-- Produces: read-only evidence that the baseline is clean, the expected repository is selected, CPython 3.12 is available, and `uv` is installed
+- Consumes: supplied repository root `C:\Users\59557\Documents\Projects\Crypto_Trading`, Git metadata, installed `uv` executable, and the separately installed user-local uv-managed CPython 3.12 prerequisite
+- Produces: read-only evidence that the baseline is clean, the expected repository is selected, `uv` is installed, and `uv` selects a managed CPython `>=3.12,<3.13` x64 executable below its managed Python directory without downloading an interpreter
 
 - [ ] **Step 1: Confirm the working tree is clean**
 
@@ -140,33 +141,102 @@ git rev-parse --show-toplevel
 
 Expected: exit `0` and the resolved supplied repository path. If the path differs, stop without editing.
 
-- [ ] **Step 4: List Windows Python launcher registrations**
-
-```powershell
-py -0p
-```
-
-Expected: exit `0` and a registration for CPython 3.12. This command is evidence only; do not install a missing interpreter.
-
-- [ ] **Step 5: Verify the required interpreter**
-
-```powershell
-py -3.12 --version
-```
-
-Expected: exit `0` and a `Python 3.12.x` version. If it is missing or resolves outside Python 3.12, stop without editing and report the exact output.
-
-- [ ] **Step 6: Verify `uv`**
+- [ ] **Step 4: Verify `uv`**
 
 ```powershell
 uv --version
 ```
 
-Expected: exit `0` and an installed `uv` version. If missing, stop without editing and report the exact error. Do not install or update it.
+Expected: exit `0` and the installed `uv` version. If missing, stop without editing and report the exact error. Do not install or update it.
 
-**Focused verification:** The six commands above, with their exit codes and outputs recorded.
+- [ ] **Step 5: Find the required managed interpreter without downloading**
 
-**Broader verification:** None; the six listed commands are the entire allowed preflight surface.
+```powershell
+$pythonFindOutput = (
+    uv python find `
+        --managed-python `
+        --no-python-downloads `
+        3.12
+)
+$pythonFindExitCode = $LASTEXITCODE
+if ($pythonFindExitCode -ne 0) {
+    throw "uv could not find the managed CPython 3.12 prerequisite (exit $pythonFindExitCode)"
+}
+$python312 = [string]::Join(
+    [System.Environment]::NewLine,
+    [string[]]@($pythonFindOutput)
+).Trim()
+if ([string]::IsNullOrWhiteSpace($python312)) {
+    throw "uv returned an empty managed CPython 3.12 path"
+}
+Write-Host $python312
+```
+
+Expected: `uv python find --managed-python --no-python-downloads 3.12` exits `0` and returns one executable path for the already installed user-local managed CPython 3.12 (currently verified as 3.12.13). If the interpreter is absent, or `uv` attempts or requests a download, stop without editing and report the exact output. Do not install an interpreter in Stage 1.
+
+- [ ] **Step 6: Safely invoke and validate the selected managed interpreter**
+
+```powershell
+if (-not (Test-Path -LiteralPath $python312 -PathType Leaf)) {
+    throw "The managed CPython path is not an executable file: $python312"
+}
+$resolvedPython312 = (Resolve-Path -LiteralPath $python312).Path
+
+$uvPythonDirectoryOutput = uv python dir
+$pythonDirExitCode = $LASTEXITCODE
+if ($pythonDirExitCode -ne 0) {
+    throw "uv could not report its managed Python directory (exit $pythonDirExitCode)"
+}
+$uvPythonDirectory = [string]::Join(
+    [System.Environment]::NewLine,
+    [string[]]@($uvPythonDirectoryOutput)
+).Trim()
+if ([string]::IsNullOrWhiteSpace($uvPythonDirectory)) {
+    throw "uv returned an empty managed Python directory"
+}
+$resolvedUvPythonDirectory = (Resolve-Path -LiteralPath $uvPythonDirectory).Path
+$managedDirectoryPrefix =
+    $resolvedUvPythonDirectory.TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    ) + [System.IO.Path]::DirectorySeparatorChar
+if (-not $resolvedPython312.StartsWith(
+    $managedDirectoryPrefix,
+    [System.StringComparison]::OrdinalIgnoreCase
+)) {
+    throw "The selected interpreter is outside uv's managed Python directory"
+}
+
+$interpreterValidationProgram = @'
+import platform
+import struct
+import sys
+
+if platform.python_implementation() != "CPython":
+    raise SystemExit("implementation is not CPython")
+if not ((3, 12) <= sys.version_info[:2] < (3, 13)):
+    raise SystemExit("version is outside >=3.12,<3.13")
+if struct.calcsize("P") * 8 != 64:
+    raise SystemExit("architecture is not 64-bit")
+print(sys.executable)
+print(platform.python_implementation())
+print(platform.python_version())
+print("64-bit")
+'@
+$interpreterFacts = $interpreterValidationProgram | & $resolvedPython312 -
+$interpreterExitCode = $LASTEXITCODE
+if ($interpreterExitCode -ne 0) {
+    throw "Managed CPython validation failed (exit $interpreterExitCode)"
+}
+$interpreterFacts
+Write-Host $resolvedUvPythonDirectory
+```
+
+Expected: path resolution and invocation succeed; the child reports its executable, `CPython`, a version `>=3.12,<3.13`, and `64-bit`; and the resolved executable path begins below the resolved directory returned by `uv python dir`. Stop without editing if the implementation, version, architecture, or containment check fails. No Windows launcher, PythonCore registration, MSI, WinGet Python package, `PATH` entry, project environment, or interpreter download is required or permitted by this preflight.
+
+**Focused verification:** The six logical checks above, with every native exit code and output recorded. Step 6 contains supporting read-only path and interpreter commands but remains one logical interpreter-validation check.
+
+**Broader verification:** None; the six logical checks are the entire allowed preflight surface.
 
 **Commit:** No commit command or commit message is permitted. This task is read-only, and an empty preflight commit would violate the no-empty-commit rule.
 
@@ -205,7 +275,7 @@ Expected: all three commands exit `0`; the current worktree `HEAD`, local `main`
 - Test: lock and cached-environment validation through `uv`, formatting and lint checks through Ruff, Git whitespace checks, and exact-scope status review; mypy, pytest, and Hatchling verification begin after the package scaffold exists in Task 3
 
 **Interfaces:**
-- Consumes: CPython 3.12, installed `uv`, the Stage 1 naming/version/dependency decisions, current `README.md`, and the current two-line `.gitattributes`
+- Consumes: the Task 1-verified user-local uv-managed CPython 3.12.13 selected through `uv`, installed `uv`, the Stage 1 naming/version/dependency decisions, current `README.md`, and the current two-line `.gitattributes`
 - Produces: deterministic Python selection, PEP 621 metadata, empty runtime dependency contract, `crypto-lab = "crypto_lab.cli.main:main"` entry point, development dependency lock, quality-tool configuration, and ignore/EOL policy consumed by Tasks 3–6
 
 - [ ] **Step 1: Create `.python-version`**
@@ -343,6 +413,7 @@ dev = [
 [tool.uv]
 no-build-isolation = true
 python-downloads = "manual"
+python-preference = "only-managed"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/crypto_lab"]
@@ -402,7 +473,7 @@ show_missing = true
 skip_covered = true
 ```
 
-The bounded version ranges establish the Stage 1 compatibility floor; the generated `uv.lock` supplies exact resolved project and development versions. Hatchling appears in both the build-system requirements and the development group intentionally. `no-build-isolation = true` makes `uv build --offline` use the Hatchling version already installed by the offline frozen development sync instead of resolving an isolated build environment, and `python-downloads = "manual"` forbids automatic managed-Python downloads. No dependency above belongs to `[project].dependencies`.
+The bounded version ranges establish the Stage 1 compatibility floor; the generated `uv.lock` supplies exact resolved project and development versions. Hatchling appears in both the build-system requirements and the development group intentionally. `no-build-isolation = true` makes `uv build --offline` use the Hatchling version already installed by the offline frozen development sync instead of resolving an isolated build environment. `python-preference = "only-managed"` prevents accidental fallback to the system Python 3.13 installations, while `python-downloads = "manual"` forbids automatic managed-Python downloads. The required managed Python is installed explicitly before and outside Stage 1. No dependency above belongs to `[project].dependencies`.
 
 - [ ] **Step 6: Attempt complete local lock generation first**
 
@@ -1719,12 +1790,14 @@ Create `AGENTS.md` with exactly:
 
 ## Development workflow
 
-- Use CPython 3.12 and `uv` for the central project.
+- Use only the user-local uv-managed CPython 3.12 selected by `uv` for the central project; never silently fall back to system Python 3.13 or 3.13t.
+- Confirm the prerequisite with `uv python find --managed-python --no-python-downloads 3.12`. Stop when the managed interpreter is missing; never auto-download an interpreter during ordinary development or verification.
+- Treat `uv python install --no-bin --no-registry <exact-version>` as a separately reviewed and approved pre-Stage-1 prerequisite task, never as an ordinary development or verification command.
 - Use test-driven development for production behavior: focused failing test, minimum implementation, focused passing test, then broader verification.
 - Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` before claiming completion.
 - Report every skipped check, warning, and failure; do not infer success from a partial verification run.
 - Ordinary development and verification are offline: validate the lock with `uv lock --check --offline` before synchronizing with `uv sync --frozen --offline`, run installed tools with `uv run --no-sync`, and build with `uv build --offline`.
-- If locked packages are absent locally, stop and return to the separately approved Task 2 bootstrap procedure. Only its exact, one-time-approved `uv lock` and dependency-acquisition `uv sync --frozen` commands may access the network; use `--no-install-project` before the source scaffold exists, and never enable unrestricted or permanent network access.
+- If locked packages are absent locally, stop and return to the separately approved Task 2 bootstrap procedure. During Stage 1, only its exact, one-time-approved `uv lock` and dependency-acquisition `uv sync --frozen` commands may access the network; use `--no-install-project` before the source scaffold exists, and never enable unrestricted or permanent network access.
 
 ## Architecture rules
 
@@ -1786,24 +1859,24 @@ Project 1 contains no real trading engine, Binance integration, market-data down
 
 ## Prerequisites
 
-- CPython 3.12 available through the Windows Python launcher
-- `uv`
+- `uv` already installed
+- A user-local uv-managed CPython 3.12 already installed (the current verified prerequisite is CPython 3.12.13 x64)
 
-If either prerequisite is missing, stop and install nothing automatically.
+Stage 1 does not install Python. No Python.org MSI, WinGet Python package, PythonCore registration, Windows `py` launcher registration, or Python `PATH` entry is required. If either prerequisite is missing, stop and install nothing automatically; `uv python install` belongs to a separately reviewed and approved prerequisite task.
 
 ## Local setup
 
 From the repository root:
 
 ```powershell
-py -3.12 --version
 uv --version
+uv python find --managed-python --no-python-downloads 3.12
 uv sync --frozen --offline
 uv run --no-sync crypto-lab --version
 uv run --no-sync python -m crypto_lab.cli --version
 ```
 
-Both version commands print `crypto-lab 0.1.0`. Always try the offline synchronization first. If its cache is incomplete, the user or agent must review and explicitly approve the exact `uv sync --frozen` command once under the Task 2 bootstrap procedure. After that acquisition succeeds, rerun `uv sync --frozen --offline`; normal development and verification remain offline.
+The first two commands are read-only prerequisite checks; `--no-python-downloads` makes a missing managed interpreter fail instead of acquiring one. `.python-version` requests Python 3.12, `python-preference = "only-managed"` prevents system-Python fallback, and `python-downloads = "manual"` disables automatic interpreter downloads. Both version commands print `crypto-lab 0.1.0`. Always try the offline synchronization first. If its cache is incomplete, the user or agent must review and explicitly approve the exact `uv sync --frozen` command once under the Task 2 bootstrap procedure. After that acquisition succeeds, rerun `uv sync --frozen --offline`; normal development and verification remain offline.
 
 ## Verification
 
@@ -1911,11 +1984,13 @@ Stage 1 verification is local, Windows-oriented, and independent of trading engi
 Run these read-only checks from the repository root:
 
 ```powershell
-py -3.12 --version
 uv --version
+uv python find --managed-python --no-python-downloads 3.12
 ```
 
-Stop without installing anything automatically if CPython 3.12 or `uv` is unavailable.
+The second command must resolve the already installed user-local uv-managed CPython 3.12 and must not download an interpreter. Stop without installing anything automatically if the managed interpreter or `uv` is unavailable. Stage 1 does not require Windows `py` launcher or PythonCore registration, a Python installer or WinGet Python package, or a Python `PATH` entry.
+
+The verification workflow relies on `.python-version` requesting `3.12`, `[tool.uv] python-preference = "only-managed"` prohibiting fallback to system Python 3.13 or 3.13t, and `[tool.uv] python-downloads = "manual"` disabling automatic interpreter downloads. `scripts/verify.ps1` therefore uses the existing managed prerequisite and never installs Python.
 
 ## Locked setup
 
@@ -1994,7 +2069,7 @@ if ($verificationExitCode -ne 0) {
 }
 ```
 
-Expected: exit `0`; the script's offline lock-consistency check succeeds before its offline synchronization, eight headings appear in the required order, the script returns the caller to `docs`, and no lockfile changes. The script is independently offline and does not rely on a separate probe. A stale lock stops before synchronization. If offline synchronization fails because locked content is absent locally, stop and use the Task 2 one-time approval gate before rerunning the unchanged script.
+Expected: exit `0`; the script's offline lock-consistency check succeeds before its offline synchronization, eight headings appear in the required order, the script returns the caller to `docs`, and no lockfile changes. `.python-version`, `python-preference = "only-managed"`, and `python-downloads = "manual"` keep selection on the existing managed CPython 3.12 without system-Python fallback or interpreter download. The script is independently offline and does not rely on a separate probe. A stale lock stops before synchronization. If offline synchronization fails because locked content is absent locally, stop and use the Task 2 one-time approval gate before rerunning the unchanged script.
 
 - [ ] **Step 6: Review the complete documentation and automation diff**
 
@@ -2029,7 +2104,7 @@ Expected: one commit containing exactly the four documentation and workflow file
 
 **Interfaces:**
 - Consumes: all committed implementation-task outputs from Tasks 2–5, including any narrow correction commits
-- Produces: fresh lock-consistency, environment-synchronization, console, format, lint, strict-type, test/coverage, build, safety, diff, and clean-worktree evidence only; no file or API output
+- Produces: fresh managed-interpreter-selection, lock-consistency, environment-synchronization, console, format, lint, strict-type, test/coverage, build, safety, diff, and clean-worktree evidence only; no file or API output
 
 The preferred primary structure remains these four task commits: `chore: initialize python project foundation`, `feat: add package scaffold and version command`, `test: enforce architecture and safety boundaries`, and `docs: add repository development workflow`. They are not an exact total-commit requirement. A review or verification defect may use a narrow additional correction commit under the rules below.
 
@@ -2041,13 +2116,91 @@ git status --short
 
 Expected: exit `0` with no output. If any path is present, stop and resolve it in the task that owns that path.
 
-- [ ] **Step 2: Run the complete verification workflow fresh**
+- [ ] **Step 2: Prove managed-interpreter selection and run the complete workflow fresh**
 
 ```powershell
+$pythonFindOutput = (
+    uv python find `
+        --managed-python `
+        --no-python-downloads `
+        3.12
+)
+$pythonFindExitCode = $LASTEXITCODE
+if ($pythonFindExitCode -ne 0) {
+    throw "uv could not find managed CPython 3.12 (exit $pythonFindExitCode)"
+}
+$python312 = [string]::Join(
+    [System.Environment]::NewLine,
+    [string[]]@($pythonFindOutput)
+).Trim()
+if ([string]::IsNullOrWhiteSpace($python312)) {
+    throw "uv returned an empty managed CPython 3.12 path"
+}
+$resolvedPython312 = (Resolve-Path -LiteralPath $python312).Path
+$selectedInstallationDirectory = Split-Path -Parent $resolvedPython312
+
+$uvPythonDirectoryOutput = uv python dir
+$pythonDirExitCode = $LASTEXITCODE
+if ($pythonDirExitCode -ne 0) {
+    throw "uv could not report its managed Python directory (exit $pythonDirExitCode)"
+}
+$uvPythonDirectory = [string]::Join(
+    [System.Environment]::NewLine,
+    [string[]]@($uvPythonDirectoryOutput)
+).Trim()
+if ([string]::IsNullOrWhiteSpace($uvPythonDirectory)) {
+    throw "uv returned an empty managed Python directory"
+}
+$resolvedUvPythonDirectory = (Resolve-Path -LiteralPath $uvPythonDirectory).Path
+$managedDirectoryPrefix =
+    $resolvedUvPythonDirectory.TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    ) + [System.IO.Path]::DirectorySeparatorChar
+if (-not $resolvedPython312.StartsWith(
+    $managedDirectoryPrefix,
+    [System.StringComparison]::OrdinalIgnoreCase
+)) {
+    throw "The selected interpreter is outside uv's managed Python directory"
+}
+
+$runtimeValidationProgram = @'
+import platform
+import struct
+import sys
+
+if platform.python_implementation() != "CPython":
+    raise SystemExit("implementation is not CPython")
+if not ((3, 12) <= sys.version_info[:2] < (3, 13)):
+    raise SystemExit("version is outside >=3.12,<3.13")
+if struct.calcsize("P") * 8 != 64:
+    raise SystemExit("architecture is not 64-bit")
+print(sys.base_prefix)
+print(platform.python_implementation())
+print(platform.python_version())
+print("64-bit")
+'@
+$runtimeFacts = $runtimeValidationProgram | & uv run --no-sync python -
+$runtimeFactsExitCode = $LASTEXITCODE
+if ($runtimeFactsExitCode -ne 0) {
+    throw "The project runtime validation failed (exit $runtimeFactsExitCode)"
+}
+if ($runtimeFacts.Count -ne 4) {
+    throw "The project runtime returned an unexpected fact set"
+}
+$resolvedBasePrefix = (Resolve-Path -LiteralPath $runtimeFacts[0]).Path
+if (-not $resolvedBasePrefix.Equals(
+    $selectedInstallationDirectory,
+    [System.StringComparison]::OrdinalIgnoreCase
+)) {
+    throw "The project environment is not based on uv's selected managed CPython"
+}
+$runtimeFacts
+
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 ```
 
-Expected: exit `0`; the script itself first proves offline that `uv.lock` matches the current project metadata, then performs offline frozen synchronization, no-sync Ruff format and lint, no-sync strict mypy, no-sync full pytest with at least 90 percent branch coverage, offline sdist/wheel build, and Git whitespace. It never initiates network access or relies on an earlier probe. A stale lock fails before synchronization; if local locked content is missing, synchronization fails and the operator returns to the Task 2 approval gate.
+Expected: every command exits `0`; `uv python find --managed-python --no-python-downloads 3.12` selects the installed managed interpreter without a download; the no-sync project Python reports CPython `>=3.12,<3.13`, x64, and a `sys.base_prefix` equal to the selected managed installation directory, proving system Python 3.13 and 3.13t were not selected. The script itself first proves offline that `uv.lock` matches the current project metadata, then performs offline frozen synchronization, no-sync Ruff format and lint, no-sync strict mypy, no-sync full pytest with at least 90 percent branch coverage, offline sdist/wheel build, and Git whitespace. It never initiates network access or relies on an earlier probe. A stale lock fails before synchronization; if local locked content is missing, synchronization fails and the operator returns to the Task 2 approval gate.
 
 - [ ] **Step 3: Prove both exact version forms**
 
@@ -2100,6 +2253,9 @@ git diff "$stage1BaseCommit..HEAD"
 Review every line against the normative specification, ADR, this plan, and these acceptance points:
 
 - `uv lock --check --offline` succeeds before environment synchronization and proves that `uv.lock` matches the current `pyproject.toml`;
+- `.python-version` requests `3.12`, `python-preference = "only-managed"` prohibits system-Python fallback, and `python-downloads = "manual"` disables automatic interpreter acquisition;
+- both Task 1 and this fresh acceptance run use `uv python find --managed-python --no-python-downloads 3.12`, and the no-sync project Python's `sys.base_prefix` matches uv's selected managed installation directory, proving that uv selected managed CPython 3.12 rather than system Python 3.13 or 3.13t without downloading an interpreter;
+- no Stage 1 command uses a Python installer, WinGet Python package, PythonCore or Windows launcher registration, registry modification, or `PATH` modification;
 - the fresh-process import guard covers all fifteen planned modules, including `crypto_lab.cli.main` and `crypto_lab.cli.__main__`, and detects the named guarded calls, output, and paths below its temporary working directory; exact source review and architecture constraints cover the broader import boundary without claiming a complete operating-system side-effect detector;
 - `crypto_lab/__init__.py` contains no trading behavior or version duplication;
 - runtime dependencies and optional runtime groups are empty;
@@ -2118,7 +2274,7 @@ git status --short
 
 Expected: exit `0` with no output.
 
-**Focused verification:** Exact version, help, unknown-argument, file-map, and whitespace acceptance checks.
+**Focused verification:** Managed-interpreter selection and base-prefix proof, exact version, help, unknown-argument, file-map, and whitespace acceptance checks.
 
 **Broader verification:** A fresh independently offline full script run beginning with lock consistency before synchronization, plus complete merge-base-to-HEAD diff and safety review.
 
@@ -2128,9 +2284,10 @@ Expected: exit `0` with no output.
 
 - Preferred execution uses `superpowers:subagent-driven-development`, with a fresh worker and review gate per task.
 - Establish an isolated Git worktree branch from local `main` through the appropriate Superpowers workflow before Task 2 changes any file, and prove its pre-edit merge base equals its current `HEAD`. Task 1 remains the read-only source-repository preflight.
+- Use the already installed user-local uv-managed CPython 3.12 prerequisite throughout Stage 1. Do not install Python, enable automatic interpreter downloads, fall back to system Python 3.13 or 3.13t, register an interpreter, or modify `PATH` during execution.
 - Do not install, configure, or invoke GitNexus during Stage 1.
 - Do not begin execution until the user reviews and approves this plan.
 - After Stage 1 is implemented, freshly verified, reviewed, and committed, write and approve the Stage 2 Guarded GitNexus Development Tooling implementation plan.
-- Stage 2 must inspect the actual Stage 1 scaffold and current local environment, including the pre-existing launcher and Node/package-manager facts, rather than assuming a global package layout or launcher design.
+- Stage 2 must inspect the actual Stage 1 scaffold and current local environment, including the uv-managed interpreter and Node/package-manager facts, rather than assuming a global Python installation or registration design.
 
 No Stage 2 file, network action, or GitNexus operation is authorized by this Stage 1 plan.
