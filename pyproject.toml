@@ -29,6 +29,7 @@ python-preference = "only-managed"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/crypto_lab"]
+dev-mode-dirs = ["src"]
 
 [tool.hatch.build.targets.sdist]
 include = [
