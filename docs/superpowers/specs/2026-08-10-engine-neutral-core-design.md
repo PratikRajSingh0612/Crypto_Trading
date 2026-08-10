@@ -189,7 +189,7 @@ flowchart LR
 4. An `ExperimentSpec` captures every material input and selected engine intent.
 5. Compatibility is resolved from strategy requirements, comparison level, adapter descriptor, and runtime availability.
 6. The experiment becomes immutable when a transaction moves it to `QUEUED`.
-7. Each eligible engine slot creates a distinct `EngineRunRecord` attempt and a request snapshot.
+7. Each eligible engine slot creates a distinct `EngineRunRecord`, a sanitized authoritative request snapshot containing `attempt_token_hash`, and temporary `EngineRunRequest` material containing the raw token for adapter invocation.
 8. The supervisor launches the adapter executable using an argument array and an assigned temporary directory.
 9. The core parses and validates JSON Lines events, captures bounded stderr, monitors heartbeats and deadlines, and persists significant state transitions.
 10. The adapter writes large native and canonical candidate outputs within its assigned directory and writes its `AdapterResultManifest` semantic declaration.
@@ -202,7 +202,7 @@ No adapter event, exit code, native report, or manifest is trusted by itself. Su
 
 Project 1 uses a local in-process scheduler owned by the `experiments` application package. A CLI command validates and queues an experiment transactionally, then drives eligible slots until the experiment reaches a terminal state or the user cancels. There is no background Windows service, daemon, server, remote worker, or persistent message broker.
 
-The scheduler claims work through repository compare-and-swap leases so a restarted CLI cannot duplicate a run. `max_concurrent_runs` defaults to one and is bounded from one through eight by configuration; the observed value is audited. Concurrency changes scheduling and resource pressure but not economic assumptions. Each run remains isolated by request hash, attempt token, work directory, event sequence, and finalization lease.
+The scheduler claims work through repository compare-and-swap leases so a restarted CLI cannot duplicate a run. `max_concurrent_runs` defaults to one and is bounded from one through eight by configuration; the observed value is audited. Concurrency changes scheduling and resource pressure but not economic assumptions. Each run remains isolated by request hash, attempt-token hash, work directory, command invocation identities, invocation-scoped event sequences, and finalization lease.
 
 Queue order is deterministic by experiment queue timestamp, engine-slot ordinal, and attempt number. Retry attempts for an active experiment enter the same ordered queue. Scheduling never changes adapter selection, compatibility, comparison level, or immutable inputs.
 
@@ -261,12 +261,14 @@ The later implementation plan MUST provide narrowly scoped interfaces equivalent
 | `AdapterCatalog` | `adapters` | Return explicitly registered adapter executable descriptors; never scan arbitrary directories |
 | `ExperimentRepository` | `experiments` | Persist and compare-and-swap experiment records and immutable specs |
 | `EngineRunRepository` | `experiments` | Persist attempts, transitions, leases, heartbeats, exit facts, and terminal results |
+| `CommandInvocationRepository` | `adapters` application port | Persist and compare-and-swap one `describe`, `validate`, or `run` command lifecycle independently from `EngineRunRecord` |
 | `DatasetRepository` | `datasets` | Resolve immutable dataset descriptors and partitions by ID and hash |
-| `ArtifactRepository` | `artifacts` | Record staged/finalized artifacts, checksums, manifests, and provenance |
+| `CandidateArtifactRepository` | `artifacts` | Record candidate identity, staging path, validation observations, lifecycle transitions, and quarantine facts |
+| `ArtifactRepository` | `artifacts` | Resolve and register finalized immutable `ArtifactRef` records, checksums, manifests, and provenance; it never accepts a candidate as an artifact reference |
 | `AuditSink` | `audit` | Append stable structured audit facts and correlated diagnostics |
 | `UnitOfWork` | application boundary | Commit related registry mutations atomically or roll them back |
 | `ProcessSupervisor` | `process_supervision` | Run one adapter command under deadlines, protocol limits, and cancellation |
-| `ArtifactFinalizer` | `artifacts` | Validate, hash, manifest, atomically move, and register artifacts |
+| `ArtifactFinalizer` | `artifacts` | Accept candidate identities, validate and atomically move bytes, and return explicit candidate-to-finalized-reference mappings |
 | `Clock` | `domain` port | Supply timezone-aware UTC instants and deterministic test clocks |
 | `ContentHasher` | `domain` port | Produce canonical SHA-256 digests from normalized bytes |
 
@@ -305,8 +307,28 @@ EngineRunRepository.compare_and_swap(
 ) -> Result[EngineRunRecord]
 EngineRunRepository.append_event(event: RunEvent) -> Result[RunEvent]
 
+CommandInvocationRepository.get(invocation_id: InvocationId) -> Result[CommandInvocationRecord]
+CommandInvocationRepository.add(record: CommandInvocationRecord) -> Result[None]
+CommandInvocationRepository.compare_and_swap(
+    expected_revision: int,
+    replacement: CommandInvocationRecord,
+) -> Result[CommandInvocationRecord]
+
 DatasetRepository.get_by_hash(content_hash: Sha256) -> Result[DatasetDescriptor]
 DatasetRepository.list_partitions(dataset_id: DatasetId) -> Result[tuple[DatasetPartition, ...]]
+
+CandidateArtifactRepository.get(candidate_artifact_id: CandidateArtifactId) -> Result[CandidateArtifact]
+CandidateArtifactRepository.add(record: CandidateArtifact) -> Result[None]
+CandidateArtifactRepository.compare_and_swap(
+    expected_revision: int,
+    replacement: CandidateArtifact,
+) -> Result[CandidateArtifact]
+CandidateArtifactRepository.list_recoverable(
+    states: tuple[CandidateArtifactState, ...],
+    run_id: RunId | None,
+    invocation_id: InvocationId | None,
+    limit: int,
+) -> Result[tuple[CandidateArtifact, ...]]
 
 ArtifactRepository.get(artifact_id: ArtifactId) -> Result[ArtifactRef]
 ArtifactRepository.record_finalization(result: FinalizationResult) -> Result[tuple[ArtifactRef, ...]]
@@ -323,9 +345,9 @@ async ProcessSupervisor.invoke(
 ) -> CommandResult
 
 async ArtifactFinalizer.finalize(
-    request: FinalizationRequest,
+    request: FinalizationRequest[candidate_artifact_ids: tuple[CandidateArtifactId, ...]],
     cancellation: CancellationToken,
-) -> FinalizationResult
+) -> FinalizationResult[candidate_to_artifact_refs: tuple[CandidateFinalization, ...]]
 
 ComparisonEligibilityService.evaluate(
     left: RunManifest,
@@ -375,7 +397,7 @@ Operational records use UUID4 values rendered in lowercase canonical form and pr
 - `run_<uuid4>` for an engine-run attempt
 - `art_<uuid4>` for an artifact record
 
-Additional internal identifiers use explicit prefixes such as `ds_` for dataset records, `strat_` for strategy definitions, `evt_` for run events, `diag_` for diagnostics, and `audit_` for audit events. Prefix validation prevents one identifier class from being accepted as another. UUIDs provide operational uniqueness; they do not replace content hashes.
+Additional internal identifiers use explicit prefixes such as `ds_` for dataset records, `strat_` for strategy definitions, `inv_` for command invocations, `evt_` for run events, `cand_` for candidate artifacts, `art_` for finalized artifact references, `diag_` for diagnostics, and `audit_` for audit events. Prefix validation prevents one identifier class from being accepted as another. UUIDs provide operational uniqueness; they do not replace content hashes.
 
 ### 10.2 Content hashes
 
@@ -390,16 +412,21 @@ SHA-256 is authoritative for:
 
 Hash inputs MUST be deterministic bytes. Canonical JSON is UTF-8 without a byte-order mark, uses sorted object keys, compact separators, preserved array order, normalized version strings, Decimal strings, and UTC `Z` timestamps. Fields explicitly marked non-material, such as local display paths or ingestion wall-clock timestamps, are excluded only by a named versioned hashing profile. A hashing profile change creates a new schema/version contract; it never silently changes an existing digest.
 
+Temporary request material, wire `ProtocolEventEnvelope` bytes, and the original `AdapterResultManifest` candidate may contain the raw attempt token. Their exact-byte SHA-256 values MAY persist only as source-provenance fingerprints for identity and recovery; they are not authoritative canonical-content hashes and the bytes themselves remain temporary. `attempt_token_hash` is SHA-256 over the ASCII domain separator `crypto_lab:attempt-token:v1` followed by one zero byte and the canonical UTF-8 token bytes.
+
+`wire_event_hash` fingerprints the exact temporary wire bytes. Authoritative `RunEvent.content_hash` covers canonical sanitized event JSON with `content_hash` omitted. `source_adapter_result_manifest_hash` fingerprints the exact temporary adapter-result candidate bytes. `sanitized_adapter_result_manifest_hash` covers canonical `SanitizedAdapterResultManifest` JSON with that self-hash field omitted. `run_manifest_hash` covers canonical `RunManifest` JSON with that self-hash field omitted. These named exclusions are part of hashing profile version 1; no profile may silently copy the raw token into a persisted or finalized record.
+
 YAML text itself is not the strategy identity. The strategy-version hash covers the canonical validated strategy model, the strategy hashing-profile version, and every explicitly declared extension-module hash. Comments, key ordering, and harmless YAML formatting therefore do not change strategy identity.
 
 Dataset identity covers the normalized dataset manifest, ordered partition identities, raw and normalized checksums, normalization version, instrument identity, data type, interval, timeframe where applicable, and quality declarations. The implementation MUST stream large-file hashing and MUST NOT load large artifacts entirely into memory.
 
 ### 10.3 Required run provenance
 
-Every `EngineRunRecord` and `RunManifest` MUST retain:
+The authoritative evidence aggregate for every engine run, composed of its `EngineRunRecord`, related `CommandInvocationRecord`s, and successful `RunManifest` where one exists, MUST retain:
 
 - Experiment ID and immutable experiment-spec hash
-- Run ID, logical engine slot, attempt number, and attempt identity; raw attempt tokens exist only in adapter-bound requests, events, and `AdapterResultManifest` files, while core-owned records retain the token hash
+- Run ID, logical engine slot, attempt number, and attempt-token hash; the raw token is temporary sensitive correlation material at the adapter trust boundary
+- Every `CommandInvocationRecord.invocation_id` used by `validate` or `run`; the `RunManifest` retains the relevant `run_invocation_id`, while the run aggregate retains all validation and run invocations and every persisted event points to its exact invocation
 - Strategy-version hash
 - Dataset-version hash
 - Engine name and pinned engine version
@@ -482,24 +509,28 @@ In the table below, “core-owned” means the accepted canonical copy and its l
 | `AdapterDescriptor` | Validated output of `describe` and catalog registration | `schema_version`, `adapter_name`, `adapter_version`, `engine`, `supported_protocol_versions`, `supported_schema_versions`, `capability_vocabulary_version`, `native_capabilities`, `approximated_capabilities`, `unsupported_capabilities`, `supported_operating_systems`, `runtime_requirements`, `network_required`, `credentials_required`, `known_modeling_limitations`, `executable_hash` | Capability sets are disjoint and complete for claims made; versions are non-empty and ordered deterministically; the descriptor may report network or credential requirements, while Project 1 policy prohibits executing any operation that requires them |
 | `RuntimeAvailabilityObservation` | Time-bounded local observation used separately from logical capabilities | `schema_version`, `adapter_name`, `adapter_version`, `executable_path`, `executable_hash`, `runtime_version`, `operating_system`, `available`, `reason_code`, `observed_at_utc`, `expires_at_utc`, `network_required`, `credentials_required` | Expiry follows observation time; availability cannot override semantic incompatibility or safety policy; paths and hashes come from the explicit catalog |
 | `NegotiationResult` | Deterministic protocol/schema/vocabulary selection | `schema_version`, `adapter_name`, `candidate_protocol_versions`, `candidate_schema_versions`, `candidate_vocabulary_versions`, `selected_protocol_version`, `selected_schema_versions`, `selected_vocabulary_version`, `outcome`, `diagnostics` | Candidate lists are sorted and complete; selected values belong to intersections; failed negotiation has no selected values and makes the adapter unavailable |
-| `AdapterValidationResult` | Adapter-produced result of the `validate` command | `schema_version`, `protocol_version`, `request_id`, `run_id`, `attempt_token`, `outcome`, `diagnostics`, `validated_at_utc`, `result_hash` | Outcome is `VALID`, `NOT_APPLICABLE`, `UNAVAILABLE`, or `INVALID`; identity and hash must match; no engine execution result or finalized artifact is represented |
+| `AdapterCommandRequestEnvelope` | Temporary command-discriminated request wrapper | Common fields `schema_version`, `protocol_version`, `request_id`, `invocation_id`, `command`, `created_at_utc`, `payload_hash`, `payload`; `validate` and `run` payloads additionally require experiment/run/slot/attempt identity and the temporary raw `attempt_token` | `invocation_id` is required for every command; `describe` prohibits run/attempt fields; the token appears exactly once inside the `EngineRunRequest` payload and is prohibited in the envelope header; raw-token-bearing variants are never persisted or finalized |
+| `AdapterValidationResult` | Adapter-produced result of the `validate` command | `schema_version`, `protocol_version`, `request_id`, `invocation_id`, `run_id`, `attempt_token_hash`, `outcome`, `diagnostics`, `validated_at_utc`, `result_hash` | Outcome is `VALID`, `NOT_APPLICABLE`, `UNAVAILABLE`, or `INVALID`; invocation, run, request, token-hash, and result identities must match; no engine execution result or finalized artifact is represented |
 | `CommandInvocationRecord` | Core-owned process facts for one `describe`, `validate`, or `run` subprocess | `schema_version`, `invocation_id`, `command_kind`, `adapter_name`, `adapter_version`, `run_id`, `request_hash`, `state`, `pid_identity`, `started_at_utc`, `completed_at_utc`, `process_exit_category`, `stderr_artifact_id`, `diagnostic_ids` | `run_id` is required for validate/run and absent for catalog-only describe; state governs process-field optionality; one invocation never spans commands |
 | `ExperimentSpec` | Immutable material inputs for one comparison intent | `schema_version`, `strategy_version_hash`, `dataset_version_hash`, `selected_engine_slots`, `starting_balance`, `fee_assumptions`, `slippage_assumptions`, `execution_assumptions`, `comparison_level`, `configuration_hash`, `created_at_utc` | All money and rates use Decimal strings; engine-slot order is canonicalized; references resolve before queueing; any material change produces a new experiment |
 | `ExperimentRecord` | Authoritative experiment lifecycle and immutable spec linkage | `schema_version`, `experiment_id`, `spec`, `spec_hash`, `state`, `created_at_utc`, `updated_at_utc`, `revision` | State changes use compare-and-swap on `revision`; `spec` cannot change at or after `QUEUED`; terminal records cannot transition |
-| `EngineRunRequest` | Immutable adapter command payload for one attempt | `schema_version`, `protocol_version`, `request_id`, `experiment_id`, `run_id`, `logical_slot_id`, `attempt_number`, `attempt_token`, `strategy_version_hash`, `dataset_version_hash`, `adapter`, `engine`, `configuration_snapshot`, `configuration_hash`, `comparison_level`, `deadline_utc`, `assigned_work_dir`, `created_at_utc` | References and hashes must agree with the experiment; work directory is absolute in the launcher but serialized as an authorized root plus safe relative references; token is unique per attempt |
+| `EngineRunRequest` | Temporary immutable adapter command payload for one attempt | `schema_version`, `protocol_version`, `request_id`, `experiment_id`, `run_id`, `logical_slot_id`, `attempt_number`, `attempt_token`, `strategy_version_hash`, `dataset_version_hash`, `adapter`, `engine`, `configuration_snapshot`, `configuration_hash`, `comparison_level`, `deadline_utc`, `assigned_work_dir`, `created_at_utc` | References and hashes must agree with the experiment; work directory is absolute in the launcher but serialized as an authorized root plus safe relative references; token is unique per attempt; this raw-token-bearing representation is never persisted or finalized, while its authoritative snapshot substitutes `attempt_token_hash` |
 | `EngineRunRecord` | Authoritative state and process facts for one attempt | `schema_version`, `run_id`, `experiment_id`, `logical_slot_id`, `attempt_number`, `attempt_token_hash`, `state`, `adapter`, `engine`, `request_hash`, `created_at_utc`, `updated_at_utc`, `revision` | Attempt number is monotonic within a slot; transitions are compare-and-swap; process facts, heartbeat, exit, adapter/core manifest references, diagnostics, and predecessor run are explicit state-governed fields |
-| `RunEvent` | Validated persisted event from an adapter or supervisor | `schema_version`, `protocol_version`, `event_id`, `run_id`, `attempt_token`, `sequence`, `event_type`, `timestamp_utc`, `payload`, `received_at_utc` | `(run_id, sequence)` is unique; sequence increases by one; event type selects a strict payload schema; size is bounded before parsing |
-| `ArtifactRef` | Authoritative identity and provenance for one file artifact | `schema_version`, `artifact_id`, `artifact_kind`, `state`, `relative_path`, `content_hash`, `size_bytes`, `media_type`, `experiment_id`, `run_id`, `source_role`, `created_at_utc`, `finalized_at_utc` | Finalized path is core-controlled; checksum and size are independently recomputed; final records are immutable; source role distinguishes native, normalized, manifest, log, and diagnostic output |
-| `AdapterResultManifest` | Adapter-produced final semantic declaration and candidate-artifact index | `schema_version`, `protocol_version`, `adapter_manifest_id`, `experiment_id`, `run_id`, `attempt_token`, `semantic_status`, `started_at_utc`, `completed_at_utc`, `provenance`, `candidate_artifacts`, `candidate_metrics`, `diagnostics`, `warnings`, `approximations`, `adapter_result_manifest_hash` | Written before process exit, so it contains no observed exit category or core artifact IDs; candidate paths are relative to the assigned directory; the core validates every claim |
-| `RunManifest` | Core-generated authoritative consolidated record after successful process reconciliation and artifact finalization | `schema_version`, `protocol_version`, `manifest_id`, `experiment_id`, `run_id`, `attempt_token_hash`, `adapter_result_manifest_hash`, `semantic_status`, `process_exit_category`, `started_at_utc`, `completed_at_utc`, `provenance`, `artifact_refs`, `metrics`, `diagnostics`, `warnings`, `approximations`, `run_manifest_hash` | Built only by the core for `SUCCEEDED` or `SUCCEEDED_WITH_WARNINGS`; matching adapter semantic status, process outcome, lifecycle lease, and finalized `ArtifactRef`s must reconcile; an unknown lost exit is explicit and forces a recovery warning |
+| `ProtocolEventEnvelope` | Untrusted temporary wire record parsed from one adapter stdout line | `schema_version`, `protocol_version`, `event_id`, `invocation_id`, `run_id`, `attempt_token`, `sequence`, `event_type`, `timestamp_utc`, `payload` | Raw token is allowed only while verifying the active invocation and attempt; sequence begins at one independently for each invocation; this record is never persisted or finalized unsanitized |
+| `RunEvent` | Authoritative sanitized event persisted after wire identity validation | `schema_version`, `protocol_version`, `event_id`, `invocation_id`, `run_id`, `attempt_token_hash`, `sequence`, `event_type`, `timestamp_utc`, `payload`, `received_at_utc`, `wire_event_hash`, `content_hash` | `(invocation_id, sequence)` is unique; invocation links to the same run; payload and diagnostics contain no raw token; wire hash is source provenance while content hash covers the sanitized model; event type selects a strict payload schema; size is bounded before parsing |
+| `CandidateArtifact` | Core-owned lifecycle record for bytes in staging | `schema_version`, `candidate_artifact_id`, `experiment_id`, `run_id`, `producer_kind`, `invocation_id`, `artifact_kind`, `staging_relative_path`, `state`, `adapter_declared_size`, `adapter_declared_hash`, `adapter_declared_media_type`, `validation_observations`, `source_event_id`, `source_adapter_manifest_id`, `created_at_utc`, `updated_at_utc`, `revision` | State is only `CANDIDATE`, `VALIDATING`, `FINALIZING`, `QUARANTINED`, or `CORRUPT`; producer kind is `ADAPTER` or `CORE`; adapter-declared fields and invocation/event provenance are required only for adapter production and prohibited for core production; staging path never becomes a finalized path |
+| `ArtifactRef` | Authoritative finalized identity and provenance for immutable content | `schema_version`, `artifact_id`, `experiment_id`, `run_id`, `artifact_kind`, `finalized_relative_path`, `content_hash`, `size_bytes`, `media_type`, `source_role`, `source_candidate_artifact_id`, `created_at_utc`, `finalized_at_utc`, `state` | `state` is the literal `FINALIZED`; path is core-controlled; checksum and size are independently calculated; every field is final and immutable; a candidate can never substitute for this type |
+| `AdapterResultManifest` | Untrusted temporary adapter-produced semantic declaration and candidate-artifact index | `schema_version`, `protocol_version`, `adapter_manifest_id`, `experiment_id`, `run_id`, `invocation_id`, `attempt_token`, `semantic_status`, `started_at_utc`, `completed_at_utc`, `provenance`, `candidate_artifacts`, `candidate_metrics`, `diagnostics`, `warnings`, `approximations` | `invocation_id` is the relevant `run` command; the raw token and candidate paths are permitted only in this temporary trust-boundary input; its exact-byte `source_adapter_result_manifest_hash` is calculated out of band; the core validates every claim and never finalizes this original representation |
+| `SanitizedAdapterResultManifest` | Core-preserved immutable representation of a validated adapter result | `schema_version`, `protocol_version`, `adapter_manifest_id`, `experiment_id`, `run_id`, `invocation_id`, `attempt_token_hash`, `semantic_status`, `started_at_utc`, `completed_at_utc`, `provenance`, `candidate_artifact_ids`, `candidate_metrics`, `diagnostics`, `warnings`, `approximations`, `source_adapter_result_manifest_hash`, `sanitized_adapter_result_manifest_hash` | Generated only after invocation/run/token validation and field-level redaction; contains no raw token or staging paths; retained as the ordinary finalized result-manifest evidence |
+| `RunManifest` | Core-generated authoritative consolidated record after successful process reconciliation and artifact finalization | `schema_version`, `protocol_version`, `manifest_id`, `experiment_id`, `run_id`, `run_invocation_id`, `attempt_token_hash`, `sanitized_adapter_result_manifest_hash`, `semantic_status`, `process_exit_category`, `started_at_utc`, `completed_at_utc`, `provenance`, `artifact_refs`, `metrics`, `diagnostics`, `warnings`, `approximations`, `run_manifest_hash` | Built only by the core for `SUCCEEDED` or `SUCCEEDED_WITH_WARNINGS`; matching invocation, adapter semantic status, process outcome, lifecycle lease, and finalized `ArtifactRef`s must reconcile; an unknown lost exit is explicit and forces a recovery warning |
 | `CanonicalOrder` | Normalized order intent or accepted engine order fact | `schema_version`, `order_id`, `experiment_id`, `run_id`, `source_artifact_id`, `instrument`, `side`, `position_effect`, `order_type`, `quantity`, `limit_price`, `time_in_force`, `submitted_at_utc`, `engine_order_id` | `BUY` opens or increases and `SELL` reduces or closes in long-only scope; negative quantities are forbidden; optional native ID never becomes canonical identity |
 | `CanonicalFill` | Normalized execution fact | `schema_version`, `fill_id`, `order_id`, `experiment_id`, `run_id`, `source_artifact_id`, `instrument`, `side`, `quantity`, `price`, `fees`, `filled_at_utc`, `engine_fill_id` | Quantity and price are positive; fee currencies are explicit; fill cannot exceed modeled order constraints without a diagnostic |
 | `PositionSnapshot` | Position state at a canonical instant | `schema_version`, `snapshot_id`, `experiment_id`, `run_id`, `source_artifact_id`, `instrument`, `quantity`, `average_entry_price`, `market_price`, `realized_pnl`, `unrealized_pnl`, `timestamp_utc` | Long-only quantity is non-negative; financial values are Decimal-based and currencies are explicit; snapshots are time ordered within a series |
 | `PortfolioSnapshot` | Portfolio-level balance and valuation | `schema_version`, `snapshot_id`, `experiment_id`, `run_id`, `source_artifact_id`, `cash_balances`, `position_snapshot_ids`, `equity`, `timestamp_utc` | Asset balances and equity reconcile within declared precision or emit a diagnostic; no floating-point total is authoritative |
 | `EquityPoint` | Compact normalized equity-series point | `schema_version`, `experiment_id`, `run_id`, `source_artifact_id`, `timestamp_utc`, `equity`, `cash`, `exposure` | Series is sorted by unique UTC timestamp; all amounts and ratios use Decimal strings |
 | `MetricValue` | Named normalized result metric | `schema_version`, `metric_name`, `value`, `value_type`, `unit`, `methodology_version`, `comparison_level`, `source_artifact_id` | Numeric values are Decimal strings; units and methodology are mandatory; missing or undefined values use an explicit status rather than NaN |
-| `Diagnostic` | Stable machine-readable warning or error | `schema_version`, `diagnostic_id`, `severity`, `error_code`, `category`, `message`, `source_component`, `experiment_id`, `run_id`, `engine`, `retriable`, `timestamp_utc`, `details`, `causal_diagnostic_ids` | Message and structured details are bounded and redacted; causal IDs cannot cycle; free-form exception text is supplementary only |
-| `AuditEvent` | Append-only record of a meaningful core action | `schema_version`, `audit_event_id`, `action`, `actor`, `outcome`, `experiment_id`, `run_id`, `artifact_id`, `timestamp_utc`, `correlation_id`, `details_hash`, `details` | Actor is `LOCAL_USER`, `CORE`, or a named adapter identity; events are immutable, ordered, bounded, and contain no secrets |
+| `Diagnostic` | Stable machine-readable warning or error | `schema_version`, `diagnostic_id`, `severity`, `error_code`, `category`, `message`, `source_component`, `experiment_id`, `run_id`, `invocation_id`, `engine`, `retriable`, `timestamp_utc`, `details`, `causal_diagnostic_ids` | Invocation is required for command/process/protocol findings and absent when no command caused the fact; message and structured details are bounded and redact raw tokens; causal IDs cannot cycle; free-form exception text is supplementary only |
+| `AuditEvent` | Append-only record of a meaningful core action | `schema_version`, `audit_event_id`, `action`, `actor`, `outcome`, `experiment_id`, `run_id`, `invocation_id`, `artifact_id`, `timestamp_utc`, `correlation_id`, `details_hash`, `details` | Invocation is required for command lifecycle, protocol, event-ingest, and command-produced artifact actions; actor is `LOCAL_USER`, `CORE`, or a named adapter identity; events are immutable, ordered, bounded, and contain no raw token or secret |
 
 ### 11.4 Canonical versus native data
 
@@ -512,7 +543,9 @@ Canonical boundary fields are required unless this specification makes their abs
 - `DatasetDescriptor.timeframe` is absent only for data types without a timeframe; OHLCV requires it.
 - `EngineRunRecord` process identity exists only from `STARTING` onward; heartbeat exists only after one is observed; completion, exit, manifest, and terminal diagnostic fields exist only when their governing facts occur.
 - `CommandInvocationRecord.run_id` is absent only for catalog-level `describe`; PID, completion, exit, and stderr reference fields follow invocation state.
-- `ArtifactRef.finalized_at_utc` and finalized path exist only in `FINALIZED`; candidate paths never occupy the finalized-path field.
+- For `CandidateArtifact.producer_kind=ADAPTER`, `invocation_id`, `adapter_declared_size`, `adapter_declared_hash`, and `adapter_declared_media_type` are required, and `source_event_id` is required when an `artifact_produced` event created the candidate. For `producer_kind=CORE`, all adapter-declared and adapter-event fields are prohibited. `source_adapter_manifest_id` is absent at initial creation and becomes required only after a validated adapter manifest associates an adapter candidate; it is prohibited for core candidates. Validation observations accumulate by state, while `staging_relative_path` is always required and confined to the assigned root.
+- Every `ArtifactRef` field, including `finalized_relative_path`, independently calculated hash and size, `finalized_at_utc`, and literal `FINALIZED` state, is required. Candidate paths and candidate states cannot inhabit this type.
+- `ProtocolEventEnvelope.attempt_token` is required on temporary `validate` and `run` wire input. Its sanitized `RunEvent` replacement requires `attempt_token_hash` and never retains the raw token.
 - `CanonicalOrder.limit_price` is required for limit orders and prohibited for market orders. Native order IDs remain optional provenance.
 - `PositionSnapshot.average_entry_price` is absent only for a zero position; realized and unrealized PnL remain explicit Money values.
 - A failed negotiation has no selected version; a successful negotiation requires every selected version.
@@ -524,7 +557,8 @@ Discriminated unions use explicit fields such as `event_type`, `artifact_kind`, 
 - `CompatibilityOutcome`: `SUPPORTED`, `SUPPORTED_WITH_APPROXIMATION`, `NOT_APPLICABLE`, `UNAVAILABLE`
 - `ValidationOutcome`: `VALID`, `NOT_APPLICABLE`, `UNAVAILABLE`, `INVALID`
 - `CommandKind`: `DESCRIBE`, `VALIDATE`, `RUN`
-- `ArtifactState`: `CANDIDATE`, `VALIDATING`, `FINALIZING`, `FINALIZED`, `QUARANTINED`, `CORRUPT`
+- `CandidateArtifactState`: `CANDIDATE`, `VALIDATING`, `FINALIZING`, `QUARANTINED`, `CORRUPT`; `ArtifactRef.state` is the separate literal `FINALIZED`
+- `CandidateArtifactProducerKind`: `ADAPTER`, `CORE`
 - `SemanticStatus`: `SUCCEEDED`, `SUCCEEDED_WITH_WARNINGS`, `FAILED`, `CANCELLED`, `TIMED_OUT`, `NOT_APPLICABLE`, `UNAVAILABLE`
 - `OrderType`: `MARKET`, `LIMIT`
 - `OrderSide`: `BUY`, `SELL`
@@ -770,7 +804,9 @@ Compatibility results are never votes. A set of three `SUPPORTED` runs and two `
 Each explicitly registered adapter exposes these logical commands:
 
 ```text
-adapter-executable describe --output <descriptor-path>
+adapter-executable describe
+  --request <request-path>
+  --output <descriptor-path>
 
 adapter-executable validate
   --request <request-path>
@@ -784,11 +820,13 @@ adapter-executable run
 
 The orchestrator passes an argument array to the operating-system process API. Concatenated shell commands, `shell=True`, implicit shell expansion, and executable discovery from untrusted paths are prohibited. Executable paths come only from the explicit adapter catalog and are recorded with a checksum.
 
-`describe` produces an `AdapterDescriptor`. `validate` performs adapter-specific validation without starting a backtest. `run` executes one immutable request and may write only inside its assigned directory. All commands use the same version-negotiation, exit-category, diagnostics, and bounded-output rules.
+`describe` produces an `AdapterDescriptor`. Its minimal request carries common command-envelope identity, including `invocation_id`, but no run or attempt fields. `validate` performs adapter-specific validation without starting a backtest. `run` executes one immutable request and may write only inside its assigned directory. All commands use the same version-negotiation, exit-category, diagnostics, and bounded-output rules.
+
+`describe` writes only its descriptor output file and MUST emit no stdout protocol events; any stdout byte is contamination. Stdout event envelopes are defined only for `validate` and `run`, whose envelopes always have `run_id` and raw active-attempt correlation material.
 
 Every adapter subprocess invocation has a core-owned `CommandInvocationRecord` with `invocation_id`, command kind, adapter identity, optional run ID, request hash, start/end timestamps, PID identity where launched, process exit category, bounded stderr artifact, and diagnostics. `describe` and `validate` invocations may occur while an engine-run record is in `VALIDATING`; the run lifecycle describes the economic run attempt, while invocation records describe each child process used to reach that state.
 
-`validate` writes a strict `AdapterValidationResult` containing protocol/schema versions, request/run/attempt identity, validation outcome, diagnostics, and adapter-specific applicability facts. Its outcome is `VALID`, `NOT_APPLICABLE`, `UNAVAILABLE`, or `INVALID`. A valid result permits the later `run` command; the other outcomes map to the corresponding engine-run terminal state or validation failure without launching `run`.
+`validate` writes a strict `AdapterValidationResult` containing protocol/schema versions, request/run/attempt-hash identity, its exact `invocation_id`, validation outcome, diagnostics, and adapter-specific applicability facts. The invocation must equal the active `VALIDATE` `CommandInvocationRecord`; a result from any describe, prior validate, run, or stale attempt is rejected. Its outcome is `VALID`, `NOT_APPLICABLE`, `UNAVAILABLE`, or `INVALID`. A valid result permits the later `run` command; the other outcomes map to the corresponding engine-run terminal state or validation failure without launching `run`.
 
 `run --result` points to an `AdapterResultManifest` inside the assigned temporary directory. That adapter-produced manifest is final for the adapter's semantic declaration but is still untrusted input to the core. After process reconciliation and artifact finalization, the core creates the authoritative consolidated `RunManifest`.
 
@@ -804,30 +842,27 @@ The bootstrap descriptor envelope has fixed fields: `bootstrap_schema_version`, 
 
 ### 14.3 Request envelope
 
-A request envelope contains:
+A request envelope has a common header required for every command:
 
 - `protocol_version`
 - `schema_version`
 - `request_id`
+- `invocation_id`
 - `command`
 - `created_at_utc`
-- `experiment_id`
-- `run_id`
-- `logical_slot_id`
-- `attempt_number`
-- `attempt_token`
 - `payload_hash`
 - `payload`
 
-The payload for `validate` and `run` is an `EngineRunRequest` or a versioned projection of it. The adapter verifies the envelope, payload hash, versions, assigned path, and attempt identity before engine initialization.
+The `describe` variant has only that common header and a descriptor-negotiation payload. The `validate` and `run` variants carry `experiment_id`, `run_id`, `logical_slot_id`, `attempt_number`, and `attempt_token` exactly once inside their `EngineRunRequest` payload or versioned projection; the envelope header prohibits duplicate placement. The core mints a new `invocation_id` for every `describe`, `validate`, and `run` command and records it before launch. A `validate` invocation and a later `run` invocation for the same run attempt therefore have different identities. The raw `attempt_token` is temporary sensitive correlation material supplied only through this core-controlled request material. The adapter verifies the envelope, invocation ID, payload hash, versions, assigned path, and attempt identity before engine initialization. Temporary request material is never registered as an ordinary finalized artifact.
 
 ### 14.4 Event envelope and event types
 
-Every stdout line during `validate` or `run` MUST be non-empty and contain one complete UTF-8 JSON object with:
+Every stdout line during `validate` or `run` MUST be non-empty and contain one complete UTF-8 JSON `ProtocolEventEnvelope` object with:
 
 - `protocol_version`
 - `schema_version`
 - `event_id`
+- `invocation_id`
 - `run_id`
 - `attempt_token`
 - `sequence`
@@ -843,10 +878,12 @@ Supported event types are:
 | `progress` | Phase name, completed units, total units when known, and a Decimal percentage when meaningful |
 | `warning` | Stable warning code, bounded message, structured impact, and comparison-level effect |
 | `diagnostic` | Stable diagnostic structure with category, severity, retriable flag, and causal references |
-| `artifact_produced` | Candidate relative path, artifact kind, media type, declared size, and adapter-computed checksum; the core independently validates all values |
-| `final_result` | Relative `AdapterResultManifest` path, `adapter_result_manifest_hash` claimed by the adapter, and semantic-status summary; it is only a pointer and not authoritative without manifest validation |
+| `artifact_produced` | Candidate relative path, artifact kind, media type, declared size, and adapter-computed checksum; after envelope identity validation the core creates or updates a `CandidateArtifact` linked to this invocation and source event, then independently validates all values |
+| `final_result` | Relative `AdapterResultManifest` path, exact-byte `source_adapter_result_manifest_hash` claimed out of band by the adapter, and semantic-status summary; it is only a pointer and not authoritative without independent manifest hashing and validation |
 
-Sequence numbers start at one and increase by exactly one. Duplicate, missing, out-of-order, wrong-run, or wrong-attempt events are protocol violations. Event receipt timestamps are recorded separately from adapter timestamps.
+Sequence numbers start at one independently for each command invocation and increase by exactly one within that invocation. A `validate` event at sequence one and a later `run` event at sequence one do not collide because their `invocation_id` values differ. Missing, wrong, stale, or mismatched invocation IDs; a conflicting duplicate sequence or content within one invocation; missing or out-of-order sequence; wrong run; or wrong attempt token are protocol identity violations. An identical replay with the same `(invocation_id, sequence)` and sanitized content hash returns the prior accepted `RunEvent` idempotently.
+
+The parser treats `ProtocolEventEnvelope` as untrusted and temporary. It first validates protocol/schema versions, registered `invocation_id`, command kind, run linkage, active raw attempt token, sequence, event type, and bounds. It then hashes the raw wire object for correlation, replaces the token with `attempt_token_hash`, redacts token occurrences from payload, diagnostics, and messages, and persists a separate sanitized `RunEvent`. Accepted-event identity and idempotency are `(invocation_id, sequence)` plus identical sanitized content hash. `run_id` remains required for run aggregation, provenance, and querying. Event receipt timestamps are recorded separately from adapter timestamps.
 
 ### 14.5 Subprocess interaction
 
@@ -858,17 +895,18 @@ sequenceDiagram
     participant Work as Assigned temporary directory
     participant Store as Final artifact store
 
-    Core->>Registry: Create run attempt and immutable request hash
+    Core->>Registry: Create run attempt, command invocation, and immutable request hash
     Core->>Work: Create unique assigned directory
-    Core->>Child: Launch argument array with request and paths
-    Child->>Core: JSON Lines heartbeat and progress events
-    Core->>Registry: Validate and persist significant events
+    Core->>Child: Launch argument array with invocation-bound request and paths
+    Child->>Core: Invocation-bound JSON Lines heartbeat and progress envelopes
+    Core->>Registry: Validate identity, sanitize token, and persist RunEvents
     Child->>Work: Write native and normalized candidate files
-    Child->>Core: artifact_produced events
+    Child->>Core: invocation-bound artifact_produced events
+    Core->>Registry: Create CandidateArtifact records
     Child->>Work: Write adapter result manifest candidate
     Child->>Core: final_result event
     Child-->>Core: Exit with process category
-    Core->>Work: Validate manifest, paths, schemas, sizes, and hashes
+    Core->>Work: Validate invocation, manifest, paths, schemas, sizes, and hashes
     Core->>Registry: Acquire matching-attempt finalization lease
     Core->>Store: Atomic artifact finalization
     Core->>Registry: Commit core RunManifest, artifact links, and terminal run state
@@ -889,20 +927,22 @@ sequenceDiagram
 
 Any other exit code maps to a stable `UNRECOGNIZED_PROCESS_EXIT` runtime diagnostic. The core may itself classify a process as timed out, cancelled, or protocol-violating even when forced termination produces a different native Windows exit value.
 
-The exit code is not the semantic result. The validated matching `AdapterResultManifest` is authoritative for what the adapter semantically declares, while the core-generated `RunManifest` is authoritative for the reconciled run record. Terminal success is derived from the adapter semantic declaration, observed or explicitly unknown process exit category, lifecycle and finalization-lease state, and finalized artifacts. A zero exit without a valid adapter result manifest cannot succeed. A valid success declaration with a known nonzero failure exit cannot succeed. On application restart, a fully valid matching candidate from a process whose exit code was lost may be recovered only under section 29 and produces a core `RunManifest` with an unknown-exit warning.
+The exit code is not the semantic result. The validated matching `AdapterResultManifest` is authoritative only for what the adapter semantically declares, while the core-generated `RunManifest` is authoritative for the reconciled run record. Terminal success is derived from the adapter semantic declaration, matching run-command invocation, observed or explicitly unknown process exit category, lifecycle and finalization-lease state, and finalized artifacts. A zero exit without a valid adapter result manifest for the active `invocation_id` cannot succeed. A valid success declaration with a known nonzero failure exit cannot succeed. On application restart, a fully valid matching candidate from a process whose exit code was lost may be recovered only under section 29 and produces a core `RunManifest` with an unknown-exit warning.
 
 For `validate`, exit `20` maps to `NOT_APPLICABLE`, exit `30` maps to `UNAVAILABLE`, and exit `10` maps to validation failure when the `AdapterValidationResult` agrees. For `run`, a late exit `20` or `30` is accepted only with a matching adapter result manifest carrying the same semantic status and a diagnostic explaining why preflight did not resolve it. The engine-run moves to `NOT_APPLICABLE` or `UNAVAILABLE`; no success artifacts are finalized. A contradictory exit and manifest is a protocol failure.
 
 ### 14.7 Protocol limits and contamination
 
-- Stdout is reserved exclusively for protocol JSON Lines. A blank line is a protocol violation, as is unexpected text, invalid UTF-8, malformed JSON, an oversized line, an unknown field or event, or mismatched identity.
+- Stdout is reserved exclusively for protocol JSON Lines. A blank line is a protocol violation, as is unexpected text, invalid UTF-8, malformed JSON, an oversized line, an unknown field or event, or mismatched invocation/run/attempt identity.
 - The default maximum encoded event line is 1 MiB. Configuration may lower it but cannot raise it above the compiled safety ceiling without a protocol-version change.
 - The default maximum result manifest is 16 MiB. Large results belong in artifacts.
-- Stderr is human-readable engine output. It is captured separately, redacted where required, and retained up to 50 MiB per attempt using deterministic bounded segments. Truncation creates a diagnostic and audit event.
+- Stderr is human-readable engine output. It is captured separately, the raw attempt token is redacted before persistence, and sanitized output is retained up to 50 MiB per invocation using deterministic bounded segments. Truncation creates a diagnostic and audit event.
 - The parser reads incrementally and applies byte limits before JSON decoding.
-- On contamination, the core records a bounded escaped sample, requests cancellation, applies the grace period, terminates if necessary, rejects finalization, and records a terminal protocol diagnostic.
+- On contamination, the core redacts the attempt token from a bounded escaped sample before recording it, requests cancellation, applies the grace period, terminates if necessary, rejects finalization, and records a terminal protocol diagnostic. Redaction occurs before any sample is persisted. If invalid UTF-8, truncation, or chunk boundaries prevent proving complete token removal, the core records only byte length and source hash, never sample bytes. Unsanitized stdout bytes remain temporary trust-boundary input and are never finalized as ordinary evidence.
 
 Malformed output is never passed through an untyped dictionary into the application layer and is never treated as a warning-only condition when it compromises event framing or identity.
+
+Raw request files, stdout bytes, and original adapter-result candidates may remain only under the command-specific temporary runtime root while an active recovery lease requires them. When the command and any recovery lease close, the core retains only source hashes and sanitized evidence, then removes raw-bearing bytes before cleanup completes. A failed deletion is moved to restricted temporary quarantine, audited, retried, and resolved within a compiled maximum of 24 hours; it never creates an `ArtifactRef`. Before any adapter-produced candidate becomes finalizable, the core performs a streaming exact-byte scan for the active raw token. Text or structured output is sanitized and revalidated; a native or binary candidate containing that byte sequence is rejected or quarantined as sensitive-material leakage and is never finalized.
 
 ### 14.8 Timeout and cancellation
 
@@ -916,11 +956,11 @@ Cancellation is idempotent. The supervisor records the request, sends a graceful
 
 Before launch, the supervisor:
 
-1. Revalidates the run state, attempt token, executable catalog entry, executable checksum, request hash, and assigned paths.
+1. Revalidates the `CommandInvocationRecord`, command kind, invocation-to-run linkage, run state, attempt token, executable catalog entry, executable checksum, request hash, and assigned paths.
 2. Creates a unique temporary run directory owned by that attempt.
 3. Opens bounded stdout and stderr readers before process work begins.
 4. Launches the absolute executable with an argument array, explicit working directory, no shell, and a fresh non-inherited environment block. Project 1 fake adapters receive no ambient environment variables; all inputs arrive through validated files and arguments. Future adapter projects may add explicitly configured non-secret runtime entries through a new reviewed contract, but the core never reads parent environment variables as configuration or credentials.
-5. Records PID, process-creation identity, executable hash, start time, and supervisor instance ID transactionally with `STARTING` to `RUNNING` progression.
+5. Records PID, process-creation identity, executable hash, start time, supervisor instance ID, and invocation state transactionally; for `run`, that transaction also coordinates the engine-run `STARTING` to `RUNNING` progression.
 
 PID alone is insufficient because Windows may reuse it. Process identity combines PID with an operating-system process handle or creation timestamp and the recorded executable path/hash.
 
@@ -928,7 +968,7 @@ PID alone is insufficient because Windows may reuse it. Process identity combine
 
 The default expected heartbeat interval is 15 seconds and the default missing-heartbeat threshold is 45 seconds. These are local configuration values snapshotted into the immutable request. A missing heartbeat emits a diagnostic and initiates the configured liveness policy; it does not by itself claim the engine is dead until process identity and I/O state are checked.
 
-Progress is informational and never used to infer success. The supervisor persists state-changing events and bounded summaries while JSON Lines raw protocol output is retained as an artifact subject to size policy.
+Progress is informational and never used to infer success. The supervisor persists state-changing sanitized `RunEvent` records and bounded summaries. A finalized protocol-event capture is generated only from those sanitized records and contains `invocation_id`, `run_id`, `attempt_token_hash`, and invocation-scoped sequence; the unsanitized raw stdout stream is never registered or finalized as ordinary evidence.
 
 ### 15.3 Windows-compatible termination
 
@@ -938,7 +978,7 @@ Graceful cancellation defaults to 10 seconds. Forced termination occurs only aft
 
 ### 15.4 Path boundary enforcement
 
-Every adapter-supplied path must be relative, normalized, free of drive prefixes, free of alternate data-stream syntax, and free of `..` traversal. The core resolves the candidate against the assigned run root and verifies containment before opening it. It rejects symbolic links, junctions, reparse points, and hard-link surprises that could escape or alias outside the root. Containment is rechecked immediately before validation, hashing, and finalization to reduce time-of-check/time-of-use risk.
+Every adapter-supplied `staging_relative_path` must be relative, normalized, free of drive prefixes, free of alternate data-stream syntax, and free of `..` traversal. The core resolves the `CandidateArtifact` path against the assigned run root and verifies containment before opening it. It rejects symbolic links, junctions, reparse points, and hard-link surprises that could escape or alias outside the root. Containment and candidate-to-invocation ownership are rechecked immediately before validation, hashing, and finalization to reduce time-of-check/time-of-use risk. Only the core constructs an `ArtifactRef.finalized_relative_path` under the finalized store; adapters never supply it.
 
 The adapter never receives a writable core registry path or finalized-artifact path. Only the assigned temporary directory is writable by contract. Project 1 does not claim this contract is enforced by an operating-system sandbox; therefore only trusted, explicitly registered fake adapters are executed in Project 1.
 
@@ -946,18 +986,18 @@ The adapter never receives a writable core registry path or finalized-artifact p
 
 At core startup, the reconciler scans nonterminal run records:
 
-- `PENDING`, `VALIDATING`, and `READY` can resume idempotently after request and descriptor hashes are revalidated.
+- `PENDING`, `VALIDATING`, and `READY` can resume idempotently only when temporary request material still exists and its request hash plus domain-separated computed token hash match durable facts. Missing or invalid raw-bearing request material fails the attempt; any retry receives a new run ID and token rather than reconstructing the old token.
 - `STARTING` and `RUNNING` require process-identity reconciliation. A `STARTING` attempt never recovers directly to success. If process identity and durable launch facts prove launch completed, reconciliation first compare-and-swap transitions it to `RUNNING`; otherwise it becomes `FAILED` and retry policy applies.
 - If the matching process is alive but protocol pipes cannot be safely reattached, the core terminates the verified process tree, records `ORCHESTRATOR_RESTART_LOST_SUPERVISION`, and applies retry policy.
-- If no matching process exists, the core examines only the assigned temporary directory for a matching `AdapterResultManifest` and attempt token. Recovery rules in section 29 determine whether finalization may resume.
+- If no matching process exists, the core examines only the assigned temporary directory for an `AdapterResultManifest` whose run-command `invocation_id`, run ID, request hash, and candidate identities match durable facts and whose raw token, after domain-separated hashing, matches durable `EngineRunRecord.attempt_token_hash`. Recovery rules in section 29 determine whether sanitization and finalization may resume.
 - Any other live process found by stale PID is left untouched and recorded as a PID-reuse diagnostic.
 - Orphan directories and incomplete outputs are quarantined or deleted only through an explicit audited retention action; they are never treated as finalized.
 
 ### 15.6 Stale-attempt protection
 
-Each attempt has a unique `run_id`, monotonic `attempt_number`, unguessable `attempt_token`, unique work directory, and registry revision. The adapter echoes the token in every adapter envelope and its `AdapterResultManifest`; the core stores a hash in its authoritative records. Before finalization, the core acquires a short-lived finalization lease with a compare-and-swap proving that the run is still the active nonterminal attempt for its logical slot.
+Each attempt has a unique `run_id`, monotonic `attempt_number`, unguessable `attempt_token`, unique work directory, and registry revision. Each adapter command additionally has a unique `invocation_id`. The adapter echoes the invocation ID and raw token in temporary wire envelopes and echoes the run-command invocation ID and raw token in its temporary `AdapterResultManifest`; after verification the core stores only the token hash in authoritative records and sanitized evidence. Before finalization, the core acquires a short-lived finalization lease with a compare-and-swap proving that the run and run-command invocation are still the active nonterminal attempt for their logical slot.
 
-A retry always creates a new run ID, token, and directory. A late event or file from an older attempt fails identity and lease checks. Because adapters cannot write the database or final store, a stale child cannot finalize itself.
+A retry always creates a new run ID, token, and directory. A repeated command within one attempt receives a new `invocation_id`. A late event or file from an older attempt, superseded invocation, or wrong command fails identity and lease checks. Because adapters cannot write the database or final store, a stale child cannot finalize itself.
 
 ## 16. Experiment lifecycle
 
@@ -1089,15 +1129,15 @@ All other transitions are forbidden. Each transition records prior state, next s
 ### 17.2 Idempotency and retry
 
 - Creating an attempt is idempotent on `(experiment_id, logical_slot_id, attempt_number)`.
-- Protocol events are idempotent on `(run_id, sequence)` and identical content hash. A conflicting duplicate is a protocol violation.
-- Finalization is idempotent on `(run_id, attempt_token, adapter_result_manifest_hash)` and refuses a different adapter result manifest for the same attempt.
+- Protocol events are idempotent on `(invocation_id, sequence)` and identical sanitized content hash. Sequence starts at one for each invocation, so validate sequence one and run sequence one coexist. A conflicting duplicate within one invocation is a protocol violation.
+- Finalization is idempotent on `(run_id, run_invocation_id, attempt_token_hash, source_adapter_result_manifest_hash, sanitized_adapter_result_manifest_hash)` and refuses a stale invocation or different source or sanitized result manifest for the same attempt.
 - A retriable failure creates a new run ID and increments attempt number. The new record references its predecessor and retry reason.
 - Automatic retries are bounded by the immutable experiment retry policy and never apply to `NOT_APPLICABLE`, policy violations, deterministic schema errors, or artifact corruption without a new source result.
 - An `UNAVAILABLE` attempt may be retried only after a new explicit availability observation; it does not become `READY` in place.
 
 ### 17.3 Recovery
 
-On restart, nonterminal attempts follow section 15 reconciliation. Terminal attempts are never reopened. A recoverable completed adapter result manifest may finish the original nonterminal attempt only if attempt identity, request hash, `adapter_result_manifest_hash`, artifact checks, and finalization lease all validate. Otherwise the original attempt becomes `FAILED` and any policy-approved retry is a new attempt.
+On restart, nonterminal attempts follow section 15 reconciliation. Terminal attempts are never reopened. A recoverable completed adapter result manifest may finish the original nonterminal attempt only if run-command `invocation_id`, computed `attempt_token_hash`, request hash, `source_adapter_result_manifest_hash`, deterministic `sanitized_adapter_result_manifest_hash`, candidate checks, sanitization, and finalization lease all validate. Otherwise the original attempt becomes `FAILED` and any policy-approved retry is a new attempt.
 
 ## 18. Dataset registry
 
@@ -1152,31 +1192,44 @@ The core owns artifact identity, lifecycle, checksums, provenance, and finalizat
 - Canonical normalized orders, fills, positions, portfolio snapshots, equity series, and metrics
 - Dataset partitions and dataset manifests
 - Strategy and configuration snapshots
-- Request, event-stream, and result manifests
-- Bounded stdout protocol captures and stderr logs
+- Sanitized request snapshots containing token hashes, sanitized protocol-event captures, sanitized adapter-result manifests, and core run manifests
+- Bounded sanitized stderr logs
 - Diagnostic and comparison reports
 
-The artifact registry uses `CANDIDATE`, `VALIDATING`, `FINALIZING`, `FINALIZED`, `QUARANTINED`, and `CORRUPT`. Only `FINALIZED` artifacts may be referenced by a successful core `RunManifest`. Finalized bytes and their manifest are immutable. Any correction produces a new artifact ID and content hash with provenance linking the superseded record.
+Candidate lifecycle and finalized identity are deliberately separate. A `CandidateArtifact` may use only `CANDIDATE`, `VALIDATING`, `FINALIZING`, `QUARANTINED`, or `CORRUPT`; it owns staging provenance and validation observations but is never a finalized artifact reference. An `ArtifactRef` comes into existence only after successful atomic move and authoritative registration, has literal state `FINALIZED`, and is immutable. A successful core `RunManifest` may reference only `ArtifactRef` values; schema validation rejects every `CandidateArtifact` identity or shape in `artifact_refs`. Any correction produces a new `ArtifactRef` and content hash with provenance linking the superseded finalized record.
+
+The candidate state machine is normative:
+
+| Candidate state | Allowed next state or successful terminal condition |
+|---|---|
+| `CANDIDATE` | `VALIDATING`, `QUARANTINED`, or `CORRUPT` |
+| `VALIDATING` | `FINALIZING`, `QUARANTINED`, or `CORRUPT` |
+| `FINALIZING` | Remain `FINALIZING` with a `REGISTERED` journal and immutable candidate-to-`ArtifactRef` mapping, or move to `QUARANTINED` or `CORRUPT` |
+| `QUARANTINED` | Terminal for automatic processing; only an explicit audited retention action may remove temporary bytes |
+| `CORRUPT` | Terminal for automatic processing; no finalization or recovery to a usable state |
+
+All other candidate transitions are forbidden. A historical `FINALIZING` candidate with a registered mapping is already consumed and is excluded from startup recovery queries.
 
 ### 19.2 Finalization flow
 
 ```mermaid
 flowchart TD
     Start["Adapter writes candidate in assigned temporary directory"] --> Event["Adapter declares candidate relative path"]
-    Event --> Boundary{"Path remains inside assigned root"}
+    Event --> Candidate["Core records CandidateArtifact in CANDIDATE"]
+    Candidate --> Boundary{"Path remains inside assigned root"}
     Boundary -->|"No"| Reject["Reject, diagnose, cancel, and quarantine"]
-    Boundary -->|"Yes"| Validate["Validate type, schema, size, and semantic constraints"]
+    Boundary -->|"Yes"| Validate["Move CandidateArtifact to VALIDATING and validate"]
     Validate --> Valid{"Validation succeeds"}
     Valid -->|"No"| Reject
     Valid -->|"Yes"| Hash["Core calculates SHA-256 and size"]
     Hash --> Manifest["Core builds canonical manifest with provenance"]
-    Manifest --> Lease{"Matching run and attempt acquire finalization lease"}
+    Manifest --> Lease{"Matching run and invocation acquire finalization lease"}
     Lease -->|"No"| Reject
     Lease -->|"Yes"| Prepared["Commit PREPARED finalization journal"]
     Prepared --> Move["Atomic move on same volume into finalized content path"]
     Move --> Moved["Commit MOVED journal state"]
-    Moved --> Register["Commit artifact records, core RunManifest, and run links"]
-    Register --> Final["Artifact is authoritative and immutable"]
+    Moved --> Register["Create ArtifactRefs, core RunManifest, and run links"]
+    Register --> Final["ArtifactRefs are authoritative and immutable"]
     Move -->|"MOVED journal commit interrupted"| Recover["Startup reconciliation finishes registration or quarantines"]
     Moved -->|"Registration interrupted"| Recover
     Recover --> Final
@@ -1185,33 +1238,35 @@ flowchart TD
 
 The required sequence is:
 
-1. Temporary output in the unique assigned run directory
-2. Path, size, media, schema, and semantic validation
+1. Temporary output in the unique assigned run directory and `CandidateArtifact` registration
+2. Candidate path, size, media, schema, and semantic validation
 3. Independent SHA-256 checksum calculation
-4. Canonical manifest creation
-5. Matching-attempt finalization lease acquisition
+4. Canonical artifact manifest and sanitized adapter-result-manifest creation
+5. Matching-attempt and run-invocation finalization lease acquisition
 6. Durable `PREPARED` finalization-journal entry
 7. Atomic move into the finalized artifact location on the same volume
 8. Durable `MOVED` journal state
-9. Transactional artifact registration, core `RunManifest` generation, and run linkage
+9. Transactional immutable `ArtifactRef` registration, core `RunManifest` generation, and run linkage
 
-The final store is content-addressed by SHA-256 under a core-controlled root. The implementation may deduplicate identical immutable blobs, but each logical `ArtifactRef` preserves its own experiment/run provenance and artifact role. Existing finalized content is never overwritten.
+The final store is content-addressed by SHA-256 under a core-controlled root. The implementation may deduplicate identical immutable blobs, but each logical `ArtifactRef` preserves its own experiment/run provenance, source `CandidateArtifact` identity, and artifact role. Registration creates a new `ArtifactRef`; it does not transition the candidate into `FINALIZED`. After successful registration the consumed candidate remains an immutable historical `FINALIZING` record linked to the new reference; that state means candidate processing reached the atomic-move boundary, while the `ArtifactRef` alone expresses completed finalization. On failure the candidate moves to `QUARANTINED` or `CORRUPT`. Existing finalized content is never overwritten.
 
 ### 19.3 Failure and cancellation rules
 
 - A failed, cancelled, timed-out, not-applicable, or unavailable run cannot newly acquire a finalization lease.
 - A cancellation or timeout compare-and-swap that wins before finalization invalidates the attempt token for finalization.
 - If finalization wins first, the successful or warning result is committed before a later cancellation request is recorded as ineffective.
-- A crash before the atomic move leaves only temporary or quarantined output.
-- A crash after atomic move but before registry commit leaves a `FINALIZING` recovery fact, not a successful run. Startup reconciliation either verifies and completes the same manifest or moves the content to quarantine.
-- Presence in a directory is never sufficient evidence of finalization; artifact registry state, `adapter_result_manifest_hash`, generated `run_manifest_hash`, content hashes, and matching run state must agree.
+- A crash before the atomic move leaves only temporary bytes and `CandidateArtifact` records in a nonfinal state.
+- A crash after atomic move but before registry commit leaves a `CandidateArtifact` in `FINALIZING` plus a recovery-journal fact, not an `ArtifactRef` and not a successful run. Startup reconciliation either verifies and creates the immutable reference or moves the content to quarantine.
+- Presence in a directory is never sufficient evidence of finalization; registered `ArtifactRef`s, source candidate identities, `source_adapter_result_manifest_hash`, `sanitized_adapter_result_manifest_hash`, generated `run_manifest_hash`, content hashes, matching invocation, and run state must agree.
 - Partial files, unexpected files, symlinks, reparse points, and files that change while hashing are rejected.
 
 ### 19.4 Manifest rules
 
-A core-generated artifact manifest records artifact ID, kind, media type, relative finalized path, size, hash, schema version, producer identity, source candidate path, experiment/run/attempt identity, source artifact lineage, validation profile, validation diagnostics, and finalization timestamps. The manifest itself is canonical JSON and content-hashed.
+A core-generated artifact manifest records artifact ID, kind, media type, finalized relative path, independently calculated size and hash, schema version, producer identity, source candidate identity, experiment ID, run ID, run-command invocation ID, attempt number, `attempt_token_hash`, source artifact lineage, validation profile, validation diagnostics, and finalization timestamps. It never copies a staging path into the finalized-path field. The manifest itself is canonical JSON and content-hashed.
 
-The adapter's `AdapterResultManifest` is the final adapter semantic declaration but remains a candidate at the core trust boundary. It references candidate relative paths and claimed hashes, never core-issued artifact IDs. For a successful or successful-with-warnings result, the core validates and stores it, creates authoritative artifact records, reconciles the process outcome, and then generates the core `RunManifest`. A failed, cancelled, timed-out, not-applicable, or unavailable run has no core `RunManifest`; its terminal evidence remains in the run record, diagnostics, audit trail, and quarantine records. The core does not rewrite native engine artifacts to make them appear canonical.
+The adapter's `AdapterResultManifest` is the final adapter semantic declaration but remains temporary candidate input at the core trust boundary. It carries the run-command `invocation_id`, raw attempt token, candidate relative paths, and claimed hashes, never core-issued artifact IDs. After identity verification, the core constructs a `SanitizedAdapterResultManifest` that replaces the token with `attempt_token_hash`, replaces staging paths with candidate identities, redacts sensitive occurrences, records the source candidate hash, and receives its own deterministic hash. Only that sanitized representation may be preserved as ordinary finalized result-manifest evidence; the original candidate is not an engine-native artifact and is never finalized.
+
+For a successful or successful-with-warnings result, the core validates candidate records, registers immutable `ArtifactRef`s, reconciles the invocation and process outcome, and then generates the core `RunManifest` containing only `attempt_token_hash` and `sanitized_adapter_result_manifest_hash`. A failed, cancelled, timed-out, not-applicable, or unavailable run has no core `RunManifest`; its terminal evidence remains in the run record, diagnostics, audit trail, and quarantine records. The core does not rewrite genuine engine-native output to make it appear canonical, but sanitizing protocol and manifest control records is mandatory before preservation.
 
 ## 20. Result normalization and provenance
 
@@ -1219,7 +1274,7 @@ The adapter's `AdapterResultManifest` is the final adapter semantic declaration 
 
 For every successful run, the core preserves:
 
-1. **Engine-native output:** the original report, database export, event log, or files produced by the pinned engine/adapter, stored immutably.
+1. **Engine-native output:** the original report, database export, engine event log, or result files produced by the pinned engine/adapter, stored immutably. Temporary protocol stdout and the raw adapter-result candidate are control-plane inputs, not engine-native output.
 2. **Canonical normalized output:** strictly validated engine-neutral records and tabular series suitable for declared comparison levels.
 
 Canonical conversion never replaces, truncates, or deletes the native source. A successful conversion references its exact source artifact hash. If conversion later improves, the new normalized artifact points to the same native source and a new converter version.
@@ -1229,7 +1284,7 @@ Canonical conversion never replaces, truncates, or deletes the native source. A 
 Every normalized record or partition retains:
 
 - Experiment ID and immutable experiment-spec hash
-- Run ID and attempt identity
+- Run ID, attempt number, `attempt_token_hash`, and producing invocation ID
 - Engine name and version
 - Adapter name and version
 - Converter name and version
@@ -1281,6 +1336,7 @@ Every stored error uses the `Diagnostic` structure and includes:
 - `source_component`
 - `experiment_id` where applicable
 - `run_id` where applicable
+- `invocation_id` for every command, process, protocol, or command-produced artifact finding
 - `engine` where applicable
 - `retriable`
 - `timestamp_utc`
@@ -1298,7 +1354,7 @@ Codes are stable uppercase namespaced identifiers such as `CONFIG.UNKNOWN_FIELD`
 | Compatibility | Missing capability, disallowed approximation | `NOT_APPLICABLE`; not retriable with identical requirements and descriptor |
 | Adapter unavailability | Missing executable, incompatible version, runtime not configured | Retriable only after a new availability observation |
 | Engine runtime | Engine crash, native data error, internal engine failure | Policy-controlled and bounded |
-| Protocol | Malformed JSON Lines, wrong attempt token, sequence gap, stdout contamination | Not automatically retriable unless the adapter/runtime changes |
+| Protocol | Malformed JSON Lines, wrong or stale invocation ID, wrong attempt token, invocation-scoped sequence gap/conflict, stdout contamination | Not automatically retriable unless the adapter/runtime changes |
 | Timeout | Start, heartbeat, run, cancellation, or finalization deadline | Policy-controlled and bounded |
 | Cancellation | User or orchestrator cancellation | Not a failure; retry requires explicit new attempt while experiment remains active |
 | Artifact corruption | Size/hash/schema mismatch, unsafe path, mutation during hashing | Not retriable from the same candidate bytes |
@@ -1320,7 +1376,7 @@ Codes are stable uppercase namespaced identifiers such as `CONFIG.UNKNOWN_FIELD`
 | Malformed JSON Lines | `PROTOCOL.MALFORMED_JSONL`, protocol | Cancel/terminate child; run to `FAILED` | Core-derived protocol failure | False until adapter changes |
 | Blank or unexpected stdout text | `PROTOCOL.STDOUT_CONTAMINATION`, protocol | Cancel/terminate child; run to `FAILED` | Core-derived protocol failure | False until adapter changes |
 | Event too large | `PROTOCOL.EVENT_TOO_LARGE`, protocol | Cancel/terminate child; run to `FAILED` | Core-derived protocol failure | False |
-| Wrong run/token or event sequence conflict | `PROTOCOL.IDENTITY_OR_SEQUENCE_VIOLATION`, protocol | Reject event, terminate child, run to `FAILED` | Core-derived protocol failure | False |
+| Missing, wrong, stale, or mismatched invocation ID; wrong run/token; or sequence conflict within one invocation | `PROTOCOL.IDENTITY_OR_SEQUENCE_VIOLATION`, protocol | Reject the affected request, event, validation result, or result manifest; terminate a live child; prevent finalization; move an existing run to `FAILED` | Core-derived protocol failure | False |
 | Candidate path escapes assigned root or is a link/reparse point | `ARTIFACT.PATH_BOUNDARY_VIOLATION`, artifact corruption/security | Reject finalization; run to `FAILED` | None unless adapter also exits nonzero | False |
 | Candidate size, schema, or checksum mismatch | `ARTIFACT.VALIDATION_FAILED`, artifact corruption | Quarantine candidate; run to `FAILED` | None | False for identical bytes |
 | Manifest missing, oversized, wrong identity, or inconsistent with exit | `ARTIFACT.RESULT_MANIFEST_INVALID`, artifact corruption/protocol | No core `RunManifest`; run to `FAILED` | Reconciled with observed exit | False for identical result |
@@ -1330,9 +1386,11 @@ Codes are stable uppercase namespaced identifiers such as `CONFIG.UNKNOWN_FIELD`
 
 The core stores native process exit values separately from these stable categories. A boundary condition maps deterministically even when forced Windows termination produces a platform-specific number. More specific codes may be added within a category, but they may not change the state, exit-category reconciliation, or retriable semantics above without a versioned design change.
 
+At adapter protocol boundaries, a missing or invalid `invocation_id` always maps to `PROTOCOL.IDENTITY_OR_SEQUENCE_VIOLATION` before generic request-schema or result-manifest-invalid classification, because invocation identity determines whether the command output belongs to an authorized process at all.
+
 ### 21.3 Exception capture
 
-Free-form exception strings are never the only failure record. At a boundary, an exception is mapped to a stable diagnostic with a bounded sanitized message, component, operation, and causal reference. Full local traceback capture may be stored in a restricted diagnostic artifact when it contains no secrets and remains within retention policy. Tracebacks are not emitted into protocol stdout.
+Free-form exception strings are never the only failure record. At a boundary, an exception is mapped to a stable diagnostic with a bounded sanitized message, component, operation, and causal reference. Full local traceback capture may be stored in a restricted diagnostic artifact only when it contains neither secrets nor raw attempt-token material and remains within retention policy. Tracebacks are not emitted into protocol stdout.
 
 ### 21.4 Causal chains and aggregation
 
@@ -1442,13 +1500,13 @@ Planned persistence aggregates include:
 - Dataset descriptors and partitions
 - Experiments and immutable specs
 - Engine slots, run attempts, process facts, and finalization leases
-- Run events and heartbeats
-- Artifact records, manifests, and provenance edges
+- Invocation-scoped sanitized run events and heartbeats
+- Candidate-artifact lifecycle records, finalized artifact references, sanitized manifests, and provenance edges
 - Metrics and normalized-result indexes
 - Diagnostics and causal references
 - Audit events
 
-Key constraints include unique operational IDs, unique content identities where deduplication is valid, unique `(experiment_id, logical_slot_id, attempt_number)`, unique `(run_id, event_sequence)`, immutable spec hash after queueing, foreign-key ownership, and exactly one active finalization lease per logical slot.
+Key constraints include unique operational IDs, unique content identities where deduplication is valid, unique `(experiment_id, logical_slot_id, attempt_number)`, unique `(invocation_id, sequence)`, immutable spec hash after queueing, foreign-key ownership, invocation-to-run agreement, and exactly one active finalization lease per logical slot.
 
 ### 23.3.1 Normative table and transaction map
 
@@ -1463,20 +1521,23 @@ Query-critical identities, states, revisions, timestamps, hashes, and foreign ke
 | `engine_slots` | `logical_slot_id`; owned by one experiment | Foreign key to experiment with restricted delete | Unique `(experiment_id, ordinal)` and adapter/engine lookup index |
 | `engine_runs` | `run_id`; owned by one slot and experiment | Predecessor run is a restricted self-reference; deletes are restricted once any invocation, event, diagnostic, or artifact exists | Unique `(logical_slot_id, attempt_number)`, state index, active-attempt partial uniqueness, and revision CAS |
 | `command_invocations` | `invocation_id`; owned by adapter command and optional run | Run foreign key required for validate/run and restricted on delete | `(run_id, command_kind, started_at_utc)` and process-identity index; start and completion facts use separate short transactions |
-| `run_events` | Composite `(run_id, sequence)` | Foreign key to run with restricted delete | Unique event ID and received-time index; one idempotent append transaction per accepted event |
-| `artifact_records` | `artifact_id`; core-owned lifecycle and immutable finalized metadata | Experiment/run/source-artifact foreign keys use restricted delete | Content hash, state, run/role, and finalized path indexes; state CAS protects finalization |
-| `run_artifacts` | Composite `(run_id, artifact_id, role)` | Both foreign keys restricted; links never cascade-delete evidence | Role and artifact indexes; committed with core `RunManifest` registration |
-| `run_manifests` | Core manifest ID and unique `run_manifest_hash` | One terminal core manifest per successful run; `adapter_result_manifest_hash` required | Unique run ID for terminal success; inserted with artifact links and terminal transition |
-| `diagnostics` | `diagnostic_id`; core-owned immutable fact | Optional experiment/run links use restricted delete; causal edges live in a separate restricted join table | Error code, category, severity, experiment, run, and timestamp indexes |
-| `audit_events` | `audit_event_id`; append-only | Optional entity references do not cascade; evidence remains after retention of non-authoritative logs | Correlation, experiment, run, action, and timestamp indexes; append joins the action transaction when possible |
-| `finalization_journal` | `finalization_id`; one active entry per run attempt and `adapter_result_manifest_hash` | References run and adapter result candidate; paths are core-controlled relative paths | State, lease expiry, and run index; `PREPARED`, `MOVED`, `REGISTERED`, or `QUARANTINED` state is committed at each durability boundary |
+| `adapter_validation_results` | Unique `invocation_id`; immutable sanitized validation output | Invocation must be command kind `VALIDATE`; run ID must equal the invocation's run ID | Unique result hash and run/outcome index; inserted only after invocation/token identity validation |
+| `run_events` | Composite `(invocation_id, sequence)` | Foreign keys to invocation and run are restricted; invocation must belong to that same run | First accepted sequence for each invocation is exactly `1`, each later accepted sequence is prior plus one, and event ID is unique; `(run_id, received_at_utc)`, event type, and wire-event-hash indexes support queries; one idempotent append transaction per accepted sanitized event |
+| `candidate_artifacts` | `candidate_artifact_id`; core-owned staging lifecycle | Experiment, run, invocation, source event, and source manifest relations are restricted; state check permits only the five `CandidateArtifactState` values | Unique safe staging identity within a run, state/run/invocation indexes, and revision CAS; adapter declarations create candidates only |
+| `artifact_refs` | `artifact_id`; core-owned immutable finalized metadata | Experiment, run, and source-candidate foreign keys are restricted; finalized path/hash/size are non-null and state is literal `FINALIZED` | Unique logical identity, content-hash, run/role, and finalized-path indexes; rows are insert-only after finalization |
+| `run_artifacts` | Composite `(run_id, artifact_id, role)` | Artifact foreign key targets only `artifact_refs`; both foreign keys are restricted and links never cascade-delete evidence | Role and artifact indexes; committed with core `RunManifest` registration |
+| `sanitized_adapter_result_manifests` | Unique `sanitized_adapter_result_manifest_hash` | References run, run-command invocation, token hash, and source candidate hash; contains no raw token or staging path | Unique run/invocation successful-result identity; inserted before final artifact/run registration |
+| `run_manifests` | Core manifest ID and unique `run_manifest_hash` | One terminal core manifest per successful run; run-command invocation and `sanitized_adapter_result_manifest_hash` required | Unique run ID for terminal success; inserted with artifact links and terminal transition |
+| `diagnostics` | `diagnostic_id`; core-owned immutable fact | Optional experiment/run/invocation links use restricted delete; causal edges live in a separate restricted join table | Error code, category, severity, experiment, run, invocation, and timestamp indexes |
+| `audit_events` | `audit_event_id`; append-only | Optional entity and invocation references do not cascade; evidence remains after retention of non-authoritative logs | Correlation, experiment, run, invocation, action, and timestamp indexes; append joins the action transaction when possible |
+| `finalization_journal` | `finalization_id`; one active entry per run invocation and `source_adapter_result_manifest_hash` | References run, run invocation, source `CandidateArtifact` records, and adapter result candidate; paths are core-controlled relative paths | State, lease expiry, run, invocation, and candidate indexes; `PREPARED`, `MOVED`, `REGISTERED`, or `QUARANTINED` state is committed at each durability boundary |
 
 The finalization journal durably bridges filesystem and database operations:
 
-1. A short transaction validates the active attempt, acquires the lease, and inserts `PREPARED` with run ID, attempt-token hash, `adapter_result_manifest_hash`, staging path, intended final path, lease owner, acquired UTC, expiry UTC, and revision.
+1. A short transaction validates the active attempt and run-command invocation, acquires the lease, moves source candidates to `FINALIZING`, and inserts `PREPARED` with run ID, invocation ID, attempt-token hash, `source_adapter_result_manifest_hash`, `sanitized_adapter_result_manifest_hash`, candidate IDs, staging paths, intended final paths, lease owner, acquired UTC, expiry UTC, and revision.
 2. Outside a database transaction, the core revalidates files and performs the atomic same-volume move.
 3. A short transaction changes the journal to `MOVED` and records observed finalized hashes and paths.
-4. One transaction inserts artifact records and links, generates the core `RunManifest`, moves the run terminal, and changes the journal to `REGISTERED`.
+4. One transaction inserts immutable `ArtifactRef` records and run links, records the candidate-to-reference mappings and sanitized adapter result, generates the core `RunManifest`, moves the run terminal, and changes the journal to `REGISTERED`.
 5. Startup reconciliation handles any durable intermediate state. A journal entry never expires directly into success; the reconciliation lease and full validation are required.
 
 Foreign-key delete behavior is `RESTRICT` for authoritative evidence. Retention operates through explicit audited commands and may remove only unreferenced temporary/log data under policy. No relational cascade may erase an experiment's run, artifact, diagnostic, or audit history.
@@ -1509,14 +1570,14 @@ Project 1 enforces the following statements:
 - No automatic plugin discovery from untrusted paths
 - No direct adapter access to the registry database
 - No adapter writes outside its assigned working directory by contract
-- No secrets in strategy files, experiment records, manifests, logs, diagnostics, or artifacts
+- No exchange credentials or other secrets in strategy files, experiment records, manifests, logs, diagnostics, or artifacts; the attempt token is not an exchange credential but is still sensitive correlation material and is excluded from authoritative and finalized records
 - No engine output trusted without schema and boundary validation
 - No deserialization of arbitrary Python objects or pickle files across trust boundaries
 - No Docker use and no server deployment
 
 ### 24.2 Local threat model
 
-The intended operator and central installation are trusted local components. Strategy/configuration mistakes, malformed files, faulty adapters, engine crashes, stale processes, path traversal, output contamination, and accidental secret leakage are considered credible threats. A deliberately malicious executable with the user's operating-system permissions is outside Project 1's containment guarantee.
+The intended operator and central installation are trusted local components. Strategy/configuration mistakes, malformed files, faulty adapters, engine crashes, stale processes, path traversal, output contamination, accidental secret leakage, and accidental sensitive-correlation-material leakage are considered credible threats. A deliberately malicious executable with the user's operating-system permissions is outside Project 1's containment guarantee.
 
 Process isolation is a reliability boundary. Strict paths, explicit executable registration, checksums, safe parsing, bounded I/O, and minimal process inputs are defense-in-depth. They are not described as operating-system sandboxing.
 
@@ -1527,7 +1588,7 @@ Process isolation is a reliability boundary. Strict paths, explicit executable r
 - Unknown fields are rejected at process and artifact boundaries.
 - File paths are normalized and confined; links and reparse escapes are rejected.
 - Event, manifest, stderr, and artifact sizes are bounded before expensive processing.
-- Logs and diagnostics use field-level redaction and never record future credentials.
+- Logs, diagnostics, audit details, and samples use field-level redaction and never record raw attempt tokens or future credentials.
 - Adapter outputs cannot request core code imports, shell execution, database access, or arbitrary destination paths.
 - Content hashes are independently recalculated by the core.
 
@@ -1729,6 +1790,8 @@ Unit tests cover:
 - Capability vocabulary validation and deterministic compatibility resolution
 - Approximation policy and comparison-level exclusion
 - Canonical JSON and SHA-256 determinism
+- Exact domain-separated `attempt_token_hash` profile and named self-hash exclusions
+- Separation of wire-event source hash, sanitized-event content hash, source adapter-result hash, sanitized adapter-result hash, and core run-manifest hash
 - Strategy hashing independent of YAML comments and key ordering
 - Engine-extension hash inclusion
 - Dataset manifest and partition hashing
@@ -1736,6 +1799,10 @@ Unit tests cover:
 - Experiment immutability at `QUEUED`
 - Child-run aggregation and retry bounds
 - Diagnostic causal-chain acyclicity and redaction
+- Command-invocation identity, command-kind/run linkage, and invocation-scoped event sequencing
+- `ProtocolEventEnvelope` to `RunEvent` sanitization, attempt-token hashing, and raw-token redaction from payloads, diagnostics, logs, and captures
+- Exact `CandidateArtifactState` membership, forbidden candidate transitions, and immutable finalized-only `ArtifactRef` validation
+- Successful `RunManifest` rejection of candidate identities and nonfinal artifact shapes
 
 ### 28.2 Contract tests
 
@@ -1749,11 +1816,13 @@ Contract tests execute fake adapter binaries or scripts through the real supervi
 - Protocol-version negotiation
 - Schema-version negotiation
 - Capability-vocabulary negotiation
-- Request hash and attempt-token validation
-- Event-envelope validation and sequence rules
+- Request hash, invocation-ID, and attempt-token validation
+- Event-envelope validation, `(invocation_id, sequence)` identity, and independent per-invocation sequence rules
+- Identical event replay returns the prior accepted event, while a conflicting duplicate within one invocation fails the protocol
 - Heartbeat, progress, warning, diagnostic, artifact-produced, and final-result events
-- `AdapterResultManifest` validation, core `RunManifest` generation, and semantic/process-status reconciliation
-- Stdout reservation and stderr separation
+- Temporary `AdapterResultManifest` validation, sanitized preserved representation, core `RunManifest` generation, and semantic/process-status reconciliation
+- Stdout reservation, stderr separation, raw-token redaction, and sanitized protocol-capture generation
+- Separate candidate and finalized artifact repository contracts; `artifact_produced` creates only a `CandidateArtifact`
 - Event and manifest size ceilings
 
 The contract harness becomes the reusable acceptance suite for every future engine adapter project.
@@ -1770,7 +1839,13 @@ Integration scenarios include:
 - Malformed JSON Lines
 - Unexpected standard-output text
 - Invalid UTF-8 output
-- Sequence gap and conflicting duplicate event
+- Validate sequence one followed by run sequence one without collision
+- Sequence gap and conflicting duplicate sequence within one invocation
+- Identical `(invocation_id, sequence)` and sanitized-content replay without duplicate persistence
+- Missing, wrong, or mismatched invocation ID
+- Stale invocation output after a newer command or retry
+- Wrong-invocation `AdapterValidationResult`
+- Stale-invocation `AdapterResultManifest` and final-result event
 - Wrong run ID or stale attempt token
 - Missing heartbeat
 - Run timeout
@@ -1785,6 +1860,15 @@ Integration scenarios include:
 - Exit zero with no valid manifest
 - Nonzero failure exit with a claimed success manifest
 - Adapter candidate that improperly claims core artifact IDs
+- Raw attempt token absent from persisted `RunEvent`, sanitized adapter-result evidence, logs, diagnostics, and finalized protocol captures
+- Raw token at chunk boundaries and inside malformed or invalid-UTF-8 stdout, stderr, diagnostic details, audit details, text candidates, and binary candidates
+- Post-run scan proving the raw token is absent from SQLite, logs, audits, diagnostics, evidence bundles, and every finalized artifact
+- Unsanitized stdout and the original adapter-result candidate never registered as ordinary artifacts
+- Missing temporary request on restart fails the old attempt and creates a new-token attempt only through retry policy
+- Recovery regenerates an identical sanitized adapter result from matching temporary input without finalizing the original candidate
+- Bounded cleanup of raw request, stdout, and adapter-result bytes after success, failure, cancellation, and recovery-lease expiry
+- `CandidateArtifact` cannot be linked from a successful `RunManifest`
+- Candidate-to-`ArtifactRef` mapping across every finalization crash point
 - Retry after restart
 - Stale child output after retry
 - Crash before artifact move
@@ -1806,8 +1890,10 @@ Property-based tests cover:
 - State-machine forbidden transitions for arbitrary state pairs
 - Compatibility-result determinism under capability input ordering
 - Path-boundary validation across separators, traversal segments, drive syntax, Unicode, links, and reparse metadata
-- Run-event sequence idempotency
-- Artifact finalization idempotency
+- Run-event idempotency over `(invocation_id, sequence)` with independent generated invocation streams
+- Candidate-state and finalized-reference type separation, including rejection of candidate paths and incomplete finalized metadata
+- Artifact finalization idempotency and one-way candidate-to-`ArtifactRef` registration
+- Sanitization determinism and absence of raw-token bytes under arbitrary protocol chunk boundaries
 - Experiment-spec hash sensitivity to every material input
 
 Generated inputs are bounded so failures produce minimal reproducible examples without large local artifacts.
@@ -1851,7 +1937,7 @@ On every core startup, before new runs are launched:
 1. Verify application configuration and safety policy.
 2. Verify database revision and SQLite integrity checks appropriate to normal startup.
 3. Acquire the single local reconciliation lease.
-4. Reconcile `FINALIZING` artifact records and pending filesystem moves.
+4. Reconcile abandoned `CANDIDATE` and `VALIDATING` records and `FINALIZING` candidates that lack a registered `ArtifactRef` mapping or have a non-`REGISTERED` journal. Resume only idempotent validated work; otherwise quarantine or mark corrupt. Historical candidates with registered mappings are excluded, and finalized `ArtifactRef` records never transition.
 5. Reconcile `STARTING` and `RUNNING` process records using PID plus creation identity.
 6. Validate any matching candidate result manifest in the assigned temporary directory.
 7. Resume safe finalization, terminate unverifiable live children, or mark failed with diagnostics.
@@ -1867,17 +1953,17 @@ A run left `RUNNING` after core failure may recover an `AdapterResultManifest` c
 
 - No matching child process remains active.
 - The manifest is inside the assigned directory and under the size ceiling.
-- Run ID, experiment ID, attempt token, request hash, adapter, engine, and versions match registry facts.
+- Run ID, experiment ID, run-command invocation ID, request hash, adapter, engine, and versions match registry facts; the reconciler hashes the raw token from surviving temporary input with the named profile and compares it to durable `attempt_token_hash`, never loading or reconstructing a durable raw token.
 - The semantic status is successful or successful-with-warnings.
-- Every referenced artifact passes path, size, schema, and independent checksum validation.
+- Every referenced `CandidateArtifact` passes staging-path, ownership, size, schema, and independent checksum validation.
 - No cancellation, timeout, newer attempt, or terminal transition won before the recovery lease.
-- Finalization is idempotent for the same `adapter_result_manifest_hash`; core registration separately verifies the deterministic `run_manifest_hash`.
+- Finalization is idempotent for the same run invocation, attempt-token hash, `source_adapter_result_manifest_hash`, and `sanitized_adapter_result_manifest_hash`; the core regenerates the token-free representation, creates `ArtifactRef`s only after moved-file validation, and separately verifies the deterministic `run_manifest_hash`.
 
-Because the native process exit code may have been lost, a recovered success becomes `SUCCEEDED_WITH_WARNINGS` with `RECOVERY.PROCESS_EXIT_UNKNOWN`. A failure manifest or invalid candidate becomes `FAILED`; it is never repaired into success by inference.
+Because the native process exit code may have been lost, a recovered success becomes `SUCCEEDED_WITH_WARNINGS` with `RECOVERY.PROCESS_EXIT_UNKNOWN`. A failure manifest or invalid candidate becomes `FAILED`; it is never repaired into success by inference. Recovery either produces fully registered immutable `ArtifactRef`s or moves candidates to `QUARANTINED` or `CORRUPT`; a candidate record or moved file alone can never yield success.
 
 ### 29.4 Persistence and disk failure
 
-Disk-full, permission, lock-timeout, checksum, and atomic-move failures produce stable diagnostics and leave the run non-successful. The core does not delete the only candidate copy during failed finalization. Retention cleanup is a separate audited action and does not run while an artifact is referenced by an active lease.
+Disk-full, permission, lock-timeout, checksum, and atomic-move failures produce stable diagnostics and leave the run non-successful. The core does not delete the only recoverable candidate copy while an active recovery lease requires it. When that lease closes, raw-token-bearing request, stdout, and adapter-result control bytes follow the bounded cleanup rule in section 14; engine output candidates follow normal audited retention. Retention cleanup never runs while bytes are referenced by an active lease.
 
 Local backup and restore tooling belongs to later implementation planning, but any backup design MUST include the SQLite database, migration revision, finalized artifact store, schemas, and configuration snapshots in a mutually consistent checkpoint. Cloud backup is not assumed.
 
@@ -1889,13 +1975,13 @@ Application commands carry a correlation or idempotency key. Repeating a create,
 
 ### 30.1 Structured local logging
 
-Core logs use JSON Lines with a versioned log schema. Each record includes timestamp, severity, component, event code, correlation ID, experiment ID, run ID, engine/adapter where applicable, message, and bounded structured details. Human-facing console output is a projection of structured facts, not the only record.
+Core logs use JSON Lines with a versioned log schema. Each record includes timestamp, severity, component, event code, correlation ID, experiment ID, run ID, invocation ID where a command is involved, engine/adapter where applicable, message, and bounded structured details. Field-level redaction removes the raw attempt token before persistence. Human-facing console output is a projection of structured facts, not the only record.
 
 Logs are local, bounded, and rotated deterministically. Project 1 sends no telemetry to cloud services and performs no implicit network export. Retention limits are explicit TOML configuration snapshotted in audit events.
 
 ### 30.2 Correlation
 
-One correlation context follows a local command through experiment service, repository transactions, process supervision, event ingestion, artifact finalization, diagnostics, and audit events. Run-event sequence numbers and audit-event IDs provide local ordering; UTC timestamps support human reconstruction but do not replace sequence or transaction facts.
+One correlation context follows a local command through experiment service, repository transactions, process supervision, event ingestion, artifact finalization, diagnostics, and audit events. `invocation_id` identifies the exact adapter command, `(invocation_id, sequence)` orders its accepted events, and `run_id` groups commands and evidence for the economic attempt. Audit-event IDs provide authoritative local audit ordering; UTC timestamps support human reconstruction but do not replace identity, sequence, or transaction facts.
 
 ### 30.3 Audit events
 
@@ -1905,14 +1991,16 @@ Append-only audit events are required for:
 - Experiment creation, validation, edits before queueing, queue freeze, and every lifecycle transition
 - Compatibility decisions and approximation acceptance
 - Run-attempt creation, launch, retry, cancellation, timeout, and terminal transition
+- Command-invocation creation, launch, completion, and exact invocation-to-run linkage
 - Adapter descriptor registration and version negotiation
 - Protocol violations and stderr truncation
+- Protocol-event acceptance, rejection, sanitization, and invocation-scoped sequence conflicts
 - Artifact validation, finalization, quarantine, corruption, and retention deletion
 - Database migration and reconciliation actions
 - Safety-policy rejection
 - Configuration snapshot and hash selection
 
-Audit records capture facts and outcomes, not secrets or mutable exception dumps.
+Audit records capture facts and outcomes, not secrets, raw attempt tokens, or mutable exception dumps.
 
 ### 30.4 Diagnostics for beginner-friendly operation
 
@@ -1920,7 +2008,7 @@ Every terminal failure exposes a concise user message, stable code, likely corre
 
 ### 30.5 Run evidence bundle
 
-A future local command may render an evidence bundle from existing records without mutating them. The bundle includes immutable input hashes, versions, compatibility decision, approximations, lifecycle timeline, process outcome, manifest, artifacts, metrics, diagnostics, and audit references. Project 1 defines the data required for this bundle but does not create a dashboard.
+A future local command may render an evidence bundle from existing records without mutating them. The bundle includes immutable input hashes, versions, compatibility decision, approximations, lifecycle timeline, all relevant invocation IDs, invocation-scoped event sequences, sanitized protocol capture, process outcome, sanitized adapter result, core manifest, finalized artifact references, metrics, diagnostics, and audit references. It contains `attempt_token_hash`, never the raw token. Project 1 defines the data required for this bundle but does not create a dashboard.
 
 ## 31. Rejected alternatives
 
@@ -2025,10 +2113,13 @@ Project 1's future implementation is acceptable only when all of the following a
 ### 33.4 Protocol and supervision
 
 - `describe`, `validate`, and `run` contracts pass the fake-adapter contract suite.
+- Every command request and stdout event includes `invocation_id`; `AdapterValidationResult` and `AdapterResultManifest` identify their exact invocation, while the latter identifies the relevant run command.
 - Request, event, heartbeat, progress, warning, diagnostic, artifact-produced, final-result, and manifest schemas are versioned and negotiated.
+- Accepted event identity, uniqueness, and idempotent replay are keyed by `(invocation_id, sequence)`; sequence starts at one for each invocation, identical sanitized-content replay returns the prior event, conflicting duplicates fail, and wrong, missing, stale, or mismatched invocation IDs fail the protocol.
 - Exit categories `0`, `10`, `20`, `30`, `40`, `50`, `60`, and `70` map exactly as specified.
 - A zero exit without a valid matching `AdapterResultManifest` cannot succeed, and only the core can create the consolidated `RunManifest`.
-- Stdout contamination, malformed JSON Lines, oversized events, sequence errors, wrong tokens, crashes, missing heartbeat, timeout, graceful cancellation, and forced termination produce the specified states and diagnostics.
+- Stdout contamination, malformed JSON Lines, oversized events, invocation or sequence errors, wrong tokens, crashes, missing heartbeat, timeout, graceful cancellation, and forced termination produce the specified states and diagnostics.
+- Authoritative `RunEvent`, core manifests, logs, diagnostics, audit records, and finalized protocol evidence retain only `attempt_token_hash`; unsanitized stdout and the original adapter-result candidate are never ordinary finalized artifacts.
 - Windows paths with spaces, long paths, process cleanup, PID reuse, and restart reconciliation pass platform tests.
 - The implementation does not claim operating-system-level sandboxing.
 
@@ -2041,16 +2132,18 @@ Project 1's future implementation is acceptable only when all of the following a
 - SQLite runs in WAL mode with foreign keys, migrations, explicit units of work, and optimistic concurrency.
 - Adapters cannot write the core database.
 - Restart reconciliation handles every nonterminal state and finalization crash point without false success.
+- Persistence enforces invocation-to-run agreement and unique `(invocation_id, sequence)` while preserving `run_id` indexes for aggregation and provenance.
 
 ### 33.6 Data, artifacts, provenance, and audit
 
 - Dataset descriptors record all required provenance, interval-quality, checksum, partition, and limitation fields without downloading real data in Project 1.
-- Artifact finalization follows temporary output, validation, core checksum, manifest, matching-attempt lease, atomic move, and authoritative registration.
+- Artifact finalization follows temporary output, `CandidateArtifact` validation, core checksum, manifest, matching-attempt lease, atomic move, and immutable `ArtifactRef` registration.
+- `CandidateArtifact` and `ArtifactRef` are distinct canonical types with disjoint states and paths; successful `RunManifest` validation accepts only finalized immutable `ArtifactRef` values.
 - Failed, cancelled, timed-out, stale, unavailable, and not-applicable attempts cannot leave an artifact that appears finalized.
-- Engine-native output is preserved whenever canonical normalization succeeds or fails.
+- Engine-native output is preserved whenever canonical normalization succeeds or fails, unless path, corruption, or sensitive-material validation requires quarantine rather than finalization.
 - Every normalized record links to experiment, run, source artifact, engine, adapter, and schema provenance.
 - Errors use stable machine-readable diagnostics rather than free-form exceptions alone.
-- JSON Lines logs and audit events are bounded, correlated, local-only, and free of secrets.
+- JSON Lines logs and audit events are bounded, invocation-correlated, local-only, and free of raw attempt tokens and secrets.
 
 ### 33.7 Security and exclusions
 
@@ -2065,13 +2158,16 @@ Project 1's future implementation is acceptable only when all of the following a
 |---|---|
 | Adapter | A future engine-specific executable that implements the versioned `describe`, `validate`, and `run` contract outside the core process |
 | Adapter catalog | Explicit local registry of approved adapter executable paths, versions, hashes, and non-secret runtime metadata |
-| Adapter result manifest | Adapter-produced final semantic declaration containing candidate relative paths and claimed hashes; it remains untrusted until core validation |
+| Adapter result manifest | Temporary adapter-produced semantic declaration containing the run-command invocation ID, raw attempt token, candidate relative paths, and claimed hashes; it remains untrusted, is sanitized after validation, and is never itself finalized |
 | Approximation | A declared, versioned substitution for a capability an engine does not provide with the required native semantics |
-| Artifact | An immutable validated file plus authoritative metadata, checksum, provenance, and lifecycle state |
-| Attempt token | Unguessable correlation nonce for one run attempt; it is not an authentication secret or exchange credential, is redacted from logs, and is hashed in authoritative core records |
+| Artifact reference | Finalized-only immutable canonical identity containing the core-controlled path, independently calculated hash and size, provenance, and source candidate identity |
+| Attempt token | Unguessable correlation nonce for one run attempt; it is not an exchange credential, but it is sensitive correlation material allowed only in temporary request, wire-event, and adapter-result-candidate input and replaced by its hash in authoritative or finalized records |
+| Attempt-token hash | Versioned domain-separated SHA-256 identity calculated by the core from canonical token bytes and retained instead of the raw attempt token |
+| Candidate artifact | Core-owned staging lifecycle record for adapter-declared bytes; it can be candidate, validating, finalizing, quarantined, or corrupt, but never finalized or referenced by a successful run manifest |
 | Canonical | Engine-neutral, strictly validated, versioned representation owned by the core |
 | Capability | Namespaced vocabulary item describing market, direction, data, execution, portfolio, research, or runtime semantics |
 | Comparison level | Declared parity contract: signal intent at Level 1, normalized bar execution at Level 2, or native execution realism at Level 3 |
+| Command invocation | One `describe`, `validate`, or `run` subprocess identified by a unique `invocation_id`; multiple invocations may belong to one engine run |
 | Content hash | SHA-256 digest over bytes produced by an explicit canonicalization and hashing profile |
 | Dataset version | Immutable normalized dataset descriptor and ordered partition set identified by content hash |
 | Engine | One of the external research or trading frameworks integrated only in a future isolated runtime |
@@ -2081,8 +2177,10 @@ Project 1's future implementation is acceptable only when all of the following a
 | Native artifact | Original engine-produced output preserved without being replaced by canonical conversion |
 | `NOT_APPLICABLE` | The engine cannot model one or more required semantics; this is not an execution failure |
 | Portable strategy | Declarative versioned YAML strategy whose validated economic intent can be mapped to compatible adapters |
-| Protocol event | One validated versioned JSON object occupying exactly one stdout line from an adapter |
-| Run manifest | Core-generated authoritative consolidated record that reconciles the adapter result manifest, process outcome, finalized artifacts, diagnostics, and provenance |
+| Protocol event envelope | One untrusted versioned stdout JSON object carrying raw attempt correlation material and an invocation-scoped sequence before validation and sanitization |
+| Run event | Authoritative sanitized persisted event identified by `(invocation_id, sequence)`, linked to `run_id`, and containing only `attempt_token_hash` |
+| Run manifest | Core-generated authoritative consolidated record containing `attempt_token_hash` and `sanitized_adapter_result_manifest_hash`, never the raw token or original candidate, and reconciling process outcome, finalized artifacts, diagnostics, and provenance |
+| Sanitized adapter result manifest | Core-preserved token-free immutable representation linked to the exact source-candidate hash and containing `attempt_token_hash` instead of the raw token |
 | Strategy version | Immutable canonical strategy content, hashing profile, and declared extension hashes identified by SHA-256 |
 | System of record | The authoritative source for identity, state, provenance, and finalization; in this architecture it is always the core registries and artifact store |
 | `UNAVAILABLE` | The adapter is logically compatible but absent, misconfigured, version-incompatible, or not runnable |
