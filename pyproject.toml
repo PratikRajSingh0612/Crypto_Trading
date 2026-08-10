@@ -1,0 +1,88 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "crypto-trading-lab"
+version = "0.1.0"
+description = "Local engine-neutral cryptocurrency research foundation"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[project.scripts]
+crypto-lab = "crypto_lab.cli.main:main"
+
+[dependency-groups]
+dev = [
+  "hatchling>=1.27,<2",
+  "mypy>=1.15,<2",
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<7",
+  "ruff>=0.11,<1",
+]
+
+[tool.uv]
+no-build-isolation = true
+python-downloads = "manual"
+python-preference = "only-managed"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/crypto_lab"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/scripts",
+  "/docs/development",
+  "/README.md",
+  "/AGENTS.md",
+  "/pyproject.toml",
+  "/uv.lock",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["src", "tests"]
+extend-exclude = [
+  "docs/superpowers/plans/2026-08-10-project-1-foundation-implementation-plan.md",
+]
+
+[tool.ruff.format]
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = ["B", "DTZ", "E", "F", "I", "PT", "RUF", "S", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+addopts = [
+  "--strict-config",
+  "--strict-markers",
+  "--cov=crypto_lab",
+  "--cov-branch",
+  "--cov-report=term-missing",
+  "--cov-fail-under=90",
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["crypto_lab"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true

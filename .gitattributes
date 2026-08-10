@@ -1,2 +1,2 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Normalize repository text deterministically.
+* text=auto eol=lf

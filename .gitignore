@@ -1,0 +1,53 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local Python and uv state
+.venv/
+venv/
+.uv/
+.uv-cache/
+
+# Test, coverage, lint, and type-check caches
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# Package build output
+build/
+dist/
+*.egg-info/
+
+# Editors and operating systems
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Desktop.ini
+Thumbs.db
+
+# Environment and common key or certificate files
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Generated Project 1 and future runtime state
+/runtime/
+/data/
+/artifacts/
+/logs/
+/runtimes/
+/.gitnexus/
