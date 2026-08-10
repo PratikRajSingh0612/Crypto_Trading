@@ -24,7 +24,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 ## 3. Global architecture constraints
 
-- Project 1 is a local Windows, engine-neutral, deterministic foundation implemented in CPython 3.12 and managed with `uv`.
+- Project 1 is a local Windows, engine-neutral, deterministic foundation implemented with a user-local, `uv`-managed CPython 3.12 runtime. The interpreter is discovered through `uv`; it is not required to be installed through Python.org's MSI or WinGet, registered as PythonCore, discoverable through `py -3.12`, or added to `PATH`.
 - The core remains the sole system of record for canonical identity, lifecycle state, provenance, diagnostics, audit facts, and artifact finalization.
 - Package dependency direction follows specification section 27.1. In particular, `crypto_lab.domain` never depends on adapters, persistence, subprocess APIs, configuration readers, the CLI, or any trading engine.
 - Real engines remain isolated future adapters. Project 1 installs, imports, and executes none of VectorBT Community, Freqtrade, NautilusTrader, Jesse, OctoBot, Hummingbot, or QuantConnect LEAN.
@@ -36,7 +36,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 - SQLite is the authoritative metadata registry once persistence is introduced. Immutable large content stays outside SQLite and is registered only through core-owned finalization.
 - Canonical schemas and relational migrations change only in stages explicitly authorized below and only within that stage's named ownership boundary.
 - Every verification workflow in every stage remains offline. Application and runtime networking remain prohibited throughout Project 1.
-- Developer-tool bootstrap has only two approval-gated exceptions to the offline rule: Stage 1 may run the exact one-time `uv lock` and `uv sync --frozen --no-install-project` commands when its local cache is incomplete, and Stage 2 may run the exact one-time GitNexus package-installation command approved under ADR 0001. These operations acquire development tools only; neither authorizes online verification, application networking, or runtime networking.
+- Prerequisite and developer-tool acquisition has three separate approval-gated exceptions to the offline rule: before Stage 1, the selected interpreter may be downloaded exactly once with `uv python install --no-bin --no-registry 3.12.13`; during Stage 1, the exact one-time `uv lock` and `uv sync --frozen --no-install-project` dependency-bootstrap commands may run when the local cache is incomplete; and during Stage 2, the exact one-time GitNexus package-installation command may run as approved under ADR 0001. The interpreter download is prerequisite acquisition, not verification evidence. These three operations remain distinct; none authorizes online verification, automatic interpreter downloads, application networking, or runtime networking.
 - GitNexus is optional, advisory, read-only development context. It is never a product, runtime, build, test, or acceptance dependency.
 - Terminal states, immutable records, source evidence, stale-attempt protection, raw-token exclusion, and result/evidence separation may not be weakened for convenience.
 
@@ -44,25 +44,26 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 ### Stage 1 — Repository Foundation and Quality Gates
 
-**Goal:** Create the Python 3.12 package scaffold, local quality tooling, project instructions, offline smoke tests, safety-boundary tests, an approval-gated one-time dependency bootstrap when the local cache is incomplete, and a repeatable verification workflow that is independently offline.
+**Goal:** Using the explicitly preinstalled user-local, `uv`-managed CPython 3.12 prerequisite, create the Python 3.12 package scaffold, local quality tooling, project instructions, offline smoke tests, safety-boundary tests, an approval-gated one-time dependency bootstrap when the local cache is incomplete, and a repeatable verification workflow that is independently offline.
 
 **Normative specification sections:** Global normative floor; sections 9, 24, 27, 28.1, 28.6, 33.1, and 33.7. ADR 0001 applies only as a negative constraint: GitNexus is not installed or configured in this stage.
 
 **Prerequisite stages:** None.
 
-**Major deliverables:** A `src`-layout `crypto_lab` distribution foundation; empty runtime dependencies; typed package marker; version-only `argparse` CLI; focused package and CLI tests; typed standard-library AST domain-boundary scanner; dependency and forbidden-path safety tests; deterministic local quality configuration; an offline-first lock/bootstrap procedure whose only non-offline commands are the exact one-time approved `uv lock` and `uv sync --frozen --no-install-project`; repository instructions; development verification guidance; and an independently offline PowerShell verification entry point.
+**Major deliverables:** A `src`-layout `crypto_lab` distribution foundation using the user-local, `uv`-managed CPython 3.12 selected through `uv`; empty runtime dependencies; typed package marker; version-only `argparse` CLI; focused package and CLI tests; typed standard-library AST domain-boundary scanner; dependency and forbidden-path safety tests; deterministic local quality configuration; an offline-first lock/bootstrap procedure whose only Stage 1 dependency-acquisition commands that may use the network are the exact one-time approved `uv lock` and `uv sync --frozen --no-install-project`; repository instructions; development verification guidance; and an independently offline PowerShell verification entry point. The separately approved pre-Stage-1 `uv python install --no-bin --no-registry 3.12.13` prerequisite acquisition is not part of Stage 1 and is not verification evidence.
 
 **Explicit exclusions:** All future domain records and services; generated canonical schemas; database or migrations; strategy YAML; protocol behavior; process supervision; artifact finalization; runtime directories; GitNexus; real or fake engine execution; application networking; Docker; and WSL requirements.
 
 **Required test categories:** Package and CLI unit/smoke tests, architecture-boundary tests, dependency-safety tests, forbidden-runtime-path tests, strict type checks, formatting/lint checks, offline lockfile-consistency validation before environment synchronization, offline package build, and offline full-suite verification using only offline synchronization and no-sync tool execution.
 
-**Exit evidence:** The independently offline Stage 1 verification script passes from a clean isolated worktree, with `uv lock --check --offline` succeeding before environment synchronization and proving that `uv.lock` matches the current project metadata; the package builds offline; version and help behavior match their contract; coverage is at least 90 percent; prohibited dependencies and paths are absent; the complete base-to-HEAD diff is reviewed; and the stage ends in a clean committed worktree. Any approval-gated Task 2 dependency acquisition is recorded separately and is not verification evidence.
+**Exit evidence:** The independently offline Stage 1 verification script passes from a clean isolated worktree while `uv` selects the preinstalled managed CPython 3.12 without downloading an interpreter, with `uv lock --check --offline` succeeding before environment synchronization and proving that `uv.lock` matches the current project metadata; the package builds offline; version and help behavior match their contract; coverage is at least 90 percent; prohibited dependencies and paths are absent; the complete base-to-HEAD diff is reviewed; and the stage ends in a clean committed worktree. The pre-Stage-1 interpreter acquisition and any approval-gated Task 2 dependency acquisition are recorded separately and are not verification evidence.
 
 **Detailed implementation plan:** `docs/superpowers/plans/2026-08-10-project-1-foundation-implementation-plan.md`.
 
 | Control | Stage 1 permission |
 |---|---|
 | GitNexus expected | No; installation, invocation, and configuration are prohibited |
+| Interpreter prerequisite | User-local uv-managed CPython 3.12, explicitly installed before Stage 1 |
 | Developer-tool bootstrap network | Only the exact one-time approved `uv lock` and `uv sync --frozen --no-install-project` commands when local cache content is incomplete; all verification remains offline |
 | Relational schema changes | No |
 | Canonical schema changes | No |
