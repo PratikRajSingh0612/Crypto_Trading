@@ -387,6 +387,8 @@ Infrastructure exceptions are caught at their owning boundary and converted to s
 
 The central project may select concrete linting, type-checking, and safe-YAML libraries during implementation planning, but those choices MUST enforce the contracts above and MUST NOT weaken strict typing, safe parsing, or rejection of arbitrary YAML tags.
 
+Development-only repository context tooling is governed by [ADR 0001: GitNexus for Local Development Context](../../decisions/0001-gitnexus-development-tooling.md). That tooling is non-normative and outside the runtime architecture; it MUST NOT weaken any Project 1 security, determinism, testing, or dependency-direction requirement.
+
 ## 10. Canonical identity and reproducibility
 
 ### 10.1 Operational identifiers
