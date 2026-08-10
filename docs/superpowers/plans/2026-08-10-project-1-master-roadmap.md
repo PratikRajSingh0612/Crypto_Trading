@@ -35,7 +35,8 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 - The core launches explicitly registered child executables with argument arrays and no shell. Adapters receive neither writable registry access nor authority over final artifact paths.
 - SQLite is the authoritative metadata registry once persistence is introduced. Immutable large content stays outside SQLite and is registered only through core-owned finalization.
 - Canonical schemas and relational migrations change only in stages explicitly authorized below and only within that stage's named ownership boundary.
-- All verification remains offline apart from the separately approved, one-time developer-tool package operation contemplated for Stage 2. That operation never enables application or runtime network access.
+- Every verification workflow in every stage remains offline. Application and runtime networking remain prohibited throughout Project 1.
+- Developer-tool bootstrap has only two approval-gated exceptions to the offline rule: Stage 1 may run the exact one-time `uv lock` and `uv sync --frozen --no-install-project` commands when its local cache is incomplete, and Stage 2 may run the exact one-time GitNexus package-installation command approved under ADR 0001. These operations acquire development tools only; neither authorizes online verification, application networking, or runtime networking.
 - GitNexus is optional, advisory, read-only development context. It is never a product, runtime, build, test, or acceptance dependency.
 - Terminal states, immutable records, source evidence, stale-attempt protection, raw-token exclusion, and result/evidence separation may not be weakened for convenience.
 
@@ -43,49 +44,51 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 ### Stage 1 — Repository Foundation and Quality Gates
 
-**Goal:** Create the Python 3.12 package scaffold, local quality tooling, project instructions, offline smoke tests, safety-boundary tests, and repeatable Windows verification workflow.
+**Goal:** Create the Python 3.12 package scaffold, local quality tooling, project instructions, offline smoke tests, safety-boundary tests, an approval-gated one-time dependency bootstrap when the local cache is incomplete, and a repeatable verification workflow that is independently offline.
 
 **Normative specification sections:** Global normative floor; sections 9, 24, 27, 28.1, 28.6, 33.1, and 33.7. ADR 0001 applies only as a negative constraint: GitNexus is not installed or configured in this stage.
 
 **Prerequisite stages:** None.
 
-**Major deliverables:** A `src`-layout `crypto_lab` distribution foundation; empty runtime dependencies; typed package marker; version-only `argparse` CLI; focused package and CLI tests; typed standard-library AST domain-boundary scanner; dependency and forbidden-path safety tests; deterministic local quality configuration; repository instructions; development verification guidance; and a PowerShell verification entry point.
+**Major deliverables:** A `src`-layout `crypto_lab` distribution foundation; empty runtime dependencies; typed package marker; version-only `argparse` CLI; focused package and CLI tests; typed standard-library AST domain-boundary scanner; dependency and forbidden-path safety tests; deterministic local quality configuration; an offline-first lock/bootstrap procedure whose only non-offline commands are the exact one-time approved `uv lock` and `uv sync --frozen --no-install-project`; repository instructions; development verification guidance; and an independently offline PowerShell verification entry point.
 
 **Explicit exclusions:** All future domain records and services; generated canonical schemas; database or migrations; strategy YAML; protocol behavior; process supervision; artifact finalization; runtime directories; GitNexus; real or fake engine execution; application networking; Docker; and WSL requirements.
 
-**Required test categories:** Package and CLI unit/smoke tests, architecture-boundary tests, dependency-safety tests, forbidden-runtime-path tests, strict type checks, formatting/lint checks, package build, and offline full-suite verification.
+**Required test categories:** Package and CLI unit/smoke tests, architecture-boundary tests, dependency-safety tests, forbidden-runtime-path tests, strict type checks, formatting/lint checks, offline package build, and offline full-suite verification using only offline synchronization and no-sync tool execution.
 
-**Exit evidence:** The Stage 1 verification script passes from a clean isolated worktree; the package builds; version and help behavior match their contract; coverage is at least 90 percent; prohibited dependencies and paths are absent; the diff is reviewed; and the stage ends in a clean commit.
+**Exit evidence:** The independently offline Stage 1 verification script passes from a clean isolated worktree; the package builds offline; version and help behavior match their contract; coverage is at least 90 percent; prohibited dependencies and paths are absent; the complete base-to-HEAD diff is reviewed; and the stage ends in a clean committed worktree. Any approval-gated Task 2 dependency acquisition is recorded separately and is not verification evidence.
 
 **Detailed implementation plan:** `docs/superpowers/plans/2026-08-10-project-1-foundation-implementation-plan.md`.
 
 | Control | Stage 1 permission |
 |---|---|
 | GitNexus expected | No; installation, invocation, and configuration are prohibited |
+| Developer-tool bootstrap network | Only the exact one-time approved `uv lock` and `uv sync --frozen --no-install-project` commands when local cache content is incomplete; all verification remains offline |
 | Relational schema changes | No |
 | Canonical schema changes | No |
 
 ### Stage 2 — Guarded GitNexus Development Tooling
 
-**Goal:** Implement ADR 0001 after the Stage 1 source and module scaffold exists.
+**Goal:** Complete the ADR 0001 governance decision after the Stage 1 source and module scaffold exists, ending in either `ENABLED` or `DISABLED_WITH_EVIDENCE`. The expected path for this personal project is `ENABLED`, but successful installation is not required to complete the stage.
 
 **Normative specification sections:** Global normative floor; sections 9, 28.6, 33.1, and 33.7; ADR 0001 in full.
 
 **Prerequisite stages:** Stage 1.
 
-**Major deliverables:** Read-only inspection of the pre-existing global launcher; verified Node.js and package-manager prerequisites; then-current exact release and license verification; explicit user approval before any network operation; an exact version pin and integrity record; project-scoped read-only MCP configuration; repository allowlisting; exclusions for generated, runtime, sensitive, and data paths; a disposable local graph; a constrained tool surface; and proof that Codex and the project remain functional when GitNexus is disabled.
+**Major deliverables:** Read-only inspection of the pre-existing global launcher and local prerequisites; a recorded governance outcome; and ordinary offline project verification with GitNexus disabled. For `ENABLED`, also deliver then-current exact release and license verification, explicit one-time approval for the exact GitNexus package-installation command, an exact version pin and integrity record, project-scoped read-only MCP configuration, repository allowlisting, exclusions for generated/runtime/sensitive/data paths, a disposable local graph, a constrained tool surface, and one bounded successful local query. For `DISABLED_WITH_EVIDENCE`, deliver the decline, unavailability, incompatibility, unverifiability, or safety reason and inspected evidence; removal of every partial project-scoped GitNexus or MCP configuration and every local index; and a documented manual source, reference, and diff-analysis fallback.
 
 **Explicit exclusions:** Product/runtime/build/test dependency status; automatic launcher trust or execution; implicit network access; credentials; runtime data indexing; generated instructions or skills; hooks; wiki, web, publishing, group, rename, embedding, and raw-Cypher features; and any weakening of ordinary verification.
 
-**Required test categories:** Static configuration and security checks, allowlist/exclusion proof, constrained read-only tool-surface checks, local graph/query smoke checks, disabled-tool regression checks, and the complete ordinary Stage 1 verification workflow.
+**Required test categories:** Both outcomes require the complete ordinary offline project verification workflow with GitNexus disabled. `ENABLED` additionally requires static configuration and security checks, allowlist/exclusion proof, constrained read-only tool-surface checks, a bounded local graph/query smoke check, and disabled-tool regression checks. `DISABLED_WITH_EVIDENCE` requires proof that no partial project-scoped GitNexus or MCP configuration and no local index remains, review of the recorded reason and evidence, and review of the documented manual source/reference/diff fallback.
 
-**Exit evidence:** Exact version, license, integrity, approval, allowlist, exclusion, and read-only evidence is recorded; a bounded local query works; and all ordinary project checks pass with GitNexus disabled.
+**Exit evidence:** Stage 2 records exactly one acceptable outcome. `ENABLED` requires verified exact version and license, recorded package integrity, project-scoped read-only MCP configuration, verified repository allowlist and exclusions, a successful bounded local query, and ordinary offline verification passing with GitNexus disabled. `DISABLED_WITH_EVIDENCE` requires a recorded decline/unavailability/incompatibility/unverifiability/safety reason with inspected evidence, no remaining partial project-scoped GitNexus or MCP configuration and no local index, a documented manual source/reference/diff fallback, and ordinary offline verification passing without GitNexus. Either outcome completes Stage 2 and permits Stage 3 planning.
 
 **Planned detailed implementation plan:** `docs/superpowers/plans/2026-08-10-project-1-gitnexus-development-tooling-implementation-plan.md`.
 
 | Control | Stage 2 permission |
 |---|---|
-| GitNexus expected | No at entry; expected but optional after successful exit |
+| GitNexus expected | No at entry; `ENABLED` is the expected path, while `DISABLED_WITH_EVIDENCE` is equally stage-completing and non-blocking |
+| Developer-tool bootstrap network | Only the exact one-time approved GitNexus package-installation command; all verification remains offline |
 | Relational schema changes | No |
 | Canonical schema changes | No |
 
@@ -95,7 +98,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 **Normative specification sections:** Global normative floor; sections 10–11, 13.2, 14.2, 18, 19.1, 21–22, 28.1, 28.4, 33.1–33.2, 33.6, and 33.7.
 
-**Prerequisite stages:** Stages 1 and 2.
+**Prerequisite stages:** Stages 1 and 2. The Stage 2 dependency is on completing its governance decision, satisfied by either `ENABLED` or `DISABLED_WITH_EVIDENCE`, not on successfully installing or enabling GitNexus.
 
 **Major deliverables:** Operational identifiers; canonical UTC and Decimal primitives; diagnostic foundations; canonical JSON and domain-separated hashing profiles; strict configuration precedence and safety policy; dataset descriptors and partitions as metadata contracts; foundational engine and adapter descriptor schemas; all `ArtifactOwnerRef` variants; schema generation infrastructure; reviewed generated schemas; and deterministic in-memory validation.
 
@@ -109,7 +112,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 | Control | Stage 3 permission |
 |---|---|
-| GitNexus expected | Yes when available; advisory and non-blocking |
+| GitNexus expected | Use only after `ENABLED` while healthy; otherwise use the manual fallback; always advisory and non-blocking |
 | Relational schema changes | No |
 | Canonical schema changes | Yes, limited to foundational domain, configuration, dataset, descriptor, ownership, and generator contracts |
 
@@ -133,7 +136,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 | Control | Stage 4 permission |
 |---|---|
-| GitNexus expected | Yes when available; advisory and non-blocking |
+| GitNexus expected | Use only after `ENABLED` while healthy; otherwise use the manual fallback; always advisory and non-blocking |
 | Relational schema changes | No |
 | Canonical schema changes | Yes, limited to strategy, capability, approximation, and comparison contracts |
 
@@ -157,7 +160,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 | Control | Stage 5 permission |
 |---|---|
-| GitNexus expected | Yes when available; advisory and non-blocking |
+| GitNexus expected | Use only after `ENABLED` while healthy; otherwise use the manual fallback; always advisory and non-blocking |
 | Relational schema changes | No |
 | Canonical schema changes | Yes, limited to experiment, run, invocation, retry, and lifecycle contracts |
 
@@ -181,7 +184,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 | Control | Stage 6 permission |
 |---|---|
-| GitNexus expected | Yes when available; advisory and non-blocking |
+| GitNexus expected | Use only after `ENABLED` while healthy; otherwise use the manual fallback; always advisory and non-blocking |
 | Relational schema changes | No |
 | Canonical schema changes | Yes, limited to descriptors, negotiation, requests, events, validation, manifests, diagnostics, and protocol contracts |
 
@@ -205,7 +208,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 | Control | Stage 7 permission |
 |---|---|
-| GitNexus expected | Yes when available; advisory and non-blocking |
+| GitNexus expected | Use only after `ENABLED` while healthy; otherwise use the manual fallback; always advisory and non-blocking |
 | Relational schema changes | No |
 | Canonical schema changes | No; this stage consumes frozen protocol and lifecycle schemas |
 
@@ -229,7 +232,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 | Control | Stage 8 permission |
 |---|---|
-| GitNexus expected | Yes when available; advisory and non-blocking |
+| GitNexus expected | Use only after `ENABLED` while healthy; otherwise use the manual fallback; always advisory and non-blocking |
 | Relational schema changes | Yes, limited to database infrastructure, base registries, lifecycle state, retry, invocation/event, owner, and recovery mappings |
 | Canonical schema changes | No; ORM mappings must conform to accepted canonical types |
 
@@ -253,7 +256,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 | Control | Stage 9 permission |
 |---|---|
-| GitNexus expected | Yes when available; advisory and non-blocking |
+| GitNexus expected | Use only after `ENABLED` while healthy; otherwise use the manual fallback; always advisory and non-blocking |
 | Relational schema changes | Yes, limited to artifact, reference, manifest, journal, provenance, diagnostic, audit, and recovery increments |
 | Canonical schema changes | Yes, limited to artifact, manifest, provenance, diagnostic, and audit contracts |
 
@@ -277,7 +280,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 | Control | Stage 10 permission |
 |---|---|
-| GitNexus expected | Yes when available; advisory and non-blocking |
+| GitNexus expected | Use only after `ENABLED` while healthy; otherwise use the manual fallback; always advisory and non-blocking |
 | Relational schema changes | No |
 | Canonical schema changes | No |
 
@@ -310,6 +313,8 @@ flowchart LR
     S9 --> S10
 ```
 
+The `S2 --> S3` edge means completion of the Stage 2 governance decision under either `ENABLED` or `DISABLED_WITH_EVIDENCE`; it does not require successful GitNexus installation or continuing availability.
+
 ## 6. Verification and review gates
 
 Every implementation stage must pass all fifteen gates:
@@ -325,12 +330,12 @@ Every implementation stage must pass all fifteen gates:
 9. Package build verification passes.
 10. A security and safety review confirms the fixed scope and stage exclusions.
 11. A fresh Git diff is reviewed in full.
-12. After Stage 2, use the complete optional ADR workflow when GitNexus is available: before a cross-module or architectural change, check status, refresh a stale index, inspect context or a bounded query, and review impact; after implementation, refresh the index, run change detection and impact review, and examine unexpected graph effects. Record only an advisory developer-tool review note, never verification evidence. If GitNexus is disabled or unavailable, record equivalent manual source, reference, and diff analysis instead.
+12. After Stage 2, branch on its recorded governance outcome. With `ENABLED`, use the complete optional ADR workflow: before a cross-module or architectural change, check status, refresh a stale index, inspect context or a bounded query, and review impact; after implementation, refresh the index, run change detection and impact review, and examine unexpected graph effects. Record only an advisory developer-tool review note, never verification evidence. With `DISABLED_WITH_EVIDENCE`, or whenever an enabled tool is temporarily unhealthy, record the documented manual source, reference, and diff analysis instead. Both paths satisfy this gate only alongside the ordinary offline verification gates.
 13. A code-review gate resolves material findings.
 14. Fresh verification evidence is collected before any completion claim.
 15. The stage ends in a clean committed worktree before the next stage begins.
 
-A passing GitNexus query, context report, or impact report cannot replace any ordinary verification gate. GitNexus absence cannot block builds, tests, runtime operation, manual review, or acceptance.
+A passing GitNexus query, context report, or impact report cannot replace any ordinary verification gate. GitNexus absence cannot block application implementation, builds, tests, runtime operation, reviews, or acceptance.
 
 ## 7. Just-in-time planning policy
 
@@ -339,7 +344,7 @@ The roadmap fixes stage order, ownership, exclusions, and acceptance gates. It d
 For Stages 2–10, the transition is:
 
 1. Complete, verify, review, and commit every prerequisite stage.
-2. Inspect the actual repository files, package/module boundaries, public interfaces, test commands, generated schemas, migration state, available GitNexus graph, and lessons from completed work.
+2. Inspect the actual repository files, package/module boundaries, public interfaces, test commands, generated schemas, migration state, lessons from completed work, and—only after `ENABLED` while the tool is healthy—the GitNexus graph; otherwise inspect the recorded manual source, reference, and diff evidence.
 3. Write the next stage's detailed plan against those observed facts.
 4. Review and approve that plan before creating its implementation worktree.
 5. Implement only the approved stage scope.
@@ -348,19 +353,21 @@ Later detailed plans must not be written from hypothetical modules, interfaces, 
 
 ## 8. GitNexus activation point
 
-Stage 1 establishes the real source/module scaffold and ordinary quality gates without GitNexus. Stage 2 is the sole activation stage for ADR 0001.
+Stage 1 establishes the real source/module scaffold and independently offline quality gates without GitNexus. Stage 2 is the sole governance-decision and possible activation stage for ADR 0001.
 
-Stage 2 must first inspect the pre-existing launcher and local Node/package-manager state without trusting or invoking GitNexus automatically. It then verifies the exact then-current release and license, presents the exact package command, and obtains one-time user approval before any network access. Only after those gates may it pin and configure project-scoped read-only access, repository allowlisting, safe exclusions, the bounded tool allowlist, and a disposable local graph.
+Stage 2 must first inspect the pre-existing launcher and local Node/package-manager state without trusting or invoking GitNexus automatically. If enablement remains safe and desired, it verifies the exact then-current release and license, presents the exact package-installation command, and obtains one-time user approval before that developer-tool bootstrap network operation. Only after those gates may it pin and configure project-scoped read-only access, repository allowlisting, safe exclusions, the bounded tool allowlist, and a disposable local graph. A successful enablement records `ENABLED` only after the bounded query and disabled-tool ordinary verification gates pass.
 
-From Stage 3 onward, GitNexus is expected to be available when healthy, but remains optional and advisory. Each stage must prove ordinary development and verification still work with it disabled. Removing its local graph or configuration must not affect product data, runtime behavior, source correctness, builds, tests, or acceptance.
+If GitNexus is declined, unavailable, incompatible, unverifiable, or unsafe, Stage 2 removes every partial project-scoped GitNexus or MCP configuration and every local index, records the reason and inspected evidence, documents manual source/reference/diff analysis, proves ordinary offline verification without the tool, and records `DISABLED_WITH_EVIDENCE`. Either outcome completes Stage 2 and leaves the Stage 2 to Stage 3 dependency intact as a governance dependency rather than an installation dependency.
+
+From Stage 3 onward, GitNexus is expected to be available when healthy after `ENABLED`, but remains optional and advisory. After `DISABLED_WITH_EVIDENCE`, or during later tool unavailability, stages use the documented manual fallback. Every stage must prove ordinary development and verification work without GitNexus. Removing its local graph or configuration must not affect product data, runtime behavior, source correctness, builds, tests, reviews, or acceptance.
 
 ## 9. Status tracking
 
 | Stage | Detailed plan status | Implementation status | Exit-gate status |
 |---|---|---|---|
 | 1 — Repository Foundation and Quality Gates | Created in this planning task; awaiting user review | Not started | Not evaluated |
-| 2 — Guarded GitNexus Development Tooling | Intentionally deferred until Stage 1 completion | Not started | Not evaluated |
-| 3 — Canonical Domain, Configuration, Hashing, and Schemas | Intentionally deferred until Stages 1–2 completion | Not started | Not evaluated |
+| 2 — Guarded GitNexus Development Tooling | Intentionally deferred until Stage 1 completion; its future plan must define both paths, and Stage 2 execution records and evidences exactly one | Not started | Not evaluated |
+| 3 — Canonical Domain, Configuration, Hashing, and Schemas | Intentionally deferred until Stage 1 and the Stage 2 governance outcome are complete; either outcome permits planning | Not started | Not evaluated |
 | 4 — Portable Strategy, Capabilities, and Comparison | Intentionally deferred until Stage 3 completion | Not started | Not evaluated |
 | 5 — Experiment, Run, Invocation, Retry, and Aggregation Logic | Intentionally deferred until Stages 3–4 completion | Not started | Not evaluated |
 | 6 — Adapter Protocol and Fake-Adapter Contract Harness | Intentionally deferred until Stages 3 and 5 completion | Not started | Not evaluated |
@@ -369,18 +376,18 @@ From Stage 3 onward, GitNexus is expected to be available when healthy, but rema
 | 9 — Artifact Finalization, Recovery, Provenance, and Audit | Intentionally deferred until Stages 6–8 completion | Not started | Not evaluated |
 | 10 — CLI Composition and End-to-End Acceptance | Intentionally deferred until Stages 4–9 completion | Not started | Not evaluated |
 
-The table is updated only with evidence from an approved stage plan and its committed implementation. Planning status never implies implementation progress.
+The table is updated only with evidence from an approved stage plan and its committed implementation. When Stage 2 completes, its exact `ENABLED` or `DISABLED_WITH_EVIDENCE` outcome and committed evidence are recorded here; installation success is not the completion criterion. Planning status never implies implementation progress.
 
 ## 10. Project 1 completion gate
 
-Project 1 is complete only after all ten stages are implemented in order and every cumulative acceptance criterion in specification section 33 has fresh offline evidence. The final record must show:
+Project 1 is complete only after all ten stage exit gates are completed in order—including a recorded Stage 2 outcome of `ENABLED` or `DISABLED_WITH_EVIDENCE`—and every cumulative acceptance criterion in specification section 33 has fresh offline evidence. GitNexus installation or availability is not a completion criterion. The final record must show:
 
 - all required canonical contracts, lifecycle rules, protocol behaviors, Windows supervision cases, persistence constraints, finalization/recovery paths, provenance, diagnostics, and audit behavior;
 - the complete fake-adapter-only test matrix from section 28;
 - clean generated-schema and migration checks;
 - strict typing, formatting, linting, package build, security/safety, code review, and full diff review;
-- no real engine, Binance integration, network behavior, credential path, live/paper trading, tax, UI, LLM, Docker, cloud, or server feature;
-- GitNexus remains optional, read-only, removable, and outside product/build/test/runtime dependencies; and
+- no real engine, Binance integration, application or runtime network behavior, credential path, live/paper trading, tax, UI, LLM, Docker, cloud, or server feature;
+- the recorded Stage 2 outcome is `ENABLED` or `DISABLED_WITH_EVIDENCE`; GitNexus remains optional, advisory, read-only when enabled, removable, and outside product/build/test/runtime/acceptance dependencies, with the manual fallback available and no partial project-scoped GitNexus or MCP configuration or local index after a disabled outcome; and
 - a clean committed worktree containing the reviewed Project 1 implementation and documentation.
 
 Until that evidence exists, Project 1 remains incomplete regardless of partial unit-test success, GitNexus output, or the presence of generated files.
