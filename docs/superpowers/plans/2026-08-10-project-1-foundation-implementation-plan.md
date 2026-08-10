@@ -27,8 +27,9 @@
 - Do not add pre-commit, hosted CI, GitHub workflows, Docker, a WSL dependency, GitNexus installation/configuration, custom Skills, schemas, databases, runtime directories, or engine folders.
 - Do not add Binance, CCXT, broker, exchange, network-client, Pydantic, SQLAlchemy, Alembic, Parquet, YAML, LLM, tax, UI, or trading-engine dependencies.
 - Do not implement configuration loading, canonical domain types, dataset ingestion, strategies, experiments, adapters, engines, process supervision, persistence, artifacts, paper trading, tax logic, or LLM behavior.
-- Do not access the network without one-time user approval for the exact `uv` dependency command. Never request permanent or unrestricted network access.
-- Do not inspect environment variables, credentials, browser data, credential stores, suspected secret contents, or private keys.
+- Ordinary synchronization, focused checks, full verification, lock validation, and package builds must be independently offline: use `uv sync --frozen --offline`, `uv run --no-sync`, `uv lock --check --offline`, and `uv build --offline` as applicable.
+- The only non-offline `uv` commands permitted are the exact one-time user-approved Task 2 bootstrap commands `uv lock` and dependency-acquisition `uv sync --frozen`; before the source scaffold exists, that synchronization command must include `--no-install-project`. Never request permanent or unrestricted network access, and never use a bootstrap approval as verification evidence.
+- Do not inspect, print, persist, or log ambient environment-variable values, credentials, browser data, credential-store contents, suspected secret contents, or private keys. Application code must not use ambient environment variables for implicit configuration or credentials. The future `AGENTS.md` makes only the reviewed non-secret GitNexus MCP control-variable exception required by ADR 0001; those values remain developer-tool configuration, never application configuration, credentials, or runtime product inputs.
 - Keep GitNexus optional and outside product, runtime, build, package, and test dependencies; do not install, configure, or invoke it in Stage 1.
 - Run the complete repository verification workflow and review the full diff before a completion claim. Report every skipped check and warning.
 - Avoid unrelated edits.
@@ -98,9 +99,9 @@ The following files are configuration-only exceptions and may be created before 
 
 ## Worktree and network transition gates
 
-Task 1 runs in the supplied repository root and is the sole pre-worktree read-only baseline. After Task 1 passes, the execution controller uses the appropriate Superpowers worktree workflow to create an isolated Git worktree before Task 2 changes a file. The worktree must begin at the same approved commit and have a clean status. Do not create a worktree during this planning task.
+Task 1 runs in the supplied repository root and is the sole pre-worktree read-only baseline. After Task 1 passes, the execution controller uses the appropriate Superpowers worktree workflow to create an isolated Git worktree branch from local `main` before Task 2 changes a file. The worktree must begin at the same approved commit, have a clean status, and prove before the first edit that `git merge-base HEAD main` equals its current `HEAD`. Do not create a worktree during this planning task.
 
-Task 2 attempts dependency resolution from local cache first. If the cache is insufficient, the worker shows the exact `uv lock` command, requests one-time network approval, and waits. It never installs CPython, `uv`, GitNexus, or any trading engine automatically.
+Task 2 attempts dependency resolution and acquisition from local cache first. If the cache is insufficient, the worker shows the exact `uv lock` and/or dependency-acquisition `uv sync --frozen` command required, using `--no-install-project` while the source scaffold is absent, requests one-time approval for each exact command, and waits. These are the only non-offline commands in Stage 1. Every later development and verification command remains offline or `--no-sync`; a missing local package returns to this Task 2 bootstrap gate. Task 2 never installs CPython, `uv`, GitNexus, or any trading engine automatically.
 
 ### Task 1: Environment preflight and baseline evidence
 
@@ -169,7 +170,28 @@ Expected: exit `0` and an installed `uv` version. If missing, stop without editi
 
 **Commit:** No commit command or commit message is permitted. This task is read-only, and an empty preflight commit would violate the no-empty-commit rule.
 
-**Post-task transition:** After all checks pass, create the isolated worktree through the required Superpowers workflow, change into it, and rerun `git status --short`, `git log -5 --oneline`, and `git rev-parse --show-toplevel`. The worktree status must be clean, its history must include the same approved commits, and its root must be the new isolated worktree path associated with the supplied repository.
+**Post-task transition:** After all checks pass, create the isolated worktree branch from local `main` through the required Superpowers workflow, change into it, and rerun `git status --short`, `git log -5 --oneline`, and `git rev-parse --show-toplevel`. The worktree status must be clean, its history must include the same approved commits, and its root must be the new isolated worktree path associated with the supplied repository. Before the first edit, run:
+
+```powershell
+$currentWorktreeHead = (git rev-parse HEAD).Trim()
+$localMainHead = (git rev-parse main).Trim()
+$worktreeMergeBase = (git merge-base HEAD main).Trim()
+if (
+    [string]::IsNullOrWhiteSpace($currentWorktreeHead) -or
+    [string]::IsNullOrWhiteSpace($localMainHead) -or
+    [string]::IsNullOrWhiteSpace($worktreeMergeBase)
+) {
+    throw "Unable to determine the pre-edit worktree commits"
+}
+if (
+    $worktreeMergeBase -ne $currentWorktreeHead -or
+    $currentWorktreeHead -ne $localMainHead
+) {
+    throw "The isolated worktree was not created from the current local main"
+}
+```
+
+Expected: all three commands exit `0`; the current worktree `HEAD`, local `main`, and their merge base are identical; and no file has yet been edited. Stop if any hash is missing or differs.
 
 ### Task 2: Project metadata, uv lock, ignore rules, and quality configuration
 
@@ -380,7 +402,7 @@ show_missing = true
 skip_covered = true
 ```
 
-The bounded version ranges establish the Stage 1 compatibility floor; the generated `uv.lock` supplies exact resolved project and development versions. Hatchling appears in both the build-system requirements and the development group intentionally. `no-build-isolation = true` makes `uv build` use the Hatchling version already installed by the frozen development sync instead of resolving an isolated build environment, and `python-downloads = "manual"` forbids automatic managed-Python downloads. No dependency above belongs to `[project].dependencies`.
+The bounded version ranges establish the Stage 1 compatibility floor; the generated `uv.lock` supplies exact resolved project and development versions. Hatchling appears in both the build-system requirements and the development group intentionally. `no-build-isolation = true` makes `uv build --offline` use the Hatchling version already installed by the offline frozen development sync instead of resolving an isolated build environment, and `python-downloads = "manual"` forbids automatic managed-Python downloads. No dependency above belongs to `[project].dependencies`.
 
 - [ ] **Step 6: Attempt complete local lock generation first**
 
@@ -412,10 +434,10 @@ uv lock
 Then run:
 
 ```powershell
-uv lock --check
+uv lock --check --offline
 ```
 
-Expected: exit `0` and a generated `uv.lock` that pins the project and development dependencies, including the Hatchling version later used without build isolation. Do not hand-edit the generated file.
+Expected: exit `0` without network access and a generated `uv.lock` that pins the project and development dependencies, including the Hatchling version later used without build isolation. Do not hand-edit the generated file.
 
 - [ ] **Step 8: Probe and synchronize development tools strictly from the lock**
 
@@ -431,7 +453,7 @@ If this offline probe reports a missing cached wheel and the earlier one-time ap
 uv sync --frozen --no-install-project
 ```
 
-After approval, run that exact command. Once Task 3 creates `src/crypto_lab`, ordinary verification uses `uv sync --frozen` so the project itself is installed from the unchanged lock.
+After approval, run that exact command once. Once Task 3 creates `src/crypto_lab`, ordinary synchronization uses `uv sync --frozen --offline` so the project itself is installed from the unchanged lock without network access. If any later offline synchronization reports missing local content, stop and return to this approval gate; do not make a verification command non-offline.
 
 - [ ] **Step 9: Check configuration syntax and the pre-code baseline**
 
@@ -440,14 +462,14 @@ Run:
 ```powershell
 uv run --no-sync ruff format --check .
 uv run --no-sync ruff check .
-uv lock --check
+uv lock --check --offline
 git diff --check
 git status --short
 ```
 
 Expected: every command exits `0`; status lists exactly `.python-version`, `.editorconfig`, `.gitattributes`, `.gitignore`, `pyproject.toml`, and `uv.lock` as intended Task 2 changes. Source type checking and package building begin only after Task 3 creates the scaffold.
 
-**Focused verification:** `uv lock --offline` or the explicitly approved `uv lock`, `uv lock --check`, the offline-first no-project synchronization, exact status review, and `git diff --check`.
+**Focused verification:** `uv lock --offline` or the explicitly approved one-time `uv lock`, `uv lock --check --offline`, the offline-first no-project synchronization, exact status review, and `git diff --check`. The only possible non-offline synchronization is the separately approved one-time `uv sync --frozen --no-install-project`; it is bootstrap, not verification.
 
 **Broader verification:** Ruff configuration checks, lock consistency, exact status review, and whitespace validation.
 
@@ -511,22 +533,17 @@ def repository_root() -> Path:
 Create `tests/unit/test_package_layout.py` with exactly:
 
 ```python
-"""Tests for the side-effect-free Stage 1 package layout."""
+"""Test the Stage 1 package layout and bounded fresh-process import guard."""
 
 from __future__ import annotations
 
 import importlib
-import os
-import socket
 import subprocess
+import sys
 from importlib.metadata import version
 from pathlib import Path
-from typing import NoReturn
-from urllib import request
 
-import pytest
-
-PACKAGE_MODULES = (
+PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab",
     "crypto_lab.domain",
     "crypto_lab.strategy",
@@ -540,7 +557,21 @@ PACKAGE_MODULES = (
     "crypto_lab.configuration",
     "crypto_lab.audit",
     "crypto_lab.cli",
+    "crypto_lab.cli.main",
+    "crypto_lab.cli.__main__",
 )
+_IMPORT_SENTINEL = "IMPORT_GUARDS_OK"
+_IMPORT_PROBE = """
+from __future__ import annotations
+
+import importlib
+import os
+import socket
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
+from typing import NoReturn
 
 
 def _unexpected_operation(*args: object, **kwargs: object) -> NoReturn:
@@ -548,27 +579,56 @@ def _unexpected_operation(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("package import attempted a forbidden side effect")
 
 
-def test_all_planned_packages_import_without_side_effects(
-    monkeypatch: pytest.MonkeyPatch,
+os.getenv = _unexpected_operation
+socket.create_connection = _unexpected_operation
+subprocess.Popen = _unexpected_operation
+urllib.request.urlopen = _unexpected_operation
+Path.mkdir = _unexpected_operation
+Path.touch = _unexpected_operation
+Path.write_bytes = _unexpected_operation
+Path.write_text = _unexpected_operation
+
+sentinel = sys.argv[1]
+module_names = tuple(sys.argv[2:])
+imported_names = tuple(
+    importlib.import_module(module_name).__name__
+    for module_name in module_names
+)
+if imported_names != module_names:
+    raise AssertionError("imported module names did not match the requested modules")
+print(sentinel)
+"""
+
+
+def test_all_planned_modules_import_fresh_without_observable_side_effects(
     tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(os, "getenv", _unexpected_operation)
-    monkeypatch.setattr(socket, "create_connection", _unexpected_operation)
-    monkeypatch.setattr(subprocess, "Popen", _unexpected_operation)
-    monkeypatch.setattr(request, "urlopen", _unexpected_operation)
-    for attribute in ("mkdir", "touch", "write_bytes", "write_text"):
-        monkeypatch.setattr(Path, attribute, _unexpected_operation)
+    paths_before = tuple(tmp_path.iterdir())
+    assert paths_before == ()
 
-    before = tuple(tmp_path.iterdir())
-    imported = tuple(importlib.import_module(name).__name__ for name in PACKAGE_MODULES)
+    command: list[str] = [
+        sys.executable,
+        "-I",
+        "-B",
+        "-c",
+        _IMPORT_PROBE,
+        _IMPORT_SENTINEL,
+        *PACKAGE_MODULES,
+    ]
+    completed = subprocess.run(  # noqa: S603 - fixed isolated Python command.
+        command,
+        cwd=tmp_path,
+        check=False,
+        capture_output=True,
+        shell=False,
+        text=True,
+        timeout=10,
+    )
 
-    assert imported == PACKAGE_MODULES
-    assert tuple(tmp_path.iterdir()) == before
-    captured = capsys.readouterr()
-    assert captured.out == ""
-    assert captured.err == ""
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == f"{_IMPORT_SENTINEL}\n"
+    assert completed.stderr == ""
+    assert tuple(tmp_path.iterdir()) == paths_before
 
 
 def test_distribution_metadata_reports_initial_version() -> None:
@@ -584,13 +644,15 @@ def test_package_contains_pep_561_marker() -> None:
     assert typing_marker.read_bytes() == b""
 ```
 
+The fresh child uses the current `sys.executable`, Python isolated mode, an argument array, and `tmp_path` as its working directory. It installs the listed guards before importing any planned project module, and `-B` suppresses ordinary bytecode-cache writes. This is a bounded fresh-process observable-side-effect guard for the named calls, output streams, and paths below `tmp_path`; it is combined with exact source review and the architecture constraints, not presented as detection of every possible operating-system side effect.
+
 - [ ] **Step 3: Run the package test and confirm red**
 
 ```powershell
 uv run --no-sync pytest -o addopts="" tests/unit/test_package_layout.py -q
 ```
 
-Expected: collection or execution fails because `crypto_lab` is not installed and its distribution metadata and `py.typed` marker do not exist. A pass means an unrelated package is shadowing the intended project and must be investigated before continuing.
+Expected: exit `1`. The isolated child fails on its first `crypto_lab` import because the package does not exist; the separate distribution-metadata and `py.typed` tests also fail while the project is absent. A pass means an unrelated package is shadowing the intended project and must be investigated before continuing.
 
 - [ ] **Step 4: Create the package directories with exact module contents**
 
@@ -617,20 +679,12 @@ Create `src/crypto_lab/py.typed` as an empty, zero-byte marker file. Do not add 
 - [ ] **Step 5: Install the newly created project from the frozen lock**
 
 ```powershell
-uv sync --frozen
+uv sync --frozen --offline
 ```
 
-Expected: exit `0`; the current project is installed from the unchanged lock with no network access and no new dependency.
+Expected: exit `0`; the partial package scaffold is installed from the unchanged lock with no network access and no new dependency. If local locked content is missing, stop and return to the Task 2 approval gate.
 
-- [ ] **Step 6: Run the package test and confirm green**
-
-```powershell
-uv run --frozen pytest -o addopts="" tests/unit/test_package_layout.py -q
-```
-
-Expected: all package layout, metadata, PEP 561, and side-effect checks pass.
-
-- [ ] **Step 7: Write the CLI tests before the CLI modules exist**
+- [ ] **Step 6: Write the CLI tests before the CLI modules exist**
 
 Create `tests/unit/test_cli.py` with exactly:
 
@@ -747,15 +801,15 @@ def test_module_entrypoint_exits_with_main_result(
     assert capsys.readouterr().out.startswith("usage: crypto-lab")
 ```
 
-- [ ] **Step 8: Run the CLI test and confirm red**
+- [ ] **Step 7: Run the CLI test and confirm red**
 
 ```powershell
-uv run --frozen pytest -o addopts="" tests/unit/test_cli.py -q
+uv run --no-sync pytest -o addopts="" tests/unit/test_cli.py -q
 ```
 
 Expected: collection fails with `ModuleNotFoundError` for `crypto_lab.cli.main` because CLI production behavior has not been created.
 
-- [ ] **Step 9: Add the minimum CLI implementation**
+- [ ] **Step 8: Add the minimum CLI implementation**
 
 Create `src/crypto_lab/cli/main.py` with exactly:
 
@@ -806,38 +860,38 @@ if __name__ == "__main__":
 
 Do not place `0.1.0` or another version constant in Python source. Do not add subcommands.
 
-- [ ] **Step 10: Refresh the editable install without changing the lock**
+- [ ] **Step 9: Refresh the editable install without changing the lock**
 
 ```powershell
-uv sync --frozen
+uv sync --frozen --offline
 ```
 
-Expected: exit `0`, `uv.lock` unchanged, and the console entry point installed.
+Expected: exit `0` without network access, `uv.lock` unchanged, and the console entry point installed. If local locked content is missing, stop and return to Task 2 rather than weakening the command.
 
-- [ ] **Step 11: Run focused package and CLI tests**
+- [ ] **Step 10: Run focused package and CLI tests and confirm both green**
 
 ```powershell
-uv run --frozen pytest -o addopts="" tests/unit/test_package_layout.py tests/unit/test_cli.py -q
+uv run --no-sync pytest -o addopts="" tests/unit/test_package_layout.py tests/unit/test_cli.py -q
 ```
 
-Expected: all tests pass, both command forms print exactly `crypto-lab 0.1.0`, no-argument help exits `0`, and unknown arguments exit `2`.
+Expected: all tests pass. This is the fresh-process import guard's first permitted green run because the complete package and both CLI implementation modules now exist. The child imports all fifteen planned modules under its guards, prints exactly `IMPORT_GUARDS_OK` plus one newline, emits no stderr, and creates no path below `tmp_path`. Both command forms print exactly `crypto-lab 0.1.0`, no-argument help exits `0`, and unknown arguments exit `2`.
 
-- [ ] **Step 12: Run the broader source checks**
+- [ ] **Step 11: Run the broader source checks**
 
 ```powershell
-uv run --frozen ruff format --check src tests/unit tests/conftest.py
-uv run --frozen ruff check src tests/unit tests/conftest.py
-uv run --frozen mypy src tests
-uv run --frozen pytest
-uv build
+uv run --no-sync ruff format --check src tests/unit tests/conftest.py
+uv run --no-sync ruff check src tests/unit tests/conftest.py
+uv run --no-sync mypy src tests
+uv run --no-sync pytest
+uv build --offline
 git diff --check
 ```
 
-Expected: every command exits `0`; branch coverage remains at least 90 percent; the source-level PEP 561 marker test passes; and the sdist and wheel build without introducing a runtime dependency.
+Expected: every command exits `0` without network access; the full pytest command, not the focused `addopts`-overridden slices, proves branch coverage of at least 90 percent; the source-level PEP 561 marker test passes; and the sdist and wheel build offline without introducing a runtime dependency. Review the package modules directly alongside the bounded fresh-process guard; the guard is not an operating-system sandbox or proof against every possible import side effect.
 
-**Focused verification:** The two red-green cycles above: package layout first, then CLI behavior.
+**Focused verification:** The initial package-layout command is red because the package does not exist, the CLI command is red before the CLI modules exist, and the combined command turns both green only after the complete package and CLI scaffold exists. Focused runs disable repository coverage options and therefore do not establish the coverage threshold.
 
-**Broader verification:** Ruff format/lint, strict mypy, all unit tests with coverage, package build, and whitespace check.
+**Broader verification:** No-sync Ruff format/lint, strict mypy, all unit tests with coverage, offline package build, exact source review, and whitespace check.
 
 **Commit:**
 
@@ -1038,7 +1092,7 @@ def test_repository_domain_package_has_no_prohibited_imports(
 - [ ] **Step 2: Run the architecture slice and confirm red**
 
 ```powershell
-uv run --frozen pytest -o addopts="" tests/architecture/test_domain_import_boundary.py -q
+uv run --no-sync pytest -o addopts="" tests/architecture/test_domain_import_boundary.py -q
 ```
 
 Expected: exit `1`; the first scanner exercise raises `NotImplementedError` with the red-state message. The coverage override applies only to this focused cycle.
@@ -1110,7 +1164,7 @@ This resolves relative imports in package context. It allows imports that remain
 - [ ] **Step 4: Run the architecture slice and confirm green**
 
 ```powershell
-uv run --frozen pytest -o addopts="" tests/architecture/test_domain_import_boundary.py -q
+uv run --no-sync pytest -o addopts="" tests/architecture/test_domain_import_boundary.py -q
 ```
 
 Expected: exit `0`; all eleven prohibited roots, four required import shapes, aliased forms, parent-relative escape, safe relative imports, comments, strings, standard-library imports, and third-party imports behave as specified.
@@ -1298,7 +1352,7 @@ def test_required_development_tools_are_declared(repository_root: Path) -> None:
 - [ ] **Step 6: Run the dependency slice and confirm red**
 
 ```powershell
-uv run --frozen pytest -o addopts="" tests/safety/test_project_dependencies.py -q
+uv run --no-sync pytest -o addopts="" tests/safety/test_project_dependencies.py -q
 ```
 
 Expected: exit `1`; runtime extraction raises the stated `NotImplementedError`.
@@ -1375,7 +1429,7 @@ The extractor reads `[project].dependencies` and every `[project.optional-depend
 - [ ] **Step 8: Run the dependency slice and confirm green**
 
 ```powershell
-uv run --frozen pytest -o addopts="" tests/safety/test_project_dependencies.py -q
+uv run --no-sync pytest -o addopts="" tests/safety/test_project_dependencies.py -q
 ```
 
 Expected: exit `0`; runtime groups are empty, every prohibited normalized family is detected by the synthetic cases, optional runtime groups are included by the extractor, and the exact development tools are present without being classified as runtime dependencies.
@@ -1530,7 +1584,7 @@ def test_repository_has_no_tracked_or_unignored_forbidden_path(
 - [ ] **Step 10: Run the forbidden-path slice and confirm red**
 
 ```powershell
-uv run --frozen pytest -o addopts="" tests/safety/test_forbidden_runtime_paths.py -q
+uv run --no-sync pytest -o addopts="" tests/safety/test_forbidden_runtime_paths.py -q
 ```
 
 Expected: exit `1`; path classification raises the stated `NotImplementedError`. The test has not opened or created any suspected secret file.
@@ -1580,7 +1634,7 @@ The Git-visible-path query includes tracked files and unignored untracked files 
 - [ ] **Step 12: Run the forbidden-path slice and confirm green**
 
 ```powershell
-uv run --frozen pytest -o addopts="" tests/safety/test_forbidden_runtime_paths.py -q
+uv run --no-sync pytest -o addopts="" tests/safety/test_forbidden_runtime_paths.py -q
 ```
 
 Expected: exit `0`; every required generated/secret probe is ignored, every source/control probe remains visible, `src/crypto_lab/artifacts` is not swallowed by the root runtime ignore, and no tracked or unignored prohibited filename is present.
@@ -1588,7 +1642,7 @@ Expected: exit `0`; every required generated/secret probe is ignored, every sour
 - [ ] **Step 13: Run all architecture and safety tests together**
 
 ```powershell
-uv run --frozen pytest -o addopts="" tests/architecture tests/safety -q
+uv run --no-sync pytest -o addopts="" tests/architecture tests/safety -q
 ```
 
 Expected: exit `0` with no network, engine, database, Docker, WSL, credential, or environment-variable requirement.
@@ -1600,15 +1654,15 @@ uv sync --frozen --offline
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
-uv run --frozen ruff format tests
-uv run --frozen ruff check .
-uv run --frozen mypy src tests
-uv run --frozen pytest
-uv build
+uv run --no-sync ruff format tests
+uv run --no-sync ruff check .
+uv run --no-sync mypy src tests
+uv run --no-sync pytest
+uv build --offline
 git diff --check
 ```
 
-Expected: every command exits `0`, the leading offline synchronization proves all locked packages are already local, branch coverage is at least 90 percent, and both package distributions build from the synchronized Hatchling without an isolated resolver.
+Expected: every command exits `0` without network access. Offline synchronization installs exactly the locked environment, every tool runs with `--no-sync`, branch coverage is at least 90 percent, and both package distributions build offline from the synchronized Hatchling without an isolated resolver. A missing local package stops the task and returns to the Task 2 bootstrap gate.
 
 **Focused verification:** Three independent red-green cycles: AST import boundary, dependency classification, and filename/Git-ignore safety.
 
@@ -1642,7 +1696,7 @@ This task uses the documentation/automation exception declared above. It adds no
 
 Create `AGENTS.md` with exactly:
 
-````markdown
+```markdown
 # Repository Instructions
 
 ## Authority and scope
@@ -1657,7 +1711,8 @@ Create `AGENTS.md` with exactly:
 - Use test-driven development for production behavior: focused failing test, minimum implementation, focused passing test, then broader verification.
 - Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` before claiming completion.
 - Report every skipped check, warning, and failure; do not infer success from a partial verification run.
-- Request explicit approval before a package operation or other action that needs network access. Never enable unrestricted or permanent network access.
+- Ordinary development and verification are offline: synchronize with `uv sync --frozen --offline`, run installed tools with `uv run --no-sync`, build with `uv build --offline`, and validate the lock with `uv lock --check --offline`.
+- If locked packages are absent locally, stop and return to the separately approved Task 2 bootstrap procedure. Only its exact, one-time-approved `uv lock` and dependency-acquisition `uv sync --frozen` commands may access the network; use `--no-install-project` before the source scaffold exists, and never enable unrestricted or permanent network access.
 
 ## Architecture rules
 
@@ -1666,14 +1721,16 @@ Create `AGENTS.md` with exactly:
 - Use `Decimal` for authoritative financial values and timezone-aware UTC timestamps when those types are introduced.
 - Reject unknown fields at future configuration, schema, protocol, and artifact boundaries.
 - Never install or import a real trading engine during Project 1.
-- Keep GitNexus optional, project-scoped, read-only, advisory, and outside product, build, test, and runtime dependencies.
+- During Stage 1, do not install, configure, or invoke GitNexus. After a separately approved Stage 2, keep it optional, project-scoped, read-only, advisory, and outside product, build, test, and runtime dependencies.
 
 ## Safety boundaries
 
 - Never add live trading, real-order placement, credentials, API-key handling, withdrawal behavior, leverage, futures, margin, or shorting.
 - Never add Docker, cloud deployment, or server deployment.
 - Never add implicit network access.
-- Never read, inspect, persist, or log credentials or environment variables.
+- Application code must not read configuration or credentials implicitly from ambient environment variables in Project 1.
+- Agents and application code must never inspect, print, persist, or log ambient environment-variable values or credential-store contents.
+- Project-scoped Codex MCP configuration may set only the reviewed, non-secret GitNexus control variables explicitly required by ADR 0001. Those variables are developer-tool configuration, not application configuration, credentials, or runtime product inputs. No other exception is implied.
 - Do not add Binance, exchange, broker, or network-client integration during Project 1.
 ```
 
@@ -1729,12 +1786,12 @@ From the repository root:
 ```powershell
 py -3.12 --version
 uv --version
-uv sync --frozen
-uv run --frozen crypto-lab --version
-uv run --frozen python -m crypto_lab.cli --version
+uv sync --frozen --offline
+uv run --no-sync crypto-lab --version
+uv run --no-sync python -m crypto_lab.cli --version
 ```
 
-Both version commands print `crypto-lab 0.1.0`. Package downloads require explicit approval when they are not already available locally.
+Both version commands print `crypto-lab 0.1.0`. Always try the offline synchronization first. If its cache is incomplete, the user or agent must review and explicitly approve the exact `uv sync --frozen` command once under the Task 2 bootstrap procedure. After that acquisition succeeds, rerun `uv sync --frozen --offline`; normal development and verification remain offline.
 
 ## Verification
 
@@ -1790,12 +1847,12 @@ function Invoke-VerificationStep {
 
 Push-Location -LiteralPath $repositoryRoot
 try {
-    Invoke-VerificationStep "Sync locked environment" "uv" @("sync", "--frozen")
-    Invoke-VerificationStep "Check formatting" "uv" @("run", "ruff", "format", "--check", ".")
-    Invoke-VerificationStep "Run lint checks" "uv" @("run", "ruff", "check", ".")
-    Invoke-VerificationStep "Run strict type checks" "uv" @("run", "mypy", "src", "tests")
-    Invoke-VerificationStep "Run test suite" "uv" @("run", "pytest")
-    Invoke-VerificationStep "Build package" "uv" @("build")
+    Invoke-VerificationStep "Sync locked environment" "uv" @("sync", "--frozen", "--offline")
+    Invoke-VerificationStep "Check formatting" "uv" @("run", "--no-sync", "ruff", "format", "--check", ".")
+    Invoke-VerificationStep "Run lint checks" "uv" @("run", "--no-sync", "ruff", "check", ".")
+    Invoke-VerificationStep "Run strict type checks" "uv" @("run", "--no-sync", "mypy", "src", "tests")
+    Invoke-VerificationStep "Run test suite" "uv" @("run", "--no-sync", "pytest")
+    Invoke-VerificationStep "Build package" "uv" @("build", "--offline")
     Invoke-VerificationStep "Check Git whitespace" "git" @("diff", "--check")
 }
 catch {
@@ -1813,15 +1870,15 @@ exit $verificationExitCode
 
 This executes, in exact logical order:
 
-1. `uv sync --frozen`
-2. `uv run ruff format --check .`
-3. `uv run ruff check .`
-4. `uv run mypy src tests`
-5. `uv run pytest`
-6. `uv build`
+1. `uv sync --frozen --offline`
+2. `uv run --no-sync ruff format --check .`
+3. `uv run --no-sync ruff check .`
+4. `uv run --no-sync mypy src tests`
+5. `uv run --no-sync pytest`
+6. `uv build --offline`
 7. `git diff --check`
 
-The helper captures `$LASTEXITCODE` before throwing, stops immediately, and returns that native nonzero value after the `finally` block restores the original directory. It contains no network enablement, engine, Docker, WSL, credential, Binance, runtime, or GitNexus operation.
+The helper captures `$LASTEXITCODE` before throwing, stops immediately, and returns that native nonzero value after the `finally` block restores the original directory. Every package operation in the script is independently offline or `--no-sync`; it never relies on an earlier probe and contains no network enablement, engine, Docker, WSL, credential, Binance, runtime, or GitNexus operation. If a locked package is unavailable locally, synchronization fails and the operator returns to the separately approved Task 2 bootstrap procedure.
 
 - [ ] **Step 4: Create development verification guidance**
 
@@ -1845,17 +1902,13 @@ Stop without installing anything automatically if CPython 3.12 or `uv` is unavai
 
 ## Locked setup
 
-After `uv.lock` exists, test local package availability first:
+After `uv.lock` exists, synchronize only from local locked content:
 
 ```powershell
 uv sync --frozen --offline
 ```
 
-If locally cached packages are insufficient, show the exact `uv sync --frozen` command and obtain one-time approval for that package operation before allowing network access. Ordinary synchronization then uses:
-
-```powershell
-uv sync --frozen
-```
+If locally cached packages are insufficient, stop. Return to the Task 2 bootstrap procedure, show the exact `uv sync --frozen` acquisition command, and obtain one-time approval before running it. Then rerun `uv sync --frozen --offline`. The approved acquisition is not a verification step, and no ordinary development or verification command becomes non-offline.
 
 ## Complete verification
 
@@ -1865,12 +1918,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 
 The script stops at the first failure and runs, in order:
 
-1. `uv sync --frozen`
-2. `uv run ruff format --check .`
-3. `uv run ruff check .`
-4. `uv run mypy src tests`
-5. `uv run pytest`
-6. `uv build`
+1. `uv sync --frozen --offline`
+2. `uv run --no-sync ruff format --check .`
+3. `uv run --no-sync ruff check .`
+4. `uv run --no-sync mypy src tests`
+5. `uv run --no-sync pytest`
+6. `uv build --offline`
 7. `git diff --check`
 
 A successful partial command does not establish repository acceptance.
@@ -1880,11 +1933,11 @@ A successful partial command does not establish repository acceptance.
 Use focused checks during red-green development, then run complete verification:
 
 ```powershell
-uv run --frozen pytest -o addopts="" tests\unit\test_cli.py -q
-uv run --frozen pytest -o addopts="" tests\architecture\test_domain_import_boundary.py -q
-uv run --frozen pytest -o addopts="" tests\safety -q
-uv run --frozen ruff check src tests
-uv run --frozen mypy src tests
+uv run --no-sync pytest -o addopts="" tests\unit\test_cli.py -q
+uv run --no-sync pytest -o addopts="" tests\architecture\test_domain_import_boundary.py -q
+uv run --no-sync pytest -o addopts="" tests\safety -q
+uv run --no-sync ruff check src tests
+uv run --no-sync mypy src tests
 ```
 
 The `addopts` override removes the repository-wide coverage threshold only from the focused diagnostic run. The later complete suite must meet the configured 90 percent branch-coverage gate.
@@ -1893,13 +1946,15 @@ The `addopts` override removes the repository-wide coverage threshold only from 
 
 Do not hand-edit `uv.lock`. After an approved `pyproject.toml` dependency change:
 
-1. Run `uv lock --offline` to test whether resolution is fully local.
-2. Run `uv sync --frozen --offline` to test whether the locked packages are fully local.
-3. If either offline command fails because packages are absent, show the exact non-offline command and request one-time approval before running it.
-4. Commit `pyproject.toml` and the generated `uv.lock` together.
-5. Use `--frozen` for ordinary synchronization and focused verification.
+1. Run `uv lock --offline` to attempt resolution locally.
+2. If resolution fails only because cached metadata is absent, return to the Task 2 gate, show the exact `uv lock` command, and obtain one-time approval before running it.
+3. Validate with `uv lock --check --offline`.
+4. Run `uv sync --frozen --offline` to install only locally available locked packages.
+5. If acquisition is still required, return to Task 2, show its exact `uv sync --frozen --no-install-project` command, and obtain one-time approval before running it; then rerun the ordinary offline synchronization.
+6. Commit `pyproject.toml` and the generated `uv.lock` together.
+7. Use `uv run --no-sync` for installed tools and `uv build --offline` for builds.
 
-No dependency operation may install a trading engine or add GitNexus to the product environment.
+No dependency operation may install a trading engine or add GitNexus to the product environment. A Task 2 bootstrap approval never permits online verification.
 ````
 
 - [ ] **Step 5: Execute the complete workflow from a non-root directory**
@@ -1907,10 +1962,6 @@ No dependency operation may install a trading engine or add GitNexus to the prod
 Run from `docs` so root resolution and directory restoration are exercised:
 
 ```powershell
-uv sync --frozen --offline
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-}
 $verificationExitCode = 0
 Push-Location docs
 try {
@@ -1925,7 +1976,7 @@ if ($verificationExitCode -ne 0) {
 }
 ```
 
-Expected: exit `0`; the explicit offline probe succeeds before the script, seven headings appear in the required order, the script returns the caller to `docs`, and no lockfile changes. The literal script does not itself force offline mode, but the immediately preceding probe proves its locked packages are available locally; if that probe fails, stop and use the Task 2 one-time approval gate before continuing.
+Expected: exit `0`; the script's own offline synchronization succeeds, seven headings appear in the required order, the script returns the caller to `docs`, and no lockfile changes. The script is independently offline and does not rely on a separate probe. If its offline synchronization fails because locked content is absent locally, stop and use the Task 2 one-time approval gate before rerunning the unchanged script.
 
 - [ ] **Step 6: Review the complete documentation and automation diff**
 
@@ -1939,7 +1990,7 @@ Expected: only the four Task 5 paths are uncommitted; the instructions and READM
 
 **Focused verification:** Execute `scripts/verify.ps1` from `docs` and confirm root resolution, ordered headings, first-failure behavior by inspection, exit propagation by implementation, and caller-directory restoration.
 
-**Broader verification:** The script itself runs frozen sync, format check, lint, strict mypy, full pytest with coverage, package build, and Git whitespace.
+**Broader verification:** The script itself runs offline frozen sync, no-sync format check, no-sync lint, no-sync strict mypy, no-sync full pytest with coverage, offline package build, and Git whitespace.
 
 **Commit:**
 
@@ -1959,8 +2010,10 @@ Expected: one commit containing exactly the four documentation and workflow file
 - Test: all Stage 1 tests and acceptance commands
 
 **Interfaces:**
-- Consumes: the four committed implementation-task outputs from Tasks 2–5
+- Consumes: all committed implementation-task outputs from Tasks 2–5, including any narrow correction commits
 - Produces: fresh console, format, lint, strict-type, test/coverage, build, safety, diff, and clean-worktree evidence only; no file or API output
+
+The preferred primary structure remains these four task commits: `chore: initialize python project foundation`, `feat: add package scaffold and version command`, `test: enforce architecture and safety boundaries`, and `docs: add repository development workflow`. They are not an exact total-commit requirement. A review or verification defect may use a narrow additional correction commit under the rules below.
 
 - [ ] **Step 1: Confirm a clean committed worktree**
 
@@ -1973,20 +2026,16 @@ Expected: exit `0` with no output. If any path is present, stop and resolve it i
 - [ ] **Step 2: Run the complete verification workflow fresh**
 
 ```powershell
-uv sync --frozen --offline
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
-}
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 ```
 
-Expected: exit `0`; the explicit offline probe first proves the locked packages are locally available, then frozen sync, Ruff format check, Ruff lint, strict mypy, full pytest with at least 90 percent branch coverage, sdist/wheel build, and Git whitespace pass without an expected package download. The script does not itself enforce offline mode; a failed probe returns to the Task 2 approval gate rather than continuing.
+Expected: exit `0`; the script itself performs offline frozen synchronization, no-sync Ruff format and lint, no-sync strict mypy, no-sync full pytest with at least 90 percent branch coverage, offline sdist/wheel build, and Git whitespace. It never initiates network access or relies on an earlier probe. If local locked content is missing, it fails and the operator returns to the Task 2 approval gate.
 
 - [ ] **Step 3: Prove both exact version forms**
 
 ```powershell
-uv run --frozen crypto-lab --version
-uv run --frozen python -m crypto_lab.cli --version
+uv run --no-sync crypto-lab --version
+uv run --no-sync python -m crypto_lab.cli --version
 ```
 
 Expected: each command exits `0` and prints exactly `crypto-lab 0.1.0` followed by one newline.
@@ -1994,9 +2043,9 @@ Expected: each command exits `0` and prints exactly `crypto-lab 0.1.0` followed 
 - [ ] **Step 4: Prove no-argument help and argparse failure**
 
 ```powershell
-uv run --frozen crypto-lab
+uv run --no-sync crypto-lab
 $helpExit = $LASTEXITCODE
-uv run --frozen crypto-lab --unknown
+uv run --no-sync crypto-lab --unknown
 $unknownExit = $LASTEXITCODE
 if ($helpExit -ne 0) { throw "No-argument help exited $helpExit" }
 if ($unknownExit -ne 2) { throw "Unknown argument exited $unknownExit instead of 2" }
@@ -2004,25 +2053,35 @@ if ($unknownExit -ne 2) { throw "Unknown argument exited $unknownExit instead of
 
 Expected: help begins with `usage: crypto-lab` and exits `0`; the unknown option emits argparse's error to stderr and exits `2`.
 
-- [ ] **Step 5: Review the complete four-commit Stage 1 path set**
+- [ ] **Step 5: Determine the Stage 1 base and review the complete path set**
 
 ```powershell
-git diff --name-status HEAD~4..HEAD
-git diff --stat HEAD~4..HEAD
-git diff --check HEAD~4..HEAD
+$stage1BaseCommit = (git merge-base HEAD main).Trim()
+if ([string]::IsNullOrWhiteSpace($stage1BaseCommit)) {
+    throw "Unable to determine the Stage 1 base commit"
+}
+
+git diff --name-status "$stage1BaseCommit..HEAD"
+git diff --stat "$stage1BaseCommit..HEAD"
+git diff --check "$stage1BaseCommit..HEAD"
 ```
 
-Expected: the name/status output matches exactly the created and modified Stage 1 file map in this plan; the stat contains no runtime, secret, engine, database, schema, GitNexus, MCP, Docker, WSL, workflow-hosting, or unrelated path; and the whitespace command exits `0`.
+Expected: merge-base resolution and every diff command exit `0`; the name/status output matches exactly the created and modified Stage 1 file map in this plan; the stat contains no runtime, secret, engine, database, schema, GitNexus, MCP, Docker, WSL, workflow-hosting, or unrelated path; every primary or correction commit since the branch point is included; and the whitespace check exits `0`.
 
 - [ ] **Step 6: Review the complete Stage 1 diff**
 
 ```powershell
-git diff HEAD~4..HEAD
+$stage1BaseCommit = (git merge-base HEAD main).Trim()
+if ([string]::IsNullOrWhiteSpace($stage1BaseCommit)) {
+    throw "Unable to determine the Stage 1 base commit"
+}
+
+git diff "$stage1BaseCommit..HEAD"
 ```
 
 Review every line against the normative specification, ADR, this plan, and these acceptance points:
 
-- package imports have no observable side effect;
+- the fresh-process import guard covers all fifteen planned modules, including `crypto_lab.cli.main` and `crypto_lab.cli.__main__`, and detects the named guarded calls, output, and paths below its temporary working directory; exact source review and architecture constraints cover the broader import boundary without claiming a complete operating-system side-effect detector;
 - `crypto_lab/__init__.py` contains no trading behavior or version duplication;
 - runtime dependencies and optional runtime groups are empty;
 - real engines and network clients are absent;
@@ -2042,14 +2101,14 @@ Expected: exit `0` with no output.
 
 **Focused verification:** Exact version, help, unknown-argument, file-map, and whitespace acceptance checks.
 
-**Broader verification:** A fresh full script run plus complete four-commit diff and safety review.
+**Broader verification:** A fresh independently offline full script run plus complete merge-base-to-HEAD diff and safety review.
 
-**Commit:** No commit command or commit message is permitted when this task changes no tracked evidence. Do not create an empty `chore: verify project foundation` commit. If verification exposes a defect, return to the owning task, make its correction through a failing test where production behavior is involved, and fold the correction into that owning Task 2–5 commit before rerunning Task 6. Preserve exactly four non-empty Stage 1 implementation commits so `HEAD~4..HEAD` continues to cover the complete stage; do not add a fifth correction commit.
+**Commit:** No commit command or commit message is permitted when this task changes no tracked evidence. Do not create an empty `chore: verify project foundation` commit. If verification exposes a defect, return to the owning task and make the narrow correction through a failing test where production behavior is involved. A correction commit is allowed; it must be non-empty, independently reviewed, and covered by the relevant focused and broader checks. Do not rewrite an already reviewed commit merely to preserve a commit count. Rerun Task 6 so the merge-base-to-HEAD review includes every primary and correction commit.
 
 ## Stage 1 implementation handoff
 
 - Preferred execution uses `superpowers:subagent-driven-development`, with a fresh worker and review gate per task.
-- Establish an isolated Git worktree through the appropriate Superpowers workflow before Task 2 changes any file. Task 1 remains the read-only source-repository preflight.
+- Establish an isolated Git worktree branch from local `main` through the appropriate Superpowers workflow before Task 2 changes any file, and prove its pre-edit merge base equals its current `HEAD`. Task 1 remains the read-only source-repository preflight.
 - Do not install, configure, or invoke GitNexus during Stage 1.
 - Do not begin execution until the user reviews and approves this plan.
 - After Stage 1 is implemented, freshly verified, reviewed, and committed, write and approve the Stage 2 Guarded GitNexus Development Tooling implementation plan.
