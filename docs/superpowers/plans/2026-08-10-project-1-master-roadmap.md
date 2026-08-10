@@ -54,9 +54,9 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 **Explicit exclusions:** All future domain records and services; generated canonical schemas; database or migrations; strategy YAML; protocol behavior; process supervision; artifact finalization; runtime directories; GitNexus; real or fake engine execution; application networking; Docker; and WSL requirements.
 
-**Required test categories:** Package and CLI unit/smoke tests, architecture-boundary tests, dependency-safety tests, forbidden-runtime-path tests, strict type checks, formatting/lint checks, offline package build, and offline full-suite verification using only offline synchronization and no-sync tool execution.
+**Required test categories:** Package and CLI unit/smoke tests, architecture-boundary tests, dependency-safety tests, forbidden-runtime-path tests, strict type checks, formatting/lint checks, offline lockfile-consistency validation before environment synchronization, offline package build, and offline full-suite verification using only offline synchronization and no-sync tool execution.
 
-**Exit evidence:** The independently offline Stage 1 verification script passes from a clean isolated worktree; the package builds offline; version and help behavior match their contract; coverage is at least 90 percent; prohibited dependencies and paths are absent; the complete base-to-HEAD diff is reviewed; and the stage ends in a clean committed worktree. Any approval-gated Task 2 dependency acquisition is recorded separately and is not verification evidence.
+**Exit evidence:** The independently offline Stage 1 verification script passes from a clean isolated worktree, with `uv lock --check --offline` succeeding before environment synchronization and proving that `uv.lock` matches the current project metadata; the package builds offline; version and help behavior match their contract; coverage is at least 90 percent; prohibited dependencies and paths are absent; the complete base-to-HEAD diff is reviewed; and the stage ends in a clean committed worktree. Any approval-gated Task 2 dependency acquisition is recorded separately and is not verification evidence.
 
 **Detailed implementation plan:** `docs/superpowers/plans/2026-08-10-project-1-foundation-implementation-plan.md`.
 
