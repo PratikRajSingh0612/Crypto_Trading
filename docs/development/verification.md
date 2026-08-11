@@ -8,10 +8,10 @@ Run these read-only checks from the repository root:
 
 ```powershell
 uv --version
-uv python find --managed-python --no-python-downloads 3.12
+uv python find --managed-python --system --no-python-downloads 3.12
 ```
 
-The second command must resolve the already installed user-local uv-managed CPython 3.12 and must not download an interpreter. Stop without installing anything automatically if the managed interpreter or `uv` is unavailable. Stage 1 does not require Windows `py` launcher or PythonCore registration, a Python installer or WinGet Python package, or a Python `PATH` entry.
+The second command must resolve the already installed user-local uv-managed CPython 3.12 and must not download an interpreter. It is read-only: `--system` skips the project `.venv` during discovery, `--managed-python` still requires a uv-managed install, and `--no-python-downloads` prevents acquisition without modifying system Python. Normal project execution still uses `.venv` via `uv run --no-sync`. Stop without installing anything automatically if the managed interpreter or `uv` is unavailable. Stage 1 does not require Windows `py` launcher or PythonCore registration, a Python installer or WinGet Python package, or a Python `PATH` entry.
 
 The verification workflow relies on `.python-version` requesting `3.12`, `[tool.uv] python-preference = "only-managed"` prohibiting fallback to system Python 3.13 or 3.13t, and `[tool.uv] python-downloads = "manual"` disabling automatic interpreter downloads. `scripts/verify.ps1` therefore uses the existing managed prerequisite and never installs Python.
 

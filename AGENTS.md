@@ -9,7 +9,7 @@
 ## Development workflow
 
 - Use only the user-local uv-managed CPython 3.12 selected by `uv` for the central project; never silently fall back to system Python 3.13 or 3.13t.
-- Confirm the prerequisite with `uv python find --managed-python --no-python-downloads 3.12`. Stop when the managed interpreter is missing; never auto-download an interpreter during ordinary development or verification.
+- Confirm the prerequisite with `uv python find --managed-python --system --no-python-downloads 3.12`. This read-only discovery uses `--system` to skip the project `.venv`; `--managed-python` still requires a uv-managed install, `--no-python-downloads` prevents acquisition, and the command does not modify system Python. Normal project execution still uses `.venv` via `uv run --no-sync`. Stop when the managed interpreter is missing; never auto-download an interpreter during ordinary development or verification.
 - Treat `uv python install --no-bin --no-registry <exact-version>` as a separately reviewed and approved pre-Stage-1 prerequisite task, never as an ordinary development or verification command.
 - Use test-driven development for production behavior: focused failing test, minimum implementation, focused passing test, then broader verification.
 - Run `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1` before claiming completion.
