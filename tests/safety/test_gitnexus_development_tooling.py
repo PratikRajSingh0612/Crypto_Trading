@@ -11,6 +11,8 @@ from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import Any, cast
 
+import pytest
+
 _EXPECTED_GITNEXUS_IGNORE_ENTRIES = {
     "/.git/",
     "/.gitnexus/",
@@ -88,6 +90,19 @@ _GENERATED_ENABLED_PATHS = (
     ".gitnexus",
     "tools/gitnexus/node_modules",
 )
+_EXPECTED_TERMINAL_OUTCOME_KEYS = {
+    "schema_version",
+    "stage",
+    "outcome",
+    "stage_3_planning_permitted",
+    "decision_date",
+    "package_name",
+    "package_version",
+    "reason_codes",
+    "required_mcp_controls",
+    "project_state",
+    "fallback",
+}
 _CURRENT_PIN_DISABLED_REASONS = (
     "PINNED_RELEASE_MISSING_REQUIRED_MCP_CONTROLS",
     "PINNED_RELEASE_REQUIRES_UNAUTHORIZED_EXTENSION_CONTROL",
@@ -109,6 +124,14 @@ _LATE_DISABLED_REASONS = {
     "SOURCE_RUNTIME_EXCLUSIONS_UNPROVEN",
     "OFFLINE_EXTENSION_BEHAVIOR_UNPROVEN",
     "CODEX_MCP_UNSTABLE_OR_UNSAFE",
+}
+_FORBIDDEN_SECRET_FIELDS = {
+    "api_key",
+    "apikey",
+    "password",
+    "credential",
+    "auth_token",
+    "access_token",
 }
 
 
@@ -155,6 +178,7 @@ def _terminal_outcome(repository_root: Path) -> dict[str, Any] | None:
 def _execution_route(repository_root: Path) -> str:
     outcome = _terminal_outcome(repository_root)
     if outcome is not None:
+        assert set(outcome) == _EXPECTED_TERMINAL_OUTCOME_KEYS
         value = cast(str, outcome["outcome"])
         assert value in {"ENABLED", "DISABLED_WITH_EVIDENCE"}
         return value
@@ -185,6 +209,18 @@ def _matches_reviewed_ignore(entries: set[str], relative_path: str) -> bool:
             return True
         if candidate_path.match(unanchored) or candidate_path.match(f"**/{unanchored}"):
             return True
+    return False
+
+
+def _contains_forbidden_secret_field(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            if isinstance(key, str) and key.casefold() in _FORBIDDEN_SECRET_FIELDS:
+                return True
+            if _contains_forbidden_secret_field(nested_value):
+                return True
+    elif isinstance(value, list):
+        return any(_contains_forbidden_secret_field(item) for item in value)
     return False
 
 
@@ -430,6 +466,8 @@ def test_node_package_files_are_isolated(repository_root: Path) -> None:
 def test_manifest_and_config_contain_no_secret_fields(repository_root: Path) -> None:
     manifest = _manifest(repository_root)
     outcome = _terminal_outcome(repository_root)
+    assert not _contains_forbidden_secret_field(manifest)
+    assert outcome is None or not _contains_forbidden_secret_field(outcome)
     texts = [json.dumps(manifest, sort_keys=True)]
     if outcome is not None:
         texts.append(json.dumps(outcome, sort_keys=True))
@@ -439,14 +477,7 @@ def test_manifest_and_config_contain_no_secret_fields(repository_root: Path) -> 
             texts.append(path.read_text(encoding="utf-8"))
     combined = "\n".join(texts)
 
-    for forbidden_field in (
-        "api_key",
-        "apikey",
-        "password",
-        "credential",
-        "auth_token",
-        "access_token",
-    ):
+    for forbidden_field in _FORBIDDEN_SECRET_FIELDS:
         assert (
             re.search(
                 rf"(?im)^\s*[\"']?{forbidden_field}[\"']?\s*[:=]",
@@ -455,3 +486,37 @@ def test_manifest_and_config_contain_no_secret_fields(repository_root: Path) -> 
             is None
         )
     assert re.search(r"[a-z]:\\users\\[^<]", combined, re.IGNORECASE) is None
+
+
+def test_unknown_outcome_keys_are_rejected(
+    repository_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outcome = _terminal_outcome(repository_root)
+    assert outcome is not None
+    tainted_outcome = {**outcome, "unexpected_review_key": True}
+
+    def _tainted_terminal_outcome(_: Path) -> dict[str, Any] | None:
+        return tainted_outcome
+
+    monkeypatch.setitem(globals(), "_terminal_outcome", _tainted_terminal_outcome)
+    with pytest.raises(AssertionError):
+        _execution_route(repository_root)
+
+
+def test_later_nested_secret_like_keys_are_rejected(
+    repository_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest(repository_root)
+    tainted_manifest = {
+        **manifest,
+        "review_probe": {"safe": True, "api_key": "sentinel"},
+    }
+
+    def _tainted_manifest(_: Path) -> dict[str, Any]:
+        return tainted_manifest
+
+    monkeypatch.setitem(globals(), "_manifest", _tainted_manifest)
+    with pytest.raises(AssertionError):
+        test_manifest_and_config_contain_no_secret_fields(repository_root)
