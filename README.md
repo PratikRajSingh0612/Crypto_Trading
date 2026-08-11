@@ -60,6 +60,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 
 The workflow checks that `uv.lock` matches the current project metadata before synchronizing the locked environment, then checks formatting, linting, strict typing, tests and coverage, package builds, and Git whitespace. See [development verification](docs/development/verification.md) for focused commands and the dependency network gate.
 
+## Optional GitNexus developer context
+
+Project 1 Stage 2 records its exact governance outcome in
+[`tools/gitnexus/outcome.json`](tools/gitnexus/outcome.json) and its reviewed
+package identity in
+[`tools/gitnexus/supply-chain.json`](tools/gitnexus/supply-chain.json).
+GitNexus is optional, advisory developer tooling and is not needed to set up,
+verify, build, test, or run the Python project.
+
+When the outcome is `DISABLED_WITH_EVIDENCE`, no package, MCP entry, wrapper,
+or local index is present. Use the manual source, reference, and diff workflow
+in [`tools/gitnexus/README.md`](tools/gitnexus/README.md). When the outcome is
+`ENABLED`, use only its project-local committed wrappers and exact lock.
+
 ## Architecture references
 
 - [Engine-neutral core design](docs/superpowers/specs/2026-08-10-engine-neutral-core-design.md)

@@ -24,7 +24,9 @@
 - Use `Decimal` for authoritative financial values and timezone-aware UTC timestamps when those types are introduced.
 - Reject unknown fields at future configuration, schema, protocol, and artifact boundaries.
 - Never install or import a real trading engine during Project 1.
-- During Stage 1, do not install, configure, or invoke GitNexus. After a separately approved Stage 2, keep it optional, project-scoped, read-only, advisory, and outside product, build, test, and runtime dependencies.
+- Read `tools/gitnexus/outcome.json` before any GitNexus action. When it records `DISABLED_WITH_EVIDENCE`, do not install, configure, or invoke GitNexus; use the documented manual source, reference, and diff fallback.
+- When `tools/gitnexus/outcome.json` records `ENABLED`, use only the committed project-local wrappers and exact lock. Never use a PATH-discovered or user-profile launcher, and keep GitNexus optional, project-scoped, proven read-only, advisory, and outside product, build, test, runtime, and acceptance dependencies.
+- GitNexus absence or failure must never block application implementation, tests, builds, reviews, runtime operation, acceptance, or Stage 3 planning.
 
 ## Safety boundaries
 

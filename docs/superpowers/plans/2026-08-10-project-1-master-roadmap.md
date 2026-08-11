@@ -1,6 +1,6 @@
 # Project 1 Engine-Neutral Core Implementation Roadmap
 
-**Status:** Approved planning decomposition; implementation has not started
+**Status:** Approved planning decomposition; Stages 1 and 2 complete
 
 ## 1. Purpose
 
@@ -366,9 +366,9 @@ From Stage 3 onward, GitNexus is expected to be available when healthy after `EN
 
 | Stage | Detailed plan status | Implementation status | Exit-gate status |
 |---|---|---|---|
-| 1 — Repository Foundation and Quality Gates | Created in this planning task; awaiting user review | Not started | Not evaluated |
-| 2 — Guarded GitNexus Development Tooling | Intentionally deferred until Stage 1 completion; its future plan must define both paths, and Stage 2 execution records and evidences exactly one | Not started | Not evaluated |
-| 3 — Canonical Domain, Configuration, Hashing, and Schemas | Intentionally deferred until Stage 1 and the Stage 2 governance outcome are complete; either outcome permits planning | Not started | Not evaluated |
+| 1 — Repository Foundation and Quality Gates | Approved and executed | Complete at `56d029e8e6d3c67dc6309b267c74833a09d2e419` | Complete |
+| 2 — Guarded GitNexus Development Tooling | Approved and executed | `DISABLED_WITH_EVIDENCE`: pinned 1.6.9 lacks mandatory MCP controls; no partial tooling remains | Complete; ordinary offline verification and manual fallback recorded |
+| 3 — Canonical Domain, Configuration, Hashing, and Schemas | Eligible for just-in-time planning after the completed Stage 2 governance decision | Not started | Not evaluated |
 | 4 — Portable Strategy, Capabilities, and Comparison | Intentionally deferred until Stage 3 completion | Not started | Not evaluated |
 | 5 — Experiment, Run, Invocation, Retry, and Aggregation Logic | Intentionally deferred until Stages 3–4 completion | Not started | Not evaluated |
 | 6 — Adapter Protocol and Fake-Adapter Contract Harness | Intentionally deferred until Stages 3 and 5 completion | Not started | Not evaluated |

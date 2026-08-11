@@ -319,6 +319,86 @@ def test_repository_local_sdd_ledger_is_ignored(repository_root: Path) -> None:
     assert "/tools/gitnexus/node_modules/" in entries
 
 
+def test_tooling_evidence_directory_matches_outcome(repository_root: Path) -> None:
+    route = _execution_route(repository_root)
+    prefix = "tools/gitnexus/"
+    relative_files = {
+        path.removeprefix(prefix)
+        for path in _tracked_paths(repository_root)
+        if path.startswith(prefix)
+    }
+    enabled_files = {
+        "README.md",
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "scripts/gitnexus-mcp.ps1",
+        "scripts/gitnexus.ps1",
+        "scripts/install.ps1",
+        "scripts/verify.ps1",
+        "supply-chain.json",
+    }
+
+    if route == "DISABLED_WITH_EVIDENCE":
+        assert relative_files == {
+            "README.md",
+            "outcome.json",
+            "supply-chain.json",
+        }
+    elif route == "ENABLED_CANDIDATE":
+        assert relative_files == enabled_files
+        assert _terminal_outcome(repository_root) is None
+    else:
+        assert route == "ENABLED"
+        assert relative_files == enabled_files | {"outcome.json"}
+
+    pyproject = _load_toml(repository_root / "pyproject.toml")
+    hatch = cast(dict[str, Any], pyproject["tool"])["hatch"]
+    build = cast(dict[str, Any], hatch["build"])
+    targets = cast(dict[str, Any], build["targets"])
+    sdist = cast(dict[str, Any], targets["sdist"])
+    include = cast(list[str], sdist["include"])
+    assert all(path != "/tools" and not path.startswith("/tools/") for path in include)
+    wheel = cast(dict[str, Any], targets["wheel"])
+    assert wheel["packages"] == ["src/crypto_lab"]
+
+
+def test_terminal_outcome_matches_roadmap_status(repository_root: Path) -> None:
+    route = _execution_route(repository_root)
+    roadmap = (
+        repository_root
+        / "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
+    ).read_text(encoding="utf-8")
+    enabled_row = (
+        "| 2 — Guarded GitNexus Development Tooling | Approved and executed | "
+        "`ENABLED`: exact package, local index, project MCP, exclusions, and "
+        "bounded read-only tools verified | Complete; ordinary offline "
+        "verification also passes with GitNexus disabled |"
+    )
+    disabled_row = (
+        "| 2 — Guarded GitNexus Development Tooling | Approved and executed | "
+        "`DISABLED_WITH_EVIDENCE`: pinned 1.6.9 lacks mandatory MCP controls; "
+        "no partial tooling remains | Complete; ordinary offline verification "
+        "and manual fallback recorded |"
+    )
+    if route == "ENABLED_CANDIDATE":
+        assert enabled_row not in roadmap
+        assert disabled_row not in roadmap
+        return
+
+    assert (
+        "**Status:** Approved planning decomposition; Stages 1 and 2 complete"
+        in roadmap
+    )
+    if route == "ENABLED":
+        assert enabled_row in roadmap
+        assert disabled_row not in roadmap
+    else:
+        assert route == "DISABLED_WITH_EVIDENCE"
+        assert disabled_row in roadmap
+        assert enabled_row not in roadmap
+
+
 def test_disabled_outcome_has_no_partial_tooling(repository_root: Path) -> None:
     if _execution_route(repository_root) != "DISABLED_WITH_EVIDENCE":
         return
