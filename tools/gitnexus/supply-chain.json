@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "research_date": "2026-08-11",
+  "verification_date": "2026-08-11",
+  "package_name": "gitnexus",
+  "package_version": "1.6.9",
+  "dist_integrity": "sha512-Rq5LXFygx7jjMp/YFsIAcnnzuKvvCsb4rxHFILnu05ZOqk7xNXTUSMRa968EOCbxcKFxnhKYaGXoabOUeGZX6A==",
+  "dist_shasum": "23ba4e53a8a6ad7daa501d6c4a8b4e4d8fba57a0",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "repository_url": "git+https://github.com/abhigyanpatwari/GitNexus.git",
+  "repository_tag": "v1.6.9",
+  "repository_directory": "gitnexus",
+  "published_at_utc": "2026-07-04T07:13:01.960Z",
+  "required_node_range": ">=22.0.0",
+  "selected_package_manager": "pnpm",
+  "selected_package_manager_version": "11.9.0",
+  "package_binary_mapping": {
+    "gitnexus": "dist/cli/index.js"
+  },
+  "official_sources": [
+    "https://registry.npmjs.org/gitnexus/1.6.9",
+    "https://github.com/abhigyanpatwari/GitNexus/blob/v1.6.9/gitnexus/package.json",
+    "https://github.com/abhigyanpatwari/GitNexus/blob/v1.6.9/gitnexus/src/cli/analyze-config.ts",
+    "https://github.com/abhigyanpatwari/GitNexus/blob/v1.6.9/gitnexus/src/mcp/server.ts",
+    "https://github.com/abhigyanpatwari/GitNexus/blob/v1.6.9/gitnexus/src/mcp/tools.ts",
+    "https://developers.openai.com/codex/mcp",
+    "https://developers.openai.com/codex/config-reference"
+  ]
+}

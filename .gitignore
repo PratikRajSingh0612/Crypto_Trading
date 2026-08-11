@@ -51,3 +51,5 @@ Thumbs.db
 /logs/
 /runtimes/
 /.gitnexus/
+/.superpowers/sdd/
+/tools/gitnexus/node_modules/
