@@ -369,6 +369,20 @@ def test_terminal_outcome_matches_roadmap_status(repository_root: Path) -> None:
         repository_root
         / "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
     ).read_text(encoding="utf-8")
+    assert "Stages 1 and 2 have approved detailed implementation plans." in roadmap
+    assert "Only Stage 1 has a detailed implementation plan" not in roadmap
+    approved_stage_2_plan = (
+        "**Approved detailed implementation plan:** "
+        "`docs/superpowers/plans/"
+        "2026-08-10-project-1-gitnexus-development-tooling-implementation-plan.md`."
+    )
+    obsolete_stage_2_plan = (
+        "**Planned detailed implementation plan:** "
+        "`docs/superpowers/plans/"
+        "2026-08-10-project-1-gitnexus-development-tooling-implementation-plan.md`."
+    )
+    assert approved_stage_2_plan in roadmap
+    assert obsolete_stage_2_plan not in roadmap
     enabled_row = (
         "| 2 — Guarded GitNexus Development Tooling | Approved and executed | "
         "`ENABLED`: exact package, local index, project MCP, exclusions, and "

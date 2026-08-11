@@ -6,7 +6,7 @@
 
 This roadmap decomposes the approved Project 1 engine-neutral core design into ten ordered implementation stages. It fixes ownership, dependencies, exclusions, review gates, and acceptance evidence without authorizing implementation or embedding stage-level executable instructions.
 
-Only Stage 1 has a detailed implementation plan in the current planning task. Every later detailed plan is written just in time after its prerequisite implementation is complete, verified, reviewed, and committed.
+Stages 1 and 2 have approved detailed implementation plans. Every later detailed plan is written just in time after its prerequisite implementation is complete, verified, reviewed, and committed.
 
 ## 2. Normative source documents and commits
 
@@ -84,7 +84,7 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 **Exit evidence:** Stage 2 records exactly one acceptable outcome. `ENABLED` requires verified exact version and license, recorded package integrity, project-scoped read-only MCP configuration, verified repository allowlist and exclusions, a successful bounded local query, and ordinary offline verification passing with GitNexus disabled. `DISABLED_WITH_EVIDENCE` requires a recorded decline/unavailability/incompatibility/unverifiability/safety reason with inspected evidence, no remaining partial project-scoped GitNexus or MCP configuration and no local index, a documented manual source/reference/diff fallback, and ordinary offline verification passing without GitNexus. Either outcome completes Stage 2 and permits Stage 3 planning.
 
-**Planned detailed implementation plan:** `docs/superpowers/plans/2026-08-10-project-1-gitnexus-development-tooling-implementation-plan.md`.
+**Approved detailed implementation plan:** `docs/superpowers/plans/2026-08-10-project-1-gitnexus-development-tooling-implementation-plan.md`.
 
 | Control | Stage 2 permission |
 |---|---|
