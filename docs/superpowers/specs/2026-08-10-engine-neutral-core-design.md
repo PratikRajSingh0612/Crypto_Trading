@@ -393,6 +393,47 @@ Infrastructure exceptions are caught at their owning boundary and converted to s
 
 The central project may select concrete linting, type-checking, and safe-YAML libraries during implementation planning, but those choices MUST enforce the contracts above and MUST NOT weaken strict typing, safe parsing, or rejection of arbitrary YAML tags.
 
+Pydantic v2 dependency code alone MAY read the fixed, non-secret process
+variable `PYDANTIC_DISABLE_PLUGINS=__all__`. A reviewed,
+repository-controlled process launcher MUST set that exact literal
+unconditionally in the child environment before the Python interpreter starts
+whenever the child may import Pydantic models, construct Pydantic validators,
+or generate Pydantic schemas. The launcher MUST NOT inspect, preserve, or use
+an alternative ambient value as configuration. Application, domain,
+configuration, schema, and CLI Python modules MUST NOT read, set, mutate,
+branch on, print, log, persist, or expose the variable. It is deterministic
+dependency hardening, not application or user configuration, a credential, an
+experiment input, a canonical field, a runtime product input, or hash
+material. No other environment-variable exception is authorized.
+
+The repository launcher MUST expose only reviewed, closed operation profiles;
+MUST bind uv to the repository root, the repository project, uv-managed
+CPython 3.12, disabled Python downloads, and offline mode for ordinary work;
+and MUST reject caller-selected executables, Python code, plugin loading,
+configuration files, and paths outside the reviewed repository scope. It MUST
+resolve exactly one `uv.exe` application, normalize that executable to an
+absolute path, and fail closed when resolution is absent or ambiguous. To
+prevent ambient tool-selection or plugin-injection controls from overriding
+those bindings, the launcher MAY remove only the fixed literal uv, Python,
+virtual-environment, pytest, coverage/pytest-cov, and mypy variable names enumerated by the reviewed
+Stage 3 plan, assigning null to each named process entry. It MUST NOT enumerate
+environment variables, call an environment-value getter, or inspect, save,
+print, log, persist, restore, or branch on any removed value. Removing those
+fixed names is deterministic fail-closed sanitization, not a configuration
+source and not authority to read or set another environment variable.
+
+Project dependency work is stage-local and offline-first. An active stage that
+introduces an explicitly approved dependency MUST first run the exact
+lock-resolution, lock-check, and synchronization sequence written in its
+approved implementation plan with offline enforcement. If required registry
+metadata or locked distributions are absent locally, only the exact one-time
+non-offline lock or synchronization command named by that stage plan MAY run,
+and only after the user separately approves that command. Dependency
+acquisition is bootstrap evidence, never verification evidence. Every
+verification workflow remains offline, and ordinary work returns immediately
+to the repository-controlled offline launcher. This rule does not expand
+application or runtime network authority.
+
 Development-only repository context tooling is governed by [ADR 0001: GitNexus for Local Development Context](../../decisions/0001-gitnexus-development-tooling.md). That tooling is non-normative and outside the runtime architecture; it MUST NOT weaken any Project 1 security, determinism, testing, or dependency-direction requirement.
 
 ## 10. Canonical identity and reproducibility
@@ -1530,7 +1571,7 @@ Diagnostics form an acyclic causal graph. A run-level terminal diagnostic may re
 - JSON is used for generated manifests, descriptors, requests, protocol events, and small structured artifacts.
 - Parquet is used for large tabular datasets and result series.
 
-Configuration models are strict, versioned, and reject unknown fields. The core does not read application configuration, credentials, tokens, or engine settings from environment variables in Project 1.
+Configuration models are strict, versioned, and reject unknown fields. The core does not read application configuration, credentials, tokens, or engine settings from environment variables in Project 1. The fixed Pydantic plugin-discovery control in section 9 is injected by repository tooling before Python starts and is never a configuration source or model field.
 
 ### 22.2 Deterministic precedence
 
@@ -1580,6 +1621,12 @@ Relative paths resolve against the directory containing the explicitly supplied 
 The canonical run-configuration hash covers every row marked material plus selected adapter and engine identities, fee/slippage/execution assumptions, dataset/strategy hashes, and comparison level. The strict `scheduler.retry` object is normalized into `RetryPolicy`; duplicate or foreign terminal states fail validation, and its canonical bytes must equal `ExperimentSpec.retry_policy` before queueing. Command and result-finalization timeout values are taken from the queued experiment snapshot rather than ambient later configuration; a catalog-only `describe` records the normalized invocation-time snapshot it used. The superseded per-attempt stderr key is an unknown field and is rejected rather than retained as an alias. A separate application audit hash covers the complete normalized configuration, including operational paths and concurrency, so local behavior remains explainable without making machine-specific paths economic inputs.
 
 Project 1 child processes receive a fresh environment block rather than inheriting the parent's block. The Project 1 adapter catalog permits no environment entries. Absolute executable paths, request paths, output paths, and working directories are passed as arguments. A future adapter needing non-secret fixed environment entries requires its own reviewed adapter design; ambient inheritance and environment-based credentials remain prohibited.
+
+Repository development and verification launchers are outside the adapter
+catalog and product configuration boundary. They may inject only the exact
+fixed Pydantic dependency control authorized in section 9. That narrow
+development-process rule does not authorize the core or a future adapter to
+inherit, inspect, or consume ambient environment values.
 
 ### 22.3 Configuration boundaries
 
@@ -1703,6 +1750,7 @@ Project 1 enforces the following statements:
 - No `shell=True` or equivalent
 - No implicit network access
 - No automatic plugin discovery from untrusted paths
+- Pydantic plugin discovery is disabled before Python starts by the reviewed repository launcher setting only `PYDANTIC_DISABLE_PLUGINS=__all__`; product modules neither inspect nor expose that control
 - No direct adapter access to the registry database
 - No adapter writes outside its assigned working directory by contract
 - No exchange credentials or other secrets in strategy files, experiment records, manifests, logs, diagnostics, or artifacts; the attempt token is not an exchange credential but is still sensitive correlation material and is excluded from authoritative and finalized records
@@ -1912,6 +1960,14 @@ Runtime directories are never Python packages and never a source of automatic pl
 ## 28. Testing strategy
 
 Project 1's test suite uses fake adapters only. It does not install, import, execute, or require VectorBT Community, Freqtrade, NautilusTrader, Jesse, OctoBot, Hummingbot, or QuantConnect LEAN. Tests run offline and use temporary directories for generated state.
+
+Every development or verification child that may load Pydantic runs through
+the repository-controlled launcher. Launcher tests prove that the fixed
+disable-all plugin policy is effective even when a conflicting parent value
+exists, the parent environment is unchanged, arguments are preserved, and the
+child's native exit code propagates. Source and import-boundary tests separately
+prove that Project 1 application modules do not access the control or any
+other ambient environment value.
 
 ### 28.1 Unit tests
 
@@ -2328,6 +2384,7 @@ Project 1's future implementation is acceptable only when all of the following a
 ### 33.7 Security and exclusions
 
 - There is no live-order API, credential model, API-key handling, withdrawal behavior, implicit network access, arbitrary shell string, pickle boundary, or automatic untrusted plugin discovery.
+- Every process that may load Pydantic receives the exact fixed disable-all plugin control before Python starts through the reviewed repository launcher; the dependency-only exception never enters application configuration, canonical data, hashes, diagnostics, logs, audit records, or product runtime inputs.
 - There is no Binance API integration, real market-data download, real backtest, paper wallet, tax/TDS logic, risk engine, dashboard, LLM, cloud deployment, Docker use, server deployment, strategy optimization, or promotion logic in Project 1.
 - All seven engines appear only as future adapter intents and are not claimed as verified or installed.
 - The complete Project 1 suite passes offline using fake adapters only.

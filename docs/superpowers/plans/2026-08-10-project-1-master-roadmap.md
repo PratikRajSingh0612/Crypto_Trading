@@ -35,8 +35,9 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 - The core launches explicitly registered child executables with argument arrays and no shell. Adapters receive neither writable registry access nor authority over final artifact paths.
 - SQLite is the authoritative metadata registry once persistence is introduced. Immutable large content stays outside SQLite and is registered only through core-owned finalization.
 - Canonical schemas and relational migrations change only in stages explicitly authorized below and only within that stage's named ownership boundary.
-- Every verification workflow in every stage remains offline. Application and runtime networking remain prohibited throughout Project 1.
-- Prerequisite and developer-tool acquisition has three separate approval-gated exceptions to the offline rule: before Stage 1, the selected interpreter may be downloaded exactly once with `uv python install --no-bin --no-registry 3.12.13`; during Stage 1, the exact one-time `uv lock` and `uv sync --frozen --no-install-project` dependency-bootstrap commands may run when the local cache is incomplete; and during Stage 2, the exact one-time GitNexus package-installation command may run as approved under ADR 0001. The interpreter download is prerequisite acquisition, not verification evidence. These three operations remain distinct; none authorizes online verification, automatic interpreter downloads, application networking, or runtime networking.
+- Every verification workflow in every stage remains offline. From Stage 3 onward, every lock resolution/check, synchronization, installed Python-tool invocation, and build runs through closed named profiles in a reviewed repository-controlled child-process launcher. Ordinary profiles pin the repository/project and managed Python version, disable uv configuration/downloads and network access, require exactly one resolvable `uv.exe`, and invoke its normalized absolute path; run profiles also disable synchronization and dotenv loading. The launcher injects only the fixed `PYDANTIC_DISABLE_PLUGINS=__all__` dependency-hardening control before Python starts. Application and runtime networking remain prohibited throughout Project 1.
+- Dependency acquisition is always stage-local, offline-first, exact, and approval-gated. An active stage that introduces an explicitly approved dependency first runs its stage-plan lock-resolution and synchronization commands offline. Only when required registry metadata or locked distributions are missing may the controller present the exact one-time non-offline command written in that approved stage plan and run it after explicit user approval; verification never uses the network, and ordinary work returns immediately to the offline launcher. The historical exceptions remain distinct: before Stage 1, the selected interpreter could be downloaded exactly once with `uv python install --no-bin --no-registry 3.12.13`; Stage 1 Task 2 could run its exact approved `uv lock` and `uv sync --frozen --no-install-project`; and Stage 2 could run its exact approved GitNexus package-installation command. None authorizes online verification, automatic downloads, ambient or permanent network access, application networking, or runtime networking.
+- Pydantic dependency code alone may read `PYDANTIC_DISABLE_PLUGINS=__all__`. The repository launcher sets that fixed non-secret literal unconditionally in each relevant child and never treats an ambient value as configuration. It may remove only reviewed fixed literal uv, Python, virtual-environment, pytest, coverage/pytest-cov, and mypy selection/injection variable names before invocation, without enumerating, reading, saving, printing, logging, persisting, or restoring their values. Application, domain, configuration, schema, and CLI modules never read, set, branch on, print, log, persist, expose, or hash the Pydantic control. It is neither application/user configuration nor a credential, experiment input, canonical field, or product runtime input; no other environment-variable exception follows.
 - GitNexus is optional, advisory, read-only development context. It is never a product, runtime, build, test, or acceptance dependency.
 - Terminal states, immutable records, source evidence, stale-attempt protection, raw-token exclusion, and result/evidence separation may not be weakened for convenience.
 
@@ -101,19 +102,20 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 **Prerequisite stages:** Stages 1 and 2. The Stage 2 dependency is on completing its governance decision, satisfied by either `ENABLED` or `DISABLED_WITH_EVIDENCE`, not on successfully installing or enabling GitNexus.
 
-**Major deliverables:** Operational identifiers; canonical UTC and Decimal primitives; diagnostic foundations; canonical JSON and domain-separated hashing profiles; strict configuration precedence and safety policy; dataset descriptors and partitions as metadata contracts; foundational engine and adapter descriptor schemas; all `ArtifactOwnerRef` variants; schema generation infrastructure; reviewed generated schemas; and deterministic in-memory validation.
+**Major deliverables:** A repository-controlled offline uv/Python launcher with fixed Pydantic plugin discovery disabled before interpreter startup; operational identifiers; canonical UTC and Decimal primitives; diagnostic foundations; canonical JSON and domain-separated hashing profiles; strict configuration precedence and safety policy; dataset descriptors and partitions as metadata contracts; foundational engine and adapter descriptor schemas; all `ArtifactOwnerRef` variants; schema generation infrastructure; reviewed generated schemas; and deterministic in-memory validation.
 
 **Explicit exclusions:** Real data download/import/normalization; strategy evaluation; experiment orchestration; process launch; concrete persistence; real adapters or engines; artifact filesystem finalization; and application network access.
 
-**Required test categories:** Model and unknown-field validation, Decimal/time round trips, hash golden and property tests, configuration precedence and safety-policy tests, owner-union property tests, dataset metadata validation, and generated-schema consistency.
+**Required test categories:** Launcher closure, argument/exit propagation, fixed plugin-disable behavior, and parent-environment isolation; model and unknown-field validation; Decimal/time round trips; hash golden and property tests; configuration precedence and safety-policy tests; owner-union property tests; dataset metadata validation; and generated-schema consistency.
 
-**Exit evidence:** Canonical serialization and hashes are deterministic; invalid boundary values fail; every initial schema regenerates without diff; configuration safety invariants pass offline; and cumulative lint, types, tests, build, and review gates are green.
+**Exit evidence:** The reviewed launcher proves the exact fixed Pydantic control is effective without allowing application environment access; canonical serialization and hashes are deterministic; invalid boundary values fail; every initial schema regenerates without diff; configuration safety invariants pass offline; and cumulative lint, types, tests, build, and review gates are green.
 
 **Planned detailed implementation plan:** `docs/superpowers/plans/2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-implementation-plan.md`.
 
 | Control | Stage 3 permission |
 |---|---|
 | GitNexus expected | Use only after `ENABLED` while healthy; otherwise use the manual fallback; always advisory and non-blocking |
+| Dependency bootstrap network | Offline resolution, lock check, and synchronization first; only the exact one-time Task 1 `uv lock` and `uv sync --frozen --no-install-project` fallbacks may run after separate user approval when required metadata or locked distributions are absent; verification never uses the network |
 | Relational schema changes | No |
 | Canonical schema changes | Yes, limited to foundational domain, configuration, dataset, descriptor, ownership, and generator contracts |
 
@@ -335,6 +337,14 @@ Every implementation stage must pass all fifteen gates:
 13. A code-review gate resolves material findings.
 14. Fresh verification evidence is collected before any completion claim.
 15. The stage ends in a clean committed worktree before the next stage begins.
+
+For any stage that introduces a newly approved dependency, the stage plan must
+name the exact offline-first lock and synchronization sequence and any exact
+one-time non-offline fallback commands. A fallback requires explicit user
+approval and is bootstrap evidence only; it never satisfies or weakens a
+verification gate. From Stage 3 onward, the fixed Pydantic plugin-discovery
+control is applied only by the reviewed repository launcher before relevant
+Python children start.
 
 A passing GitNexus query, context report, or impact report cannot replace any ordinary verification gate. GitNexus absence cannot block application implementation, builds, tests, runtime operation, reviews, or acceptance.
 
