@@ -366,7 +366,10 @@ grammar, literal-only environment removal/assignment, no ambient-value
 save/read/restore, repository-root/project pinning, unique absolute `uv.exe`
 resolution, native exit-code 37 propagation, effective Pydantic plugin
 disablement, hostile selection-variable removal, and unchanged test-controlled
-parent values. They use only fixed non-secret test values.
+parent values. They use only fixed non-secret test values. The `mypy-all`
+profile supplies no positional file targets: its fixed
+`python -I -B -m mypy` child reads only the repository-owned
+`[tool.mypy].files` scope, which is `src` and `tests` through Task 6.
 
 Apply these exact changes to
 `tests/safety/test_project_dependencies.py`:
@@ -448,11 +451,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   .\scripts\invoke-uv.ps1 pytest-launcher-bootstrap
 ```
 
-Expected: every selected contract passes with no skip. The two dependency
-availability/proof tests are excluded because Stage 3 dependencies are not yet
-declared. No unguarded Python process has run: the inherited pytest is a child
-of the reviewed launcher and therefore receives the fixed control before its
-interpreter starts. This one closed bootstrap profile injects exact
+Expected: every selected non-privilege-dependent contract passes. On Windows,
+`test_launcher_rejects_reparse_point_test_target` may be the sole skip, and
+only with the fixed reason `Windows test principal cannot create a symbolic
+link`. The privilege-free
+`test_launcher_rejects_junction_target_without_optional_privilege` contract
+must pass and prove deterministic reparse-point rejection; any other skip or
+failure blocks the task. Record the optional skip explicitly. The two
+dependency availability/proof tests are excluded because Stage 3 dependencies
+are not yet declared. No unguarded Python process has run: the inherited pytest
+is a child of the reviewed launcher and therefore receives the fixed control
+before its interpreter starts. This one closed bootstrap profile injects exact
 `-o addopts=` arguments before its fixed test path so the inherited Project 1
 coverage addopts cannot require the not-yet-declared coverage dependencies;
 ordinary and focused post-bootstrap pytest profiles retain the complete
@@ -1455,7 +1464,8 @@ git commit -m "feat: add dataset metadata contracts"
 **Interfaces:**
 - Produces: closed `SCHEMA_DEFINITIONS`; deterministic
   `render_schema_files()`; explicit-output check/write CLI; exact wheel/sdist
-  byte verifier; complete Stage 3 import/source/scope guards.
+  byte verifier; complete Stage 3 import/source/scope guards; and repository
+  Ruff/mypy scopes expanded to the newly introduced Python scripts.
 - Consumes: every Stage 3 public top-level model and the
   `ArtifactOwnerRef` `TypeAdapter`.
 
@@ -1477,6 +1487,350 @@ imports of real engines, exchanges, networking clients, `socket`, `urllib`,
 PyArrow, and dataframe libraries. It separately rejects environment/profile/
 credential access and later-stage class/function names. It allows only
 Pydantic plus the standard-library modules explicitly used in this stage.
+
+Appendix A.8 displays the cumulative final
+`tests/safety/test_stage3_boundaries.py` bytes after Task 8. In Task 7, create
+the independently executable baseline with exactly this complete content:
+
+```python
+"""Enforce the Stage 3 architectural, source, schema, and verifier boundary."""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+import pytest
+
+from crypto_lab.schema_registry import SCHEMA_DEFINITIONS
+
+_ALLOWED_SOURCE_FILES = {
+    "__init__.py",
+    "adapters/__init__.py",
+    "adapters/descriptors.py",
+    "adapters/versioning.py",
+    "artifacts/__init__.py",
+    "artifacts/ownership.py",
+    "audit/__init__.py",
+    "capabilities/__init__.py",
+    "cli/__init__.py",
+    "cli/__main__.py",
+    "cli/main.py",
+    "configuration/__init__.py",
+    "configuration/loader.py",
+    "configuration/models.py",
+    "configuration/snapshot.py",
+    "datasets/__init__.py",
+    "datasets/hashing.py",
+    "datasets/models.py",
+    "domain/__init__.py",
+    "domain/base.py",
+    "domain/canonical_json.py",
+    "domain/diagnostics.py",
+    "domain/financial.py",
+    "domain/hashing.py",
+    "domain/identifiers.py",
+    "domain/records.py",
+    "domain/time.py",
+    "domain/versioning.py",
+    "experiments/__init__.py",
+    "persistence/__init__.py",
+    "process_supervision/__init__.py",
+    "schema_registry.py",
+    "strategy/__init__.py",
+}
+_ALLOWED_IMPORT_ROOTS = {
+    "__future__",
+    "argparse",
+    "collections",
+    "crypto_lab",
+    "dataclasses",
+    "datetime",
+    "decimal",
+    "enum",
+    "hashlib",
+    "importlib",
+    "json",
+    "pathlib",
+    "pydantic",
+    "re",
+    "tomllib",
+    "typing",
+    "uuid",
+}
+_FORBIDDEN_AMBIENT_NAMES = {
+    "os.environ",
+    "os.getenv",
+    "os.putenv",
+    "os.spawnl",
+    "os.spawnle",
+    "os.spawnlp",
+    "os.spawnlpe",
+    "os.spawnv",
+    "os.spawnve",
+    "os.spawnvp",
+    "os.spawnvpe",
+    "os.startfile",
+    "os.system",
+    "os.unsetenv",
+    "pathlib.Path.cwd",
+    "pathlib.Path.expanduser",
+    "pathlib.Path.home",
+}
+_DEFERRED_DEFINITIONS = {
+    "AdapterCatalog",
+    "AdapterCatalogEntry",
+    "AdapterCommand",
+    "AdapterCommandRequestEnvelope",
+    "AdapterResultManifest",
+    "AdapterValidationResult",
+    "ApproximationDeclaration",
+    "ArtifactFinalizationPurpose",
+    "ArtifactFinalizer",
+    "ArtifactOwnerKind",
+    "ArtifactRef",
+    "ArtifactRepository",
+    "ArtifactSourceRole",
+    "AuditSink",
+    "AuditEvent",
+    "BootstrapDescriptorEnvelope",
+    "CancellationToken",
+    "CandidateArtifact",
+    "CandidateArtifactRepository",
+    "CandidateArtifactState",
+    "CandidateArtifactProducerKind",
+    "CandidateFinalization",
+    "CanonicalFill",
+    "CanonicalOrder",
+    "CapabilityDeclaration",
+    "CapabilityRequirement",
+    "CapabilityVocabulary",
+    "CommandInvocationRecord",
+    "CommandInvocationRepository",
+    "CommandInvocationState",
+    "CommandKind",
+    "CommandResult",
+    "ComparisonEligibilityResult",
+    "ComparisonEligibilityService",
+    "ComparisonLevel",
+    "CompatibilityPolicy",
+    "CompatibilityResolver",
+    "CompatibilityOutcome",
+    "CompatibilityResult",
+    "ContentHasher",
+    "Clock",
+    "DatasetRepository",
+    "EngineRunRecord",
+    "EngineRunRepository",
+    "EngineRunRequest",
+    "EquityPoint",
+    "EvidenceFinalizationRequest",
+    "ExperimentRecord",
+    "ExperimentRepository",
+    "ExperimentSpec",
+    "Fee",
+    "FinalizationResult",
+    "NegotiationResult",
+    "MetricValue",
+    "MonotonicInstant",
+    "OrderSide",
+    "OrderType",
+    "PortfolioSnapshot",
+    "PositionSnapshot",
+    "PositionEffect",
+    "ProcessSupervisor",
+    "ProtocolEventEnvelope",
+    "ResultFinalizationRequest",
+    "RetryPolicy",
+    "Result",
+    "RunEvent",
+    "RunManifest",
+    "RuntimeAvailabilityObservation",
+    "SanitizedAdapterResultManifest",
+    "SemanticStatus",
+    "StrategyLoader",
+    "StrategySpec",
+    "StrategyVersion",
+    "UnitOfWork",
+    "ValidationOutcome",
+    "ingest_dataset",
+    "negotiate_protocol",
+    "normalize_dataset",
+    "place_order",
+}
+
+
+def _qualified_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _qualified_name(node.value)
+        return None if parent is None else f"{parent}.{node.attr}"
+    return None
+
+
+def _import_aliases(tree: ast.AST) -> dict[str, str]:
+    aliases: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                bound = alias.asname or alias.name.partition(".")[0]
+                aliases[bound] = alias.name if alias.asname else bound
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                bound = alias.asname or alias.name
+                aliases[bound] = f"{node.module}.{alias.name}"
+    return aliases
+
+
+def _resolved_qualified_name(
+    node: ast.AST,
+    aliases: dict[str, str],
+) -> str | None:
+    name = _qualified_name(node)
+    if name is None:
+        return None
+    head, separator, tail = name.partition(".")
+    resolved = aliases.get(head, head)
+    return resolved if not separator else f"{resolved}.{tail}"
+
+
+def _source_files(repository_root: Path) -> tuple[Path, ...]:
+    return tuple(sorted((repository_root / "src/crypto_lab").rglob("*.py")))
+
+
+def test_stage3_source_file_set_is_closed(repository_root: Path) -> None:
+    source = repository_root / "src/crypto_lab"
+    actual = {
+        path.relative_to(source).as_posix() for path in _source_files(repository_root)
+    }
+    assert actual == _ALLOWED_SOURCE_FILES
+
+
+def test_source_imports_only_the_explicit_stage3_allowlist(
+    repository_root: Path,
+) -> None:
+    failures: list[str] = []
+    for path in _source_files(repository_root):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            modules: list[str] = []
+            if isinstance(node, ast.Import):
+                modules.extend(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                modules.append(node.module)
+            for module in modules:
+                root = module.partition(".")[0]
+                if root not in _ALLOWED_IMPORT_ROOTS:
+                    failures.append(f"{path}: import root is not allowed: {module}")
+    assert failures == []
+
+
+def test_source_has_no_ambient_access_or_later_stage_definitions(
+    repository_root: Path,
+) -> None:
+    failures: list[str] = []
+    for path in _source_files(repository_root):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        aliases = _import_aliases(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name | ast.Attribute):
+                name = _resolved_qualified_name(node, aliases)
+                if name in _FORBIDDEN_AMBIENT_NAMES:
+                    failures.append(f"{path}: forbidden ambient access {name}")
+            if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+                if node.name in _DEFERRED_DEFINITIONS:
+                    failures.append(f"{path}: later-stage definition {node.name}")
+    assert failures == []
+
+
+def test_alias_resolution_cannot_hide_ambient_access() -> None:
+    tree = ast.parse(
+        "import os as operating\n"
+        "from pathlib import Path as LocalPath\n"
+        "operating.getenv('name')\n"
+        "LocalPath.home()\n"
+    )
+    aliases = _import_aliases(tree)
+    resolved = {
+        name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name | ast.Attribute)
+        and (name := _resolved_qualified_name(node, aliases)) is not None
+    }
+    assert "os.getenv" in resolved
+    assert "pathlib.Path.home" in resolved
+
+
+@pytest.mark.parametrize("name", sorted(_DEFERRED_DEFINITIONS))
+def test_each_normative_deferred_symbol_is_detected_by_the_stage3_guard(
+    name: str,
+) -> None:
+    keyword = "class" if name[0].isupper() else "def"
+    tree = ast.parse(
+        f"{keyword} {name}:\n    pass\n"
+        if keyword == "class"
+        else f"def {name}():\n    pass\n"
+    )
+    defined = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    assert defined & _DEFERRED_DEFINITIONS == {name}
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "AdapterResultManifest",
+        "CandidateArtifactState",
+        "CanonicalOrder",
+        "CommandInvocationState",
+        "EngineRunRequest",
+        "PortfolioSnapshot",
+        "ValidationOutcome",
+    ],
+)
+def test_representative_later_stage_type_mutations_are_blocked(name: str) -> None:
+    tree = ast.parse(f"class {name}:\n    pass\n")
+    later = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+        and node.name in _DEFERRED_DEFINITIONS
+    }
+    assert later == {name}
+
+
+def test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctly() -> (
+    None
+):
+    paths = tuple(
+        definition.relative_path.as_posix() for definition in SCHEMA_DEFINITIONS
+    )
+    identifiers = tuple(definition.schema_id for definition in SCHEMA_DEFINITIONS)
+    assert len(paths) == 11
+    assert len(paths) == len(set(paths))
+    assert len(identifiers) == len(set(identifiers))
+    assert "protocol/engine-descriptor-v1.schema.json" in paths
+    assert "protocol/adapter-descriptor-v1.schema.json" in paths
+    assert all(not path.startswith("adapters/") for path in paths)
+    assert all("semantic-version" not in path for path in paths)
+
+
+def test_gitnexus_remains_disabled_with_evidence(repository_root: Path) -> None:
+    outcome = (repository_root / "tools/gitnexus/outcome.json").read_text(
+        encoding="utf-8"
+    )
+    assert '"outcome": "DISABLED_WITH_EVIDENCE"' in outcome
+```
+
+This is the complete Task 7 file, not an omission recipe. It has no verifier
+hash, parser, mutation, or exact-order assertion. Task 8 applies its exact
+unified patch to these bytes before testing or replacing the verifier.
 
 Schema tests require exactly the 11 registry paths/URNs, Draft 2020-12 meta
 schema, `Draft202012Validator.check_schema`, strict extra-field rejection,
@@ -1544,9 +1898,13 @@ Apply these exact Hatch/Ruff changes:
 "schemas" = "crypto_lab/schemas"
 ```
 
-Add `"/schemas"` once to the existing sdist include list and change Ruff
-`src = ["src", "tests"]` to `src = ["src", "tests", "scripts"]`. Do not add a
-second wheel include rule, copy schemas into `src`, or include `/tools`.
+Add `"/schemas"` once to the existing sdist include list. Change Ruff
+`src = ["src", "tests"]` to `src = ["src", "tests", "scripts"]` and mypy
+`files = ["src", "tests"]` to `files = ["src", "tests", "scripts"]`. The
+target-free launcher command remains byte-stable: `python -I -B -m mypy` reads
+the first repository-owned mypy scope through Task 6 and the expanded scope
+from this task onward. Do not add a second wheel include rule, copy schemas into
+`src`, include `/tools`, or add caller-selected mypy targets.
 
 - [ ] **Step 4: Generate the source schemas and prove deterministic checks**
 
@@ -1588,7 +1946,8 @@ or unexpected. Build output remains ignored and is never staged.
 
 - [ ] **Step 6: Independent review and commit**
 
-Reviewers inspect every generated schema and all package/archive paths. Then:
+Reviewers inspect the expanded repository-owned Ruff/mypy scopes, every
+generated schema, and all package/archive paths. Then:
 
 ```powershell
 git add pyproject.toml src\crypto_lab\schema_registry.py `
@@ -1616,6 +1975,169 @@ git commit -m "build: generate canonical stage 3 schemas"
 
 - [ ] **Step 1: Add the exact verifier-contract test from Appendix A**
 
+Apply this exact additive patch to Task 7's baseline
+`tests/safety/test_stage3_boundaries.py`. Imports go immediately after `ast` in
+the displayed Ruff order; constants go after `_DEFERRED_DEFINITIONS` and before
+`_qualified_name`; helpers go after `_source_files` and before the first source
+test; and tests go after the schema-registry-location test and before the
+GitNexus test. The result must equal the cumulative final Appendix A.8 body
+byte-for-byte:
+
+```diff
+--- a/tests/safety/test_stage3_boundaries.py
++++ b/tests/safety/test_stage3_boundaries.py
+@@ -5,0 +6,4 @@
++import hashlib
++import json
++import shutil
++import subprocess
+@@ -165,0 +170,24 @@
++_EXPECTED_VERIFICATION_PROFILES = (
++    ("lock-check",),
++    ("sync",),
++    ("ruff-format-all",),
++    ("ruff-check-all",),
++    ("mypy-all",),
++    ("schema-generate-check",),
++    ("pytest-all",),
++    ("build",),
++    ("schema-distribution",),
++)
++_EXPECTED_VERIFIER_SHA256 = (
++    "4296811ae310fc7e8e17bd3b63f4c6c794a2c6e3c8d20b642de40cf918c2c4cd"
++)
++_ALLOWED_VERIFIER_COMMANDS = {
++    "Assert-NativeSuccess",
++    "Join-Path",
++    "Pop-Location",
++    "Push-Location",
++    "Resolve-Path",
++    "Write-Host",
++    "git",
++    "powershell",
++}
+@@ -206,0 +235,83 @@
++
++
++def _normalized_source(path: Path) -> str:
++    lines = path.read_text(encoding="utf-8").splitlines()
++    return "\n".join(line.rstrip() for line in lines) + "\n"
++
++
++def _powershell() -> str:
++    executable = shutil.which("powershell")
++    assert executable is not None
++    return executable
++
++
++def _powershell_command_records(
++    path: Path,
++    repository_root: Path,
++) -> tuple[dict[str, str], ...]:
++    parser = (
++        "$path=[Console]::In.ReadLine();$tokens=$null;$errors=$null;"
++        "$ast=[System.Management.Automation.Language.Parser]::ParseFile("
++        "$path,[ref]$tokens,[ref]$errors);"
++        "if($errors.Count-ne 0){exit 91};"
++        "$records=@($ast.FindAll({param($node) $node -is "
++        "[System.Management.Automation.Language.CommandAst]},$true)|"
++        "ForEach-Object{$name=$_.GetCommandName();"
++        "if($null-eq$name){$name='<dynamic>'};"
++        "[pscustomobject]@{name=$name;text=$_.Extent.Text}});"
++        "$records|ConvertTo-Json -Compress"
++    )
++    completed = subprocess.run(  # noqa: S603 - reviewed fixed parser boundary
++        [_powershell(), "-NoProfile", "-Command", parser],
++        cwd=repository_root,
++        input=f"{path}\n",
++        check=False,
++        capture_output=True,
++        text=True,
++        timeout=10,
++        shell=False,
++    )
++    assert completed.returncode == 0, completed.stderr
++    decoded = json.loads(completed.stdout)
++    records = [decoded] if isinstance(decoded, dict) else decoded
++    assert isinstance(records, list)
++    assert all(isinstance(record, dict) for record in records)
++    return tuple(records)
++
++
++def _normalized_extent(text: str) -> str:
++    return " ".join(text.replace("`", "").split())
++
++
++def _verifier_profiles(
++    records: tuple[dict[str, str], ...],
++) -> tuple[tuple[str, ...], ...]:
++    profiles: list[tuple[str, ...]] = []
++    for record in records:
++        if record["name"].casefold() != "powershell":
++            continue
++        tokens = _normalized_extent(record["text"]).split()
++        launcher_index = next(
++            index
++            for index, token in enumerate(tokens)
++            if token.casefold().endswith("scripts\\invoke-uv.ps1")
++        )
++        profiles.append(tuple(tokens[launcher_index + 1 :]))
++    return tuple(profiles)
++
++
++def _verifier_is_exactly_closed(path: Path, repository_root: Path) -> bool:
++    digest = hashlib.sha256(_normalized_source(path).encode()).hexdigest()
++    records = _powershell_command_records(path, repository_root)
++    commands = {record["name"] for record in records}
++    return (
++        digest == _EXPECTED_VERIFIER_SHA256
++        and commands == _ALLOWED_VERIFIER_COMMANDS
++        and _verifier_profiles(records) == _EXPECTED_VERIFICATION_PROFILES
++        and tuple(
++            _normalized_extent(record["text"])
++            for record in records
++            if record["name"].casefold() == "git"
++        )
++        == ("& git diff --check",)
++    )
+@@ -328,0 +440,35 @@
++def test_complete_verifier_has_exact_offline_order(repository_root: Path) -> None:
++    verifier = repository_root / "scripts" / "verify.ps1"
++    assert _verifier_is_exactly_closed(verifier, repository_root)
++
++
++@pytest.mark.parametrize(
++    ("injected", "expected_ast_name"),
++    [
++        (
++            "bitsadmin /transfer bad https://example.invalid out",
++            "bitsadmin",
++        ),
++        (
++            "certutil -urlcache -split -f https://example.invalid out",
++            "certutil",
++        ),
++        ("[System.Net.Http.HttpClient]::new()", None),
++        ("$executable = 'uv'; & $executable --version", "<dynamic>"),
++    ],
++)
++def test_verifier_mutations_fail_exact_hash_and_ast_closure(
++    repository_root: Path,
++    tmp_path: Path,
++    injected: str,
++    expected_ast_name: str | None,
++) -> None:
++    source = _normalized_source(repository_root / "scripts" / "verify.ps1")
++    mutated = tmp_path / "mutated-verifier.ps1"
++    mutated.write_text(f"{source}{injected}\n", encoding="utf-8")
++    assert not _verifier_is_exactly_closed(mutated, repository_root)
++    if expected_ast_name is not None:
++        records = _powershell_command_records(mutated, repository_root)
++        assert expected_ast_name in {record["name"] for record in records}
++
++
+```
+
 The test parses `scripts/verify.ps1`, semantically unwraps each fixed
 `powershell -File .\scripts\invoke-uv.ps1` call, and requires this exact closed
 profile/git order:
@@ -1633,14 +2155,15 @@ profile/git order:
 10. direct `git diff --check`
 ```
 
-It also freezes the normalized verifier and launcher bodies and closes both
-PowerShell AST command sets. It proves there is no plain `uv lock`, non-offline
-sync/build, `uv run --frozen`, `pip`, package installation, GitNexus, Node,
-engine, dynamic executable, or network command. Mutation tests append
-`bitsadmin`, `certutil -urlcache`, `System.Net.HttpClient`, and an indirect
-executable variable and require the closure check to fail. Keep first-failure
-behavior, native exit propagation, repository-root resolution, and
-`finally`-based directory restoration.
+Together with the already-committed launcher contract tests, the safety suite
+freezes the normalized verifier and launcher bodies and closes both PowerShell
+AST command sets. It proves there is no plain `uv lock`, non-offline sync/build,
+`uv run --frozen`, `pip`, package installation, GitNexus, Node, engine, dynamic
+executable, or network command. Mutation tests append `bitsadmin`,
+`certutil -urlcache`, `System.Net.HttpClient`, and an indirect executable
+variable and require the closure check to fail. Keep first-failure behavior,
+native exit propagation, repository-root resolution, and `finally`-based
+directory restoration.
 
 - [ ] **Step 2: Run the verifier-contract test red**
 
@@ -1650,8 +2173,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   tests\safety\test_stage3_boundaries.py::test_complete_verifier_has_exact_offline_order -q
 ```
 
-Expected: failure because the inherited verifier has eight operations, omits
-scripts from mypy, and lacks both schema checks.
+Expected: failure because the inherited Stage 2 verifier still has eight raw-uv
+operations, its direct mypy invocation pins only `src tests` rather than using
+the target-free launcher profile governed by Task 7's repository-owned
+`files = ["src", "tests", "scripts"]` setting, and it lacks both schema checks.
 
 - [ ] **Step 3: Apply the exact Task 8 patches from Appendix A**
 
@@ -5704,10 +6229,7 @@ switch -CaseSensitive ($operation) {
             "-I",
             "-B",
             "-m",
-            "mypy",
-            "src",
-            "tests",
-            "scripts"
+            "mypy"
         )
     }
     "pytest-all" {
@@ -6129,7 +6651,7 @@ from pathlib import Path
 import pytest
 
 _EXPECTED_NORMALIZED_SHA256 = (
-    "7dc0a9dcf57cb08b679b48d8f1c1da460d6cede147a66341b796d4eb04f29e58"
+    "1aee7c257068e9fd68ba741f24dd1e6a02fca7592a609185cd1afffab7cd8041"
 )
 _ALLOWED_COMMANDS = {
     "<dynamic>",
@@ -6602,7 +7124,7 @@ def _run_arguments(repository_root: Path, *arguments: str) -> list[str]:
         (["ruff-check-all"], ["RUN", _RUFF, "check", "."]),
         (
             ["mypy-all"],
-            ["RUN", _PYTHON, "-I", "-B", "-m", "mypy", "src", "tests", "scripts"],
+            ["RUN", _PYTHON, "-I", "-B", "-m", "mypy"],
         ),
         (
             ["pytest-all"],
@@ -7567,7 +8089,11 @@ additional edit is permitted. Apply this exact Task 1 hunk to
      assert "optional-dependencies" not in project
 ```
 
-Create `tests/safety/test_stage3_boundaries.py` with exactly:
+The following `tests/safety/test_stage3_boundaries.py` body is the cumulative
+final file after Task 8. Task 7 creates its exact baseline using the named
+omissions and seam assertions in Task 7 Step 1; Task 8 applies the exact
+additive patch in Task 8 Step 1. Only after that Task 8 patch must the file equal
+this body byte-for-byte:
 
 ```python
 """Enforce the Stage 3 architectural, source, schema, and verifier boundary."""
