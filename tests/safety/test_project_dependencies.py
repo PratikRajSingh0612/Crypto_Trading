@@ -1,4 +1,4 @@
-"""Keep every Stage 1 runtime dependency group empty and engine-free."""
+"""Keep Project 1 dependencies minimal, exact, and engine-free."""
 
 from __future__ import annotations
 
@@ -33,7 +33,6 @@ _PROHIBITED_FAMILIES: tuple[str, ...] = (
     "aiohttp",
     "websocket",
     "websockets",
-    "pydantic",
     "sqlalchemy",
     "alembic",
     "pyarrow",
@@ -44,6 +43,16 @@ _PROHIBITED_FAMILIES: tuple[str, ...] = (
     "openai",
 )
 _REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
+_EXPECTED_RUNTIME_REQUIREMENTS = ("pydantic>=2.12,<3",)
+_EXPECTED_DEVELOPMENT_NAMES = {
+    "hatchling",
+    "hypothesis",
+    "jsonschema",
+    "mypy",
+    "pytest",
+    "pytest-cov",
+    "ruff",
+}
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -130,10 +139,13 @@ def prohibited_runtime_dependencies(
     )
 
 
-def test_project_runtime_dependencies_are_empty(repository_root: Path) -> None:
+def test_project_runtime_dependencies_are_exact(repository_root: Path) -> None:
     document = _load_pyproject(repository_root / "pyproject.toml")
 
-    assert runtime_dependencies(document) == ()
+    assert (
+        tuple(dependency.requirement for dependency in runtime_dependencies(document))
+        == _EXPECTED_RUNTIME_REQUIREMENTS
+    )
 
 
 def test_project_has_no_prohibited_runtime_dependency(repository_root: Path) -> None:
@@ -207,4 +219,32 @@ def test_required_development_tools_are_declared(repository_root: Path) -> None:
     dev_requirements = _string_list(groups.get("dev"), "dependency-groups.dev")
     declared = {_normalized_requirement_name(item) for item in dev_requirements}
 
-    assert declared == {"hatchling", "mypy", "pytest", "pytest-cov", "ruff"}
+    assert declared == _EXPECTED_DEVELOPMENT_NAMES
+
+
+def test_lock_registry_artifacts_are_sha256_pinned(repository_root: Path) -> None:
+    document = _load_pyproject(repository_root / "uv.lock")
+    packages = document.get("package")
+    assert isinstance(packages, list)
+    for package in packages:
+        package_table = _mapping(package, "package entry")
+        name = package_table.get("name")
+        assert isinstance(name, str)
+        source = _mapping(package_table.get("source"), "package source")
+        if name == "crypto-trading-lab":
+            assert source == {"editable": "."}
+            continue
+        assert set(source) == {"registry"}
+        assert source["registry"] == "https://pypi.org/simple"
+        wheels = package_table.get("wheels", [])
+        assert isinstance(wheels, list)
+        artifacts: list[object] = list(wheels)
+        sdist = package_table.get("sdist")
+        if sdist is not None:
+            artifacts = [sdist, *artifacts]
+        assert artifacts, package_table["name"]
+        for artifact in artifacts:
+            artifact_table = _mapping(artifact, "locked artifact")
+            digest = artifact_table.get("hash")
+            assert isinstance(digest, str)
+            assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is not None

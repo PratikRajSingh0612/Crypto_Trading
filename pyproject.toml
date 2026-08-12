@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Local engine-neutral cryptocurrency research foundation"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+  "pydantic>=2.12,<3",
+]
 
 [project.scripts]
 crypto-lab = "crypto_lab.cli.main:main"
@@ -16,6 +18,8 @@ crypto-lab = "crypto_lab.cli.main:main"
 [dependency-groups]
 dev = [
   "hatchling>=1.27,<2",
+  "hypothesis>=6.130,<7",
+  "jsonschema>=4.23,<5",
   "mypy>=1.15,<2",
   "pytest>=8.3,<9",
   "pytest-cov>=6,<7",
@@ -49,6 +53,7 @@ line-length = 88
 src = ["src", "tests"]
 extend-exclude = [
   "docs/superpowers/plans/2026-08-10-project-1-foundation-implementation-plan.md",
+  "docs/superpowers/plans/2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-implementation-plan.md",
 ]
 
 [tool.ruff.format]
