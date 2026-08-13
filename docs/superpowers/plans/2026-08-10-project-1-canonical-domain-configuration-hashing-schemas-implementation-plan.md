@@ -2150,7 +2150,8 @@ git commit -m "build: generate canonical stage 3 schemas"
 
 **Interfaces:**
 - Produces: one ten-operation offline verifier whose schema source and built
-  distribution checks cannot be skipped by an ordinary completion claim.
+  distribution checks cannot be skipped by an ordinary completion claim, plus
+  launcher-only README setup instructions frozen by the safety suite.
 
 - [ ] **Step 1: Add the exact verifier-contract test from Appendix A**
 
@@ -2158,9 +2159,9 @@ Apply this exact additive patch to Task 7's baseline
 `tests/safety/test_stage3_boundaries.py`. Imports go immediately after `ast` in
 the displayed Ruff order; constants go after `_DEFERRED_DEFINITIONS` and before
 `_qualified_name`; helpers go after `_source_files` and before the first source
-test; and tests go after the schema-registry-location test and before the
-GitNexus test. The result must equal the cumulative final Appendix A.8 body
-byte-for-byte:
+test; and verifier and README tests go after the schema-registry-location test
+and before the GitNexus test. The result must equal the cumulative final
+Appendix A.8 body byte-for-byte:
 
 ```diff
 --- a/tests/safety/test_stage3_boundaries.py
@@ -2279,7 +2280,7 @@ byte-for-byte:
 +        )
 +        == ("& git diff --check",)
 +    )
-@@ -344,0 +456,35 @@
+@@ -344,0 +456,91 @@
 +def test_complete_verifier_has_exact_offline_order(repository_root: Path) -> None:
 +    verifier = repository_root / "scripts" / "verify.ps1"
 +    assert _verifier_is_exactly_closed(verifier, repository_root)
@@ -2313,6 +2314,62 @@ byte-for-byte:
 +    if expected_ast_name is not None:
 +        records = _powershell_command_records(mutated, repository_root)
 +        assert expected_ast_name in {record["name"] for record in records}
++
++
++def test_readme_uses_only_closed_stage3_launcher_setup(
++    repository_root: Path,
++) -> None:
++    readme = (repository_root / "README.md").read_text(encoding="utf-8")
++    _, heading, remainder = readme.partition("## Local setup\n")
++    assert heading == "## Local setup\n"
++    local_setup, next_heading, _ = remainder.partition(
++        "\n## Explicit configuration and schemas"
++    )
++    assert next_heading == "\n## Explicit configuration and schemas"
++    preamble, fence, command_tail = local_setup.partition("```powershell\n")
++    assert preamble == "\nFrom the repository root:\n\n"
++    assert fence == "```powershell\n"
++    commands, fence, prose = command_tail.partition("\n```\n")
++    assert fence == "\n```\n"
++    assert commands.splitlines() == [
++        "uv --version",
++        "uv python find --managed-python --system --no-python-downloads 3.12",
++        "powershell -NoProfile -ExecutionPolicy Bypass -File "
++        r".\scripts\invoke-uv.ps1 sync",
++        "powershell -NoProfile -ExecutionPolicy Bypass -File "
++        r".\scripts\invoke-uv.ps1 cli-version",
++        "powershell -NoProfile -ExecutionPolicy Bypass -File "
++        r".\scripts\invoke-uv.ps1 cli-module-version",
++    ]
++    assert prose == (
++        "\nThe first two commands are read-only prerequisite checks. `--system` "
++        "skips the\n"
++        "project `.venv` during discovery, `--managed-python` still requires a\n"
++        "uv-managed install, and `--no-python-downloads` makes a missing managed\n"
++        "interpreter fail instead of acquiring one. The discovery command does "
++        "not\n"
++        "modify system Python. `.python-version` requests Python 3.12,\n"
++        '`python-preference = "only-managed"` prevents system-Python fallback, '
++        "and\n"
++        '`python-downloads = "manual"` disables automatic interpreter downloads.\n'
++        "\n"
++        "Normal project execution uses `.venv` only through the "
++        "repository-controlled\n"
++        "`scripts/invoke-uv.ps1` child launcher. Both launcher version profiles "
++        "print\n"
++        "`crypto-lab 0.1.0`. Ordinary development and verification remain "
++        "offline.\n"
++        "Always run the launcher `sync` profile first. If its cache is "
++        "incomplete, stop.\n"
++        "Only the exact Stage 3 Task 1 `sync-acquire` launcher profile may "
++        "acquire the\n"
++        "missing distributions, and only after separate explicit one-time "
++        "approval.\n"
++        "After that acquisition succeeds, rerun the launcher `sync` profile.\n"
++    )
++    assert "\nuv sync " not in readme
++    assert "\nuv run " not in readme
++    assert "Task 2 bootstrap" not in readme
 +
 +
 ```
@@ -2349,21 +2406,27 @@ directory restoration.
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File `
   .\scripts\invoke-uv.ps1 pytest-focused -o addopts= `
-  tests\safety\test_stage3_boundaries.py::test_complete_verifier_has_exact_offline_order -q
+  tests\safety\test_stage3_boundaries.py::test_complete_verifier_has_exact_offline_order `
+  tests\safety\test_stage3_boundaries.py::test_readme_uses_only_closed_stage3_launcher_setup -q
 ```
 
 Expected: failure because the inherited Stage 2 verifier still has eight raw-uv
 operations, its direct mypy invocation pins only `src tests` rather than using
 the target-free launcher profile governed by Task 7's repository-owned
-`files = ["src", "tests", "scripts"]` setting, and it lacks both schema checks.
+`files = ["src", "tests", "scripts"]` setting, it lacks both schema checks, and
+the inherited README still publishes raw ordinary uv commands and stale Task 2
+acquisition instructions.
 
 - [ ] **Step 3: Apply the exact Task 8 patches from Appendix A**
 
 Insert schema source checking after mypy, keep pytest after it, and insert
 distribution checking immediately after the offline build. Update development
 verification to list the same ten commands and add focused schema commands.
-Update README's verification description and local commands without claiming
-Stage 3 is complete; final status belongs to Task 9.
+Replace README's complete Local setup block with the two permitted direct uv
+prerequisite checks followed only by launcher `sync`, `cli-version`, and
+`cli-module-version`; replace its stale Task 2 acquisition prose with the exact
+Stage 3 Task 1 `sync-acquire` gate. Update README's verification description
+without claiming Stage 3 is complete; final status belongs to Task 9.
 
 - [ ] **Step 4: Run focused checks and the full verifier**
 
@@ -8145,6 +8208,38 @@ Apply this exact Task 8 patch to `README.md`:
 -Crypto Trading Lab is a personal, local-only Windows project for building an engine-neutral research and simulated-trading foundation. Stage 1 supplies only the Python package scaffold, version command, offline safety checks, and local quality workflow.
 +Crypto Trading Lab is a personal, local-only Windows project for building an engine-neutral research and simulated-trading foundation. Stage 1 supplies the Python scaffold and offline workflow; Stage 2 records GitNexus as `DISABLED_WITH_EVIDENCE`; Stage 3 adds strict canonical values, explicit configuration, deterministic hashes, dataset metadata, structural descriptors, artifact ownership, and generated schemas without adding an engine or runtime service.
 @@
+ ## Local setup
+
+ From the repository root:
+
+ ```powershell
+ uv --version
+ uv python find --managed-python --system --no-python-downloads 3.12
+-uv sync --frozen --offline
+-uv run --no-sync crypto-lab --version
+-uv run --no-sync python -m crypto_lab.cli --version
++powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 sync
++powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 cli-version
++powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 cli-module-version
+ ```
+
+-The first two commands are read-only prerequisite checks; `--system` skips the project `.venv` during discovery, `--managed-python` still requires a uv-managed install, and `--no-python-downloads` makes a missing managed interpreter fail instead of acquiring one. The discovery command does not modify system Python; normal project execution still uses `.venv` via `uv run --no-sync`. `.python-version` requests Python 3.12, `python-preference = "only-managed"` prevents system-Python fallback, and `python-downloads = "manual"` disables automatic interpreter downloads. Both version commands print `crypto-lab 0.1.0`. Always try the offline synchronization first. If its cache is incomplete, the user or agent must review and explicitly approve the exact `uv sync --frozen` command once under the Task 2 bootstrap procedure. After that acquisition succeeds, rerun `uv sync --frozen --offline`; normal development and verification remain offline.
++The first two commands are read-only prerequisite checks. `--system` skips the
++project `.venv` during discovery, `--managed-python` still requires a
++uv-managed install, and `--no-python-downloads` makes a missing managed
++interpreter fail instead of acquiring one. The discovery command does not
++modify system Python. `.python-version` requests Python 3.12,
++`python-preference = "only-managed"` prevents system-Python fallback, and
++`python-downloads = "manual"` disables automatic interpreter downloads.
++
++Normal project execution uses `.venv` only through the repository-controlled
++`scripts/invoke-uv.ps1` child launcher. Both launcher version profiles print
++`crypto-lab 0.1.0`. Ordinary development and verification remain offline.
++Always run the launcher `sync` profile first. If its cache is incomplete, stop.
++Only the exact Stage 3 Task 1 `sync-acquire` launcher profile may acquire the
++missing distributions, and only after separate explicit one-time approval.
++After that acquisition succeeds, rerun the launcher `sync` profile.
+@@
  ## Verification
 @@
 -The workflow checks that `uv.lock` matches the current project metadata before synchronizing the locked environment, then checks formatting, linting, strict typing, tests and coverage, package builds, and Git whitespace. See [development verification](docs/development/verification.md) for focused commands and the dependency network gate.
@@ -8920,6 +9015,62 @@ def test_verifier_mutations_fail_exact_hash_and_ast_closure(
     if expected_ast_name is not None:
         records = _powershell_command_records(mutated, repository_root)
         assert expected_ast_name in {record["name"] for record in records}
+
+
+def test_readme_uses_only_closed_stage3_launcher_setup(
+    repository_root: Path,
+) -> None:
+    readme = (repository_root / "README.md").read_text(encoding="utf-8")
+    _, heading, remainder = readme.partition("## Local setup\n")
+    assert heading == "## Local setup\n"
+    local_setup, next_heading, _ = remainder.partition(
+        "\n## Explicit configuration and schemas"
+    )
+    assert next_heading == "\n## Explicit configuration and schemas"
+    preamble, fence, command_tail = local_setup.partition("```powershell\n")
+    assert preamble == "\nFrom the repository root:\n\n"
+    assert fence == "```powershell\n"
+    commands, fence, prose = command_tail.partition("\n```\n")
+    assert fence == "\n```\n"
+    assert commands.splitlines() == [
+        "uv --version",
+        "uv python find --managed-python --system --no-python-downloads 3.12",
+        "powershell -NoProfile -ExecutionPolicy Bypass -File "
+        r".\scripts\invoke-uv.ps1 sync",
+        "powershell -NoProfile -ExecutionPolicy Bypass -File "
+        r".\scripts\invoke-uv.ps1 cli-version",
+        "powershell -NoProfile -ExecutionPolicy Bypass -File "
+        r".\scripts\invoke-uv.ps1 cli-module-version",
+    ]
+    assert prose == (
+        "\nThe first two commands are read-only prerequisite checks. `--system` "
+        "skips the\n"
+        "project `.venv` during discovery, `--managed-python` still requires a\n"
+        "uv-managed install, and `--no-python-downloads` makes a missing managed\n"
+        "interpreter fail instead of acquiring one. The discovery command does "
+        "not\n"
+        "modify system Python. `.python-version` requests Python 3.12,\n"
+        '`python-preference = "only-managed"` prevents system-Python fallback, '
+        "and\n"
+        '`python-downloads = "manual"` disables automatic interpreter downloads.\n'
+        "\n"
+        "Normal project execution uses `.venv` only through the "
+        "repository-controlled\n"
+        "`scripts/invoke-uv.ps1` child launcher. Both launcher version profiles "
+        "print\n"
+        "`crypto-lab 0.1.0`. Ordinary development and verification remain "
+        "offline.\n"
+        "Always run the launcher `sync` profile first. If its cache is "
+        "incomplete, stop.\n"
+        "Only the exact Stage 3 Task 1 `sync-acquire` launcher profile may "
+        "acquire the\n"
+        "missing distributions, and only after separate explicit one-time "
+        "approval.\n"
+        "After that acquisition succeeds, rerun the launcher `sync` profile.\n"
+    )
+    assert "\nuv sync " not in readme
+    assert "\nuv run " not in readme
+    assert "Task 2 bootstrap" not in readme
 
 
 def test_gitnexus_remains_disabled_with_evidence(repository_root: Path) -> None:
