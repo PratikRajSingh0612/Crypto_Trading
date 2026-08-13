@@ -1619,12 +1619,14 @@ standard-library guard machinery, installs every guard, and only then imports
 the listed project modules and their Pydantic dependency. The `os.getenv`
 guard returns `__all__` only for the exact `pydantic.plugin._loader` caller and
 rejects every other query without reading the environment. The `os.environ`
-mapping returns only the caller-supplied default for the exact
-`PYTHONUSERBASE` key, `None` default, and immediate `sysconfig` caller, so
-CPython treats the launcher-purged value as unset; every other mapping query or
-operation fails closed. A direct child self-check requires the same lookup from
-`__main__` to raise. The child prints one sentinel; the parent requires zero
-exit, exact stdout, empty stderr, and an untouched `tmp_path`.
+mapping returns a fixed truthy synthetic absolute Windows path only for the
+exact `PYTHONUSERBASE`/`None`/`sysconfig` lookup, returns `False` only for
+`sysconfig` membership of `_PYTHON_PROJECT_BASE`, and returns the supplied
+`None` only for the exact `PYTHONTZPATH`/`None`/`zoneinfo._tzpath` lookup. It
+never reads or preserves an ambient value; every other mapping query or
+operation fails closed. Three direct child self-checks require those same
+expressions from `__main__` to raise. The child prints one sentinel; the parent
+requires zero exit, exact stdout, empty stderr, and an untouched `tmp_path`.
 
 The new safety scanner parses every `src/crypto_lab/**/*.py` file and rejects
 imports of real engines, exchanges, networking clients, `socket`, `urllib`,
@@ -8355,8 +8357,11 @@ import subprocess
 import sys
 import urllib.request
 import winreg
+from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
+
+_SYNTHETIC_USER_BASE = "C:/__crypto_lab_import_probe_userbase__"
 
 
 def _unexpected_operation(*args: object, **kwargs: object) -> NoReturn:
@@ -8392,6 +8397,12 @@ class ForbiddenEnvironment:
             and default is None
             and caller_module == "sysconfig"
         ):
+            return _SYNTHETIC_USER_BASE
+        if (
+            key == "PYTHONTZPATH"
+            and default is None
+            and caller_module == "zoneinfo._tzpath"
+        ):
             return default
         return _unexpected_operation(key, default, caller_module)
 
@@ -8407,8 +8418,11 @@ class ForbiddenEnvironment:
     def copy(self) -> NoReturn:
         return _unexpected_operation()
 
-    def __contains__(self, key: object) -> NoReturn:
-        return _unexpected_operation(key)
+    def __contains__(self, key: object) -> bool:
+        caller_module = sys._getframe(1).f_globals.get("__name__")
+        if key == "_PYTHON_PROJECT_BASE" and caller_module == "sysconfig":
+            return False
+        return _unexpected_operation(key, caller_module)
 
 
 builtins.open = _unexpected_operation
@@ -8426,12 +8440,24 @@ os.spawnvp = _unexpected_operation
 os.spawnvpe = _unexpected_operation
 os.startfile = _unexpected_operation
 os.environ = ForbiddenEnvironment()
-try:
-    os.environ.get("PYTHONUSERBASE", None)
-except AssertionError:
-    pass
-else:
-    raise AssertionError("environment guard allowed a non-sysconfig caller")
+
+
+def _require_environment_call_rejected(
+    operation: Callable[[], object],
+) -> None:
+    try:
+        operation()
+    except AssertionError:
+        return
+    raise AssertionError("environment guard allowed a non-stdlib caller")
+
+
+for environment_call in (
+    lambda: os.environ.get("PYTHONUSERBASE", None),
+    lambda: "_PYTHON_PROJECT_BASE" in os.environ,
+    lambda: os.environ.get("PYTHONTZPATH", None),
+):
+    _require_environment_call_rejected(environment_call)
 socket.socket = _unexpected_operation
 socket.create_connection = _unexpected_operation
 subprocess.Popen = _unexpected_operation
@@ -8530,16 +8556,20 @@ directly with an argument array, avoiding any caller-selectable launcher Python
 profile. The child itself imports no Pydantic package before installing guards;
 its `os.getenv` guard returns the fixed literal only for the exact
 `pydantic.plugin._loader` caller and rejects every application call, while its
-`os.environ` mapping returns only the supplied default for the exact
-`PYTHONUSERBASE` lookup with a `None` default by the immediate `sysconfig`
-caller. The launcher has already purged that fixed Python-selection variable,
-and the mapping neither reads nor preserves an ambient value. A
-mutation-sensitive child self-check requires the same call from `__main__` to
-raise; every other mapping query and operation fails closed. Before importing
-any entry in `PACKAGE_MODULES`, the child traps ambient environment/profile/
-registry access, file reads and writes through the guarded APIs, network
-creation, and process launch APIs. It runs in isolated mode from `tmp_path`,
-uses an argument array with `shell=False`, and retains exact
+`os.environ` mapping exposes only three deterministic standard-library import
+results: the fixed truthy absolute Windows path
+`C:/__crypto_lab_import_probe_userbase__` for the exact
+`PYTHONUSERBASE`/`None`/`sysconfig` lookup, `False` for `sysconfig` membership
+of `_PYTHON_PROJECT_BASE`, and the supplied `None` for the exact
+`PYTHONTZPATH`/`None`/`zoneinfo._tzpath` lookup. The mapping does not allow
+`APPDATA`, project-base indexing, or any private Pydantic schema-environment
+lookup; it neither reads nor preserves an ambient value. Three
+mutation-sensitive child self-checks require all three expressions from
+`__main__` to raise, and every other mapping query or operation fails closed.
+Before importing any entry in `PACKAGE_MODULES`, the child traps ambient
+environment/profile/registry access, file reads and writes through the guarded
+APIs, network creation, and process launch APIs. It runs in isolated mode from
+`tmp_path`, uses an argument array with `shell=False`, and retains exact
 sentinel/stdout/stderr/filesystem assertions. The separate launcher behavior
 test proves fixed child inheritance and parent isolation. Exact source/AST
 review remains necessary; this bounded guard is not claimed to intercept every
