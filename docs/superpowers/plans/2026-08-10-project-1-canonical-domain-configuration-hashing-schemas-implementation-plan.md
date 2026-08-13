@@ -11278,7 +11278,7 @@ _PARTS = (
 _START = datetime(2026, 1, 1, tzinfo=UTC)
 _MIDDLE = datetime(2026, 1, 2, tzinfo=UTC)
 _END = datetime(2026, 1, 3, tzinfo=UTC)
-_DATASET_GOLDEN = "ddca79b939395b29fd0224b5d805750e23fa6e457cde84181a5de6121475a9d3"
+_DATASET_GOLDEN = "4d5a2f34bc8a02d40c3a07943f5b7afb00513a1527da2e712eda1f3886091ba2"
 
 
 class PartitionTransform(Protocol):
