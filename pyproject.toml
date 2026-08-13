@@ -35,11 +35,15 @@ python-preference = "only-managed"
 packages = ["src/crypto_lab"]
 dev-mode-dirs = ["src"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"schemas" = "crypto_lab/schemas"
+
 [tool.hatch.build.targets.sdist]
 include = [
   "/src",
   "/tests",
   "/scripts",
+  "/schemas",
   "/docs/development",
   "/README.md",
   "/AGENTS.md",
@@ -50,7 +54,7 @@ include = [
 [tool.ruff]
 target-version = "py312"
 line-length = 88
-src = ["src", "tests"]
+src = ["src", "tests", "scripts"]
 extend-exclude = [
   "docs/superpowers/plans/2026-08-10-project-1-foundation-implementation-plan.md",
   "docs/superpowers/plans/2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-implementation-plan.md",
@@ -71,13 +75,14 @@ fixture-parentheses = false
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "tests"]
+files = ["src", "tests", "scripts"]
 
 [[tool.mypy.overrides]]
 module = ["jsonschema", "jsonschema.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
+pythonpath = ["scripts"]
 addopts = [
   "--strict-config",
   "--strict-markers",
