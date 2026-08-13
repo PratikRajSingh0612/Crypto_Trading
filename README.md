@@ -1,8 +1,8 @@
 # Crypto Trading Lab
 
-**Status:** Project 1 foundation
+**Status:** Project 1 Stage 3 implementation under acceptance review
 
-Crypto Trading Lab is a personal, local-only Windows project for building an engine-neutral research and simulated-trading foundation. Stage 1 supplies only the Python package scaffold, version command, offline safety checks, and local quality workflow.
+Crypto Trading Lab is a personal, local-only Windows project for building an engine-neutral research and simulated-trading foundation. Stage 1 supplies the Python scaffold and offline workflow; Stage 2 records GitNexus as `DISABLED_WITH_EVIDENCE`; Stage 3 adds strict canonical values, explicit configuration, deterministic hashes, dataset metadata, structural descriptors, artifact ownership, and generated schemas without adding an engine or runtime service.
 
 ## Planned future engine adapters
 
@@ -45,12 +45,44 @@ From the repository root:
 ```powershell
 uv --version
 uv python find --managed-python --system --no-python-downloads 3.12
-uv sync --frozen --offline
-uv run --no-sync crypto-lab --version
-uv run --no-sync python -m crypto_lab.cli --version
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 sync
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 cli-version
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 cli-module-version
 ```
 
-The first two commands are read-only prerequisite checks; `--system` skips the project `.venv` during discovery, `--managed-python` still requires a uv-managed install, and `--no-python-downloads` makes a missing managed interpreter fail instead of acquiring one. The discovery command does not modify system Python; normal project execution still uses `.venv` via `uv run --no-sync`. `.python-version` requests Python 3.12, `python-preference = "only-managed"` prevents system-Python fallback, and `python-downloads = "manual"` disables automatic interpreter downloads. Both version commands print `crypto-lab 0.1.0`. Always try the offline synchronization first. If its cache is incomplete, the user or agent must review and explicitly approve the exact `uv sync --frozen` command once under the Task 2 bootstrap procedure. After that acquisition succeeds, rerun `uv sync --frozen --offline`; normal development and verification remain offline.
+The first two commands are read-only prerequisite checks. `--system` skips the
+project `.venv` during discovery, `--managed-python` still requires a
+uv-managed install, and `--no-python-downloads` makes a missing managed
+interpreter fail instead of acquiring one. The discovery command does not
+modify system Python. `.python-version` requests Python 3.12,
+`python-preference = "only-managed"` prevents system-Python fallback, and
+`python-downloads = "manual"` disables automatic interpreter downloads.
+
+Normal project execution uses `.venv` only through the repository-controlled
+`scripts/invoke-uv.ps1` child launcher. Both launcher version profiles print
+`crypto-lab 0.1.0`. Ordinary development and verification remain offline.
+Always run the launcher `sync` profile first. If its cache is incomplete, stop.
+Only the exact Stage 3 Task 1 `sync-acquire` launcher profile may acquire the
+missing distributions, and only after separate explicit one-time approval.
+After that acquisition succeeds, rerun the launcher `sync` profile.
+
+## Explicit configuration and schemas
+
+Stage 3 configuration accepts only compiled defaults, an explicitly named
+primary TOML file, an optional explicitly named local override, and allowlisted
+typed CLI overrides. It does not inspect environment variables, profiles, home
+directories, the current directory, the registry, credentials, or implicit
+configuration files.
+
+The reviewed source schemas are generated and checked offline:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 schema-generate-write
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 schema-generate-check
+```
+
+The complete verifier checks that exactly those 11 schemas are packaged once
+in the wheel and once in the sdist with identical bytes.
 
 ## Verification
 
@@ -58,7 +90,7 @@ The first two commands are read-only prerequisite checks; `--system` skips the p
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 ```
 
-The workflow checks that `uv.lock` matches the current project metadata before synchronizing the locked environment, then checks formatting, linting, strict typing, tests and coverage, package builds, and Git whitespace. See [development verification](docs/development/verification.md) for focused commands and the dependency network gate.
+The ten-operation workflow checks the lock and offline synchronization, formatting, linting, strict typing, deterministic schemas, tests and coverage, the offline build, exact schema bytes in both distributions, and Git whitespace. See [development verification](docs/development/verification.md) for focused commands and the dependency network gate.
 
 ## Optional GitNexus developer context
 

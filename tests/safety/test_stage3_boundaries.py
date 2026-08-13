@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import json
+import shutil
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -152,6 +156,30 @@ _DEFERRED_DEFINITIONS = {
     "normalize_dataset",
     "place_order",
 }
+_EXPECTED_VERIFICATION_PROFILES = (
+    ("lock-check",),
+    ("sync",),
+    ("ruff-format-all",),
+    ("ruff-check-all",),
+    ("mypy-all",),
+    ("schema-generate-check",),
+    ("pytest-all",),
+    ("build",),
+    ("schema-distribution",),
+)
+_EXPECTED_VERIFIER_SHA256 = (
+    "4296811ae310fc7e8e17bd3b63f4c6c794a2c6e3c8d20b642de40cf918c2c4cd"
+)
+_ALLOWED_VERIFIER_COMMANDS = {
+    "Assert-NativeSuccess",
+    "Join-Path",
+    "Pop-Location",
+    "Push-Location",
+    "Resolve-Path",
+    "Write-Host",
+    "git",
+    "powershell",
+}
 
 
 def _qualified_name(node: ast.AST) -> str | None:
@@ -242,6 +270,89 @@ def _environment_access_violations(
 
 def _source_files(repository_root: Path) -> tuple[Path, ...]:
     return tuple(sorted((repository_root / "src/crypto_lab").rglob("*.py")))
+
+
+def _normalized_source(path: Path) -> str:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    return "\n".join(line.rstrip() for line in lines) + "\n"
+
+
+def _powershell() -> str:
+    executable = shutil.which("powershell")
+    assert executable is not None
+    return executable
+
+
+def _powershell_command_records(
+    path: Path,
+    repository_root: Path,
+) -> tuple[dict[str, str], ...]:
+    parser = (
+        "$path=[Console]::In.ReadLine();$tokens=$null;$errors=$null;"
+        "$ast=[System.Management.Automation.Language.Parser]::ParseFile("
+        "$path,[ref]$tokens,[ref]$errors);"
+        "if($errors.Count-ne 0){exit 91};"
+        "$records=@($ast.FindAll({param($node) $node -is "
+        "[System.Management.Automation.Language.CommandAst]},$true)|"
+        "ForEach-Object{$name=$_.GetCommandName();"
+        "if($null-eq$name){$name='<dynamic>'};"
+        "[pscustomobject]@{name=$name;text=$_.Extent.Text}});"
+        "$records|ConvertTo-Json -Compress"
+    )
+    completed = subprocess.run(  # noqa: S603 - reviewed fixed parser boundary
+        [_powershell(), "-NoProfile", "-Command", parser],
+        cwd=repository_root,
+        input=f"{path}\n",
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        shell=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    decoded = json.loads(completed.stdout)
+    records = [decoded] if isinstance(decoded, dict) else decoded
+    assert isinstance(records, list)
+    assert all(isinstance(record, dict) for record in records)
+    return tuple(records)
+
+
+def _normalized_extent(text: str) -> str:
+    return " ".join(text.replace("`", "").split())
+
+
+def _verifier_profiles(
+    records: tuple[dict[str, str], ...],
+) -> tuple[tuple[str, ...], ...]:
+    profiles: list[tuple[str, ...]] = []
+    for record in records:
+        if record["name"].casefold() != "powershell":
+            continue
+        tokens = _normalized_extent(record["text"]).split()
+        launcher_index = next(
+            index
+            for index, token in enumerate(tokens)
+            if token.casefold().endswith("scripts\\invoke-uv.ps1")
+        )
+        profiles.append(tuple(tokens[launcher_index + 1 :]))
+    return tuple(profiles)
+
+
+def _verifier_is_exactly_closed(path: Path, repository_root: Path) -> bool:
+    digest = hashlib.sha256(_normalized_source(path).encode()).hexdigest()
+    records = _powershell_command_records(path, repository_root)
+    commands = {record["name"] for record in records}
+    return (
+        digest == _EXPECTED_VERIFIER_SHA256
+        and commands == _ALLOWED_VERIFIER_COMMANDS
+        and _verifier_profiles(records) == _EXPECTED_VERIFICATION_PROFILES
+        and tuple(
+            _normalized_extent(record["text"])
+            for record in records
+            if record["name"].casefold() == "git"
+        )
+        == ("& git diff --check",)
+    )
 
 
 def test_stage3_source_file_set_is_closed(repository_root: Path) -> None:
@@ -394,6 +505,97 @@ def test_schema_tool_import_path_is_pytest_only_and_not_runtime_packaged(
     assert wheel["dev-mode-dirs"] == ["src"]
     assert wheel["force-include"] == {"schemas": "crypto_lab/schemas"}
     assert not (repository_root / "scripts" / "__init__.py").exists()
+
+
+def test_complete_verifier_has_exact_offline_order(repository_root: Path) -> None:
+    verifier = repository_root / "scripts" / "verify.ps1"
+    assert _verifier_is_exactly_closed(verifier, repository_root)
+
+
+@pytest.mark.parametrize(
+    ("injected", "expected_ast_name"),
+    [
+        (
+            "bitsadmin /transfer bad https://example.invalid out",
+            "bitsadmin",
+        ),
+        (
+            "certutil -urlcache -split -f https://example.invalid out",
+            "certutil",
+        ),
+        ("[System.Net.Http.HttpClient]::new()", None),
+        ("$executable = 'uv'; & $executable --version", "<dynamic>"),
+    ],
+)
+def test_verifier_mutations_fail_exact_hash_and_ast_closure(
+    repository_root: Path,
+    tmp_path: Path,
+    injected: str,
+    expected_ast_name: str | None,
+) -> None:
+    source = _normalized_source(repository_root / "scripts" / "verify.ps1")
+    mutated = tmp_path / "mutated-verifier.ps1"
+    mutated.write_text(f"{source}{injected}\n", encoding="utf-8")
+    assert not _verifier_is_exactly_closed(mutated, repository_root)
+    if expected_ast_name is not None:
+        records = _powershell_command_records(mutated, repository_root)
+        assert expected_ast_name in {record["name"] for record in records}
+
+
+def test_readme_uses_only_closed_stage3_launcher_setup(
+    repository_root: Path,
+) -> None:
+    readme = (repository_root / "README.md").read_text(encoding="utf-8")
+    _, heading, remainder = readme.partition("## Local setup\n")
+    assert heading == "## Local setup\n"
+    local_setup, next_heading, _ = remainder.partition(
+        "\n## Explicit configuration and schemas"
+    )
+    assert next_heading == "\n## Explicit configuration and schemas"
+    preamble, fence, command_tail = local_setup.partition("```powershell\n")
+    assert preamble == "\nFrom the repository root:\n\n"
+    assert fence == "```powershell\n"
+    commands, fence, prose = command_tail.partition("\n```\n")
+    assert fence == "\n```\n"
+    assert commands.splitlines() == [
+        "uv --version",
+        "uv python find --managed-python --system --no-python-downloads 3.12",
+        "powershell -NoProfile -ExecutionPolicy Bypass -File "
+        r".\scripts\invoke-uv.ps1 sync",
+        "powershell -NoProfile -ExecutionPolicy Bypass -File "
+        r".\scripts\invoke-uv.ps1 cli-version",
+        "powershell -NoProfile -ExecutionPolicy Bypass -File "
+        r".\scripts\invoke-uv.ps1 cli-module-version",
+    ]
+    assert prose == (
+        "\nThe first two commands are read-only prerequisite checks. `--system` "
+        "skips the\n"
+        "project `.venv` during discovery, `--managed-python` still requires a\n"
+        "uv-managed install, and `--no-python-downloads` makes a missing managed\n"
+        "interpreter fail instead of acquiring one. The discovery command does "
+        "not\n"
+        "modify system Python. `.python-version` requests Python 3.12,\n"
+        '`python-preference = "only-managed"` prevents system-Python fallback, '
+        "and\n"
+        '`python-downloads = "manual"` disables automatic interpreter downloads.\n'
+        "\n"
+        "Normal project execution uses `.venv` only through the "
+        "repository-controlled\n"
+        "`scripts/invoke-uv.ps1` child launcher. Both launcher version profiles "
+        "print\n"
+        "`crypto-lab 0.1.0`. Ordinary development and verification remain "
+        "offline.\n"
+        "Always run the launcher `sync` profile first. If its cache is "
+        "incomplete, stop.\n"
+        "Only the exact Stage 3 Task 1 `sync-acquire` launcher profile may "
+        "acquire the\n"
+        "missing distributions, and only after separate explicit one-time "
+        "approval.\n"
+        "After that acquisition succeeds, rerun the launcher `sync` profile.\n"
+    )
+    assert "\nuv sync " not in readme
+    assert "\nuv run " not in readme
+    assert "Task 2 bootstrap" not in readme
 
 
 def test_gitnexus_remains_disabled_with_evidence(repository_root: Path) -> None:
