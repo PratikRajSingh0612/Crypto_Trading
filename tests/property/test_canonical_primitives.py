@@ -11,6 +11,7 @@ from hypothesis import strategies as st
 from pydantic import TypeAdapter
 
 from crypto_lab.domain.base import CanonicalModel
+from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.financial import CanonicalDecimal
 from crypto_lab.domain.identifiers import ExperimentId
 from crypto_lab.domain.time import UtcDateTime
@@ -59,3 +60,15 @@ def test_utc_json_round_trip_ends_in_z(value: datetime) -> None:
 def test_generated_uuid4_accepts_only_the_matching_prefix(value: UUID) -> None:
     identifier = f"exp_{value}"
     assert TypeAdapter(ExperimentId).validate_python(identifier) == identifier
+
+
+@given(
+    st.dictionaries(
+        st.text(min_size=1, max_size=8),
+        st.integers(),
+        max_size=8,
+    )
+)
+def test_canonical_object_is_key_order_invariant(value: dict[str, int]) -> None:
+    reversed_value = dict(reversed(tuple(value.items())))
+    assert canonical_json_bytes(value) == canonical_json_bytes(reversed_value)
