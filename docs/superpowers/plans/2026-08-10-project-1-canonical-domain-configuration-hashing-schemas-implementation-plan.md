@@ -345,7 +345,8 @@ gates.
   workflow.
 - Produces: a closed offline uv launcher that installs the fixed Pydantic
   dependency control before every relevant child; runtime availability of
-  Pydantic v2 and development-only Hypothesis/jsonschema; exact dependency
+  Pydantic v2 and development-only Hypothesis/jsonschema; an exact
+  `jsonschema`-only mypy missing-import override; exact dependency and typing
   assertions used by every later task.
 
 - [ ] **Step 1: Create and independently inspect the prerequisite launcher**
@@ -431,6 +432,18 @@ Apply these exact changes to
 +            digest = artifact_table.get("hash")
 +            assert isinstance(digest, str)
 +            assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is not None
++
++
++def test_mypy_untyped_import_override_is_exact(repository_root: Path) -> None:
++    document = _load_pyproject(repository_root / "pyproject.toml")
++    tool = _mapping(document.get("tool"), "[tool]")
++    mypy = _mapping(tool.get("mypy"), "[tool.mypy]")
++    assert mypy.get("overrides") == [
++        {
++            "module": ["jsonschema", "jsonschema.*"],
++            "ignore_missing_imports": True,
++        }
++    ]
 ```
 
 Replace the Python dependency assertion in
@@ -477,9 +490,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   tests\safety\test_gitnexus_development_tooling.py -q
 ```
 
-Expected: failure because runtime dependencies are still empty and
-Hypothesis/jsonschema are absent from the dev group. No test may pass by
-weakening the engine/network dependency denylist.
+Expected: failure because runtime dependencies are still empty,
+Hypothesis/jsonschema are absent from the dev group, and the exact narrow mypy
+override is absent. No test may pass by weakening the engine/network
+dependency denylist or globally ignoring untyped imports.
 
 - [ ] **Step 4: Apply the exact project metadata change**
 
@@ -497,16 +511,29 @@ weakening the engine/network dependency denylist.
 +  "jsonschema>=4.23,<5",
   "mypy>=1.15,<2",
 @@
- extend-exclude = [
-   "docs/superpowers/plans/2026-08-10-project-1-foundation-implementation-plan.md",
+  extend-exclude = [
+    "docs/superpowers/plans/2026-08-10-project-1-foundation-implementation-plan.md",
 +  "docs/superpowers/plans/2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-implementation-plan.md",
- ]
+  ]
+@@
+ [tool.mypy]
+ python_version = "3.12"
+ strict = true
+ files = ["src", "tests"]
++
++[[tool.mypy.overrides]]
++module = ["jsonschema", "jsonschema.*"]
++ignore_missing_imports = true
 ```
 
 Do not alter any other dependency, loosen a version range, or broaden the Ruff
 exclusion. Ruff 0.16.2 must continue checking every other discovered file; the
 single added exclusion protects this reviewed immutable execution plan's
-Python fences from formatter rewrites.
+Python fences from formatter rewrites. The sole mypy override exists because
+the locked development-only `jsonschema` distribution has no `py.typed`
+marker. It covers exactly `jsonschema` and `jsonschema.*`; do not set a global
+`ignore_missing_imports`, add a stub dependency, or perform another lock or
+network operation for typing.
 
 - [ ] **Step 5: Resolve and acquire through the exact offline-first gates**
 
@@ -570,6 +597,9 @@ entry must contain Pydantic as runtime and Hypothesis/jsonschema only in dev
 metadata. Confirm no
 engine, exchange, network client, SQLAlchemy, Alembic, PyArrow, dataframe,
 YAML, LLM, GitNexus, Docker, or deployment package entered the lock.
+Also inspect the parsed `[tool.mypy]` metadata and require exactly one override
+whose module list is `jsonschema`, `jsonschema.*` and whose only policy value
+is `ignore_missing_imports = true`.
 
 - [ ] **Step 7: Independent review and commit**
 
@@ -608,6 +638,10 @@ Expected staged paths: exactly those six files.
 - Create: `tests/unit/domain/test_records.py`
 - Create: `tests/property/test_canonical_primitives.py`
 - Modify: `tests/unit/test_package_layout.py`
+- Modify: `tests/safety/test_project_dependencies.py` (only when resuming from
+  the pre-correction Task 1 commit)
+- Modify: `pyproject.toml` (only when resuming from the pre-correction Task 1
+  commit)
 
 **Interfaces:**
 - Produces: `CanonicalModel`; the ten normative prefixed ID aliases plus the
@@ -618,6 +652,9 @@ Expected staged paths: exactly those six files.
   `InstrumentRef`, `Money`, `Price`, and `Quantity`.
 - Consumed later by: every Stage 3 model, canonical serializer, hashes, schemas,
   and later Project 1 stages.
+- Consumes from Task 1: the exact narrow `jsonschema`/`jsonschema.*` mypy
+  override. Task 2 changes no dependency or lock state and requires no network
+  access.
 
 - [ ] **Step 1: Write focused tests for every primitive and record invariant**
 
@@ -706,11 +743,63 @@ introduced:
 +os.getenv = _guarded_getenv
 ```
 
+The four local adapters whose generic type mypy cannot infer from Pydantic's
+`Annotated` aliases use exact explicit declarations in Appendix A.9:
+
+```python
+adapter: TypeAdapter[datetime] = TypeAdapter(UtcDateTime)
+adapter: TypeAdapter[str] = TypeAdapter(InstrumentId)
+```
+
+The datetime declaration occurs once in
+`test_utc_schema_requires_the_exact_z_form`; the string declaration occurs in
+each of the three `InstrumentId` tests. Do not add a type ignore or weaken
+strict mypy.
+
 Task 2 deliberately does not add an `os.environ` replacement that was absent
 from the inherited file. Task 7 replaces the complete test with the final,
 broader exact guard body in Appendix A.8. Until then, the Task 2 child retains
 all inherited guards, and the dependency-only `getenv` shim permits only the
 exact Pydantic loader call without consulting ambient state.
+
+When execution is resuming from the already-reviewed Task 1 commit that
+predates this correction, first add this exact test to
+`tests/safety/test_project_dependencies.py`:
+
+```python
+def test_mypy_untyped_import_override_is_exact(repository_root: Path) -> None:
+    document = _load_pyproject(repository_root / "pyproject.toml")
+    tool = _mapping(document.get("tool"), "[tool]")
+    mypy = _mapping(tool.get("mypy"), "[tool.mypy]")
+    assert mypy.get("overrides") == [
+        {
+            "module": ["jsonschema", "jsonschema.*"],
+            "ignore_missing_imports": True,
+        }
+    ]
+```
+
+Run it before changing metadata:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\scripts\invoke-uv.ps1 pytest-focused -o addopts= `
+  tests\safety\test_project_dependencies.py::test_mypy_untyped_import_override_is_exact `
+  -q
+```
+
+Expected: FAIL because the exact override is absent. Then append exactly:
+
+```toml
+[[tool.mypy.overrides]]
+module = ["jsonschema", "jsonschema.*"]
+ignore_missing_imports = true
+```
+
+Rerun that exact test and require PASS. This is a mypy-only metadata correction:
+do not change dependencies or `uv.lock`, do not synchronize, and do not use
+network access. On a fresh execution where repaired Task 1 already installed
+both exact blocks, inspect them and make no duplicate edit.
 
 - [ ] **Step 2: Run the new tests red**
 
@@ -922,6 +1011,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   tests\architecture\test_domain_import_boundary.py `
   tests\unit\test_package_layout.py -q
 powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\scripts\invoke-uv.ps1 pytest-focused -o addopts= `
+  tests\safety\test_project_dependencies.py -q
+powershell -NoProfile -ExecutionPolicy Bypass -File `
   .\scripts\invoke-uv.ps1 ruff-format-all
 powershell -NoProfile -ExecutionPolicy Bypass -File `
   .\scripts\invoke-uv.ps1 ruff-check-all
@@ -946,7 +1038,9 @@ git add src\crypto_lab\domain `
   tests\unit\domain\test_financial.py `
   tests\unit\domain\test_records.py `
   tests\property\test_canonical_primitives.py `
-  tests\unit\test_package_layout.py
+  tests\unit\test_package_layout.py `
+  tests\safety\test_project_dependencies.py `
+  pyproject.toml
 git commit -m "feat: add canonical domain primitives"
 ```
 
@@ -977,7 +1071,11 @@ The canonical JSON golden byte string is UTF-8 without BOM, sorted at every
 object level, compact, Unicode-preserving, fixed-point Decimal, UTC `Z`, and
 array-order-preserving. Tests must reject float, bytes, set, non-string mapping
 keys including `str` subclasses and `StrEnum` keys, naive/non-UTC datetimes,
-and arbitrary objects before `json.dumps` can coerce them. Apply the exact
+and arbitrary objects before `json.dumps` can coerce them. A test-local
+nullable-or-missing canonical model must prove that an explicitly supplied
+`None` is material JSON `null`, while a Pydantic `MISSING` default is absent;
+the two exact canonical byte strings and their SHA-256 values must differ.
+Apply the exact
 Task 3 Appendix A.9 patch that adds the canonical key-order property only now,
 after `canonical_json.py` exists. The attempt-token golden vector is:
 
@@ -1010,7 +1108,10 @@ Expected: absent-module collection failures.
 `canonical_json.py` recursively normalizes only Pydantic models, exact built-in
 dictionaries with string keys, exact built-in tuples/lists, `StrEnum`,
 `Decimal`, UTC `datetime`, strings, integers, booleans, and null. It rejects
-every float, subclass-based coercion, and unknown object.
+every float, subclass-based coercion, and unknown object. Pydantic models dump
+without blanket `exclude_none`: explicit nullable `None` is material and must
+serialize as JSON `null`, while Pydantic omits fields whose value is its
+`MISSING` sentinel. No serializer-wide policy may conflate those states.
 `hashing.py` wraps profile payloads in the explicit immutable envelope
 `{"schema_version":"1.0.0","hashing_profile":...,"payload":...}`. The only
 raw byte-domain profile is the normative attempt-token formula:
@@ -1068,7 +1169,8 @@ git diff --check
 
 The security reviewer checks that no implicit serialization, NaN/Infinity,
 locale, path, environment, randomized hash, or unordered collection can enter
-hash bytes. Then:
+hash bytes, and that explicit nullable null remains hash material while
+`MISSING` alone is omitted. Then:
 
 ```powershell
 git add src\crypto_lab\domain\canonical_json.py `
@@ -3332,7 +3434,6 @@ def _normalize(value: object, active: set[int]) -> object:
             dumped = value.model_dump(
                 mode="python",
                 by_alias=True,
-                exclude_none=True,
             )
             return _normalize(dumped, active)
         finally:
@@ -3389,7 +3490,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from hashlib import sha256
-from typing import Literal, cast
+from typing import Literal
 
 from pydantic import JsonValue
 
@@ -3415,7 +3516,7 @@ class CanonicalHashEnvelope(CanonicalModel):
 
 def sha256_bytes(value: bytes) -> Sha256:
     """Hash exact bytes with SHA-256."""
-    return cast(Sha256, sha256(value).hexdigest())
+    return sha256(value).hexdigest()
 
 
 def profile_hash(
@@ -6176,12 +6277,19 @@ Apply this exact cumulative patch to `pyproject.toml` across Tasks 1, 7, and 8:
 @@
 -files = ["src", "tests"]
 +files = ["src", "tests", "scripts"]
++
++[[tool.mypy.overrides]]
++module = ["jsonschema", "jsonschema.*"]
++ignore_missing_imports = true
 ```
 
 The wheel force-include has exactly one source key and one package destination.
 Do not add a root-level wheel copy, broad Markdown exclusion, alternate package
-source, or optional dependency group. `uv.lock` is regenerated only by the
-Task 1 commands and is never hand-edited.
+source, optional dependency group, global missing-import policy, or broader
+module override. The sole override is exactly `jsonschema` and
+`jsonschema.*`, because the locked development-only distribution has no typed
+package marker. `uv.lock` is regenerated only by the Task 1 commands and is
+never hand-edited; this mypy-only metadata does not change the lock.
 
 Create `scripts/invoke-uv.ps1` in Task 1 with exactly:
 
@@ -9040,7 +9148,7 @@ def test_json_validation_rejects_noncanonical_utc_text(document: str) -> None:
 
 
 def test_utc_schema_requires_the_exact_z_form() -> None:
-    adapter = TypeAdapter(UtcDateTime)
+    adapter: TypeAdapter[datetime] = TypeAdapter(UtcDateTime)
     schemas = (
         adapter.json_schema(mode="validation"),
         adapter.json_schema(mode="serialization"),
@@ -9234,7 +9342,7 @@ def _instrument() -> InstrumentRef:
 
 
 def test_instrument_id_is_a_strict_canonical_boundary() -> None:
-    adapter = TypeAdapter(InstrumentId)
+    adapter: TypeAdapter[str] = TypeAdapter(InstrumentId)
     assert adapter.validate_python(_INSTRUMENT) == _INSTRUMENT
     for invalid in (
         "BINANCE:BTC-USDT:SPOT",
@@ -9271,14 +9379,14 @@ def test_instrument_id_enforces_each_component_length(
     valid: str,
     invalid: str,
 ) -> None:
-    adapter = TypeAdapter(InstrumentId)
+    adapter: TypeAdapter[str] = TypeAdapter(InstrumentId)
     assert adapter.validate_python(valid) == valid
     with pytest.raises(ValidationError, match="32 characters"):
         adapter.validate_python(invalid)
 
 
 def test_instrument_id_json_schemas_enforce_component_bounds() -> None:
-    adapter = TypeAdapter(InstrumentId)
+    adapter: TypeAdapter[str] = TypeAdapter(InstrumentId)
     schemas = (
         adapter.json_schema(mode="validation"),
         adapter.json_schema(mode="serialization"),
@@ -9511,11 +9619,14 @@ from decimal import Decimal
 from enum import IntEnum, StrEnum
 
 import pytest
-
 from crypto_lab.domain.canonical_json import (
     canonical_json_bytes,
     canonical_json_text,
 )
+from crypto_lab.domain.hashing import sha256_bytes
+from pydantic.experimental.missing_sentinel import MISSING
+
+from crypto_lab.domain.base import CanonicalModel
 
 
 class ExampleEnum(StrEnum):
@@ -9528,6 +9639,10 @@ class IntegerEnum(IntEnum):
 
 class StringSubclass(str):
     pass
+
+
+class NullableOrMissingProbe(CanonicalModel):
+    value: str | MISSING | None = MISSING  # type: ignore[valid-type]
 
 
 def test_canonical_json_matches_the_golden_byte_profile() -> None:
@@ -9550,6 +9665,21 @@ def test_object_key_order_is_irrelevant_and_array_order_is_material() -> None:
     right = {"a": [1, 2], "b": {"c": 1, "d": 2}}
     assert canonical_json_bytes(left) == canonical_json_bytes(right)
     assert canonical_json_bytes({"a": [1, 2]}) != canonical_json_bytes({"a": [2, 1]})
+
+
+def test_explicit_null_is_material_while_missing_is_omitted() -> None:
+    explicit_null = canonical_json_bytes(NullableOrMissingProbe(value=None))
+    omitted = canonical_json_bytes(NullableOrMissingProbe())
+
+    assert explicit_null == b'{"value":null}'
+    assert omitted == b"{}"
+    assert sha256_bytes(explicit_null) == (
+        "1c197daef20de3f47eec5e2f735ec6669869d3180cc29f35be4788511e0af0f8"
+    )
+    assert sha256_bytes(omitted) == (
+        "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    )
+    assert sha256_bytes(explicit_null) != sha256_bytes(omitted)
 
 
 @pytest.mark.parametrize(
