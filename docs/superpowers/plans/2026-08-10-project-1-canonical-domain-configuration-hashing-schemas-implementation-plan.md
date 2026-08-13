@@ -1604,7 +1604,8 @@ git commit -m "feat: add dataset metadata contracts"
 - Produces: closed `SCHEMA_DEFINITIONS`; deterministic
   `render_schema_files()`; explicit-output check/write CLI; exact wheel/sdist
   byte verifier; complete Stage 3 import/source/scope guards; and repository
-  Ruff/mypy scopes expanded to the newly introduced Python scripts.
+  Ruff/mypy scopes expanded to the newly introduced Python scripts, plus one
+  pytest-only import root for those un-packaged tools.
 - Consumes: every Stage 3 public top-level model and the
   `ArtifactOwnerRef` `TypeAdapter`.
 
@@ -1626,6 +1627,9 @@ imports of real engines, exchanges, networking clients, `socket`, `urllib`,
 PyArrow, and dataframe libraries. It separately rejects environment/profile/
 credential access and later-stage class/function names. It allows only
 Pydantic plus the standard-library modules explicitly used in this stage.
+It also requires the sole pytest import root to be exactly `scripts`, while
+proving that directory remains outside Hatch's wheel and editable-runtime
+package roots and has no `__init__.py` package marker.
 
 Appendix A.8 displays the cumulative final
 `tests/safety/test_stage3_boundaries.py` bytes after Task 8. In Task 7, create
@@ -1637,6 +1641,7 @@ the independently executable baseline with exactly this complete content:
 from __future__ import annotations
 
 import ast
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -1960,6 +1965,21 @@ def test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctl
     assert all("semantic-version" not in path for path in paths)
 
 
+def test_schema_tool_import_path_is_pytest_only_and_not_runtime_packaged(
+    repository_root: Path,
+) -> None:
+    project = tomllib.loads(
+        (repository_root / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    pytest_options = project["tool"]["pytest"]["ini_options"]
+    assert pytest_options["pythonpath"] == ["scripts"]
+    wheel = project["tool"]["hatch"]["build"]["targets"]["wheel"]
+    assert wheel["packages"] == ["src/crypto_lab"]
+    assert wheel["dev-mode-dirs"] == ["src"]
+    assert wheel["force-include"] == {"schemas": "crypto_lab/schemas"}
+    assert not (repository_root / "scripts" / "__init__.py").exists()
+
+
 def test_gitnexus_remains_disabled_with_evidence(repository_root: Path) -> None:
     outcome = (repository_root / "tools/gitnexus/outcome.json").read_text(
         encoding="utf-8"
@@ -2012,7 +2032,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   tests\unit\test_package_layout.py -q
 ```
 
-Expected: absent registry/scripts/schema paths and missing import tuple entries.
+Expected: absent registry/scripts/schema paths, missing import tuple entries,
+and the absent exact pytest script import path.
 
 - [ ] **Step 3: Apply the exact registry, scripts, packaging, and safety contents from Appendix A**
 
@@ -2030,11 +2051,18 @@ exact `$schema` and `$id`, and is serialized with canonical JSON plus one LF.
 The owner schema comes directly from `TypeAdapter(ArtifactOwnerRef)`. No
 semantic-version schema or wrapper-owner schema is generated.
 
-Apply these exact Hatch/Ruff changes:
+Apply these exact Hatch/pytest/Ruff changes:
 
 ```toml
 [tool.hatch.build.targets.wheel.force-include]
 "schemas" = "crypto_lab/schemas"
+```
+
+```diff
+@@
+ [tool.pytest.ini_options]
++pythonpath = ["scripts"]
+ addopts = [
 ```
 
 Add `"/schemas"` once to the existing sdist include list. Change Ruff
@@ -2044,6 +2072,17 @@ target-free launcher command remains byte-stable: `python -I -B -m mypy` reads
 the first repository-owned mypy scope through Task 6 and the expanded scope
 from this task onward. Do not add a second wheel include rule, copy schemas into
 `src`, include `/tools`, or add caller-selected mypy targets.
+
+Set `[tool.pytest.ini_options].pythonpath` to exactly `["scripts"]`. Pytest
+resolves that path relative to its pinned repository root and exposes the two
+un-packaged schema-tool modules only for the test session; A.12 therefore
+imports `generate_schemas` and `verify_schema_distribution` by their top-level
+module IDs. Keep `scripts/` without `__init__.py`, keep Hatch
+`packages = ["src/crypto_lab"]` and `dev-mode-dirs = ["src"]`, and do not add
+`scripts` to the wheel, editable runtime exposure, application package, or
+Python environment variables. This same top-level identity is what target-free
+mypy assigns while checking the configured `scripts` directory, so test imports
+and direct source discovery cannot name either file twice.
 
 - [ ] **Step 4: Generate the source schemas and prove deterministic checks**
 
@@ -2085,8 +2124,9 @@ or unexpected. Build output remains ignored and is never staged.
 
 - [ ] **Step 6: Independent review and commit**
 
-Reviewers inspect the expanded repository-owned Ruff/mypy scopes, every
-generated schema, and all package/archive paths. Then:
+Reviewers inspect the exact pytest-only script import root, the expanded
+repository-owned Ruff/mypy scopes, every generated schema, and all
+package/archive paths. Then:
 
 ```powershell
 git add pyproject.toml src\crypto_lab\schema_registry.py `
@@ -2130,7 +2170,7 @@ byte-for-byte:
 +import json
 +import shutil
 +import subprocess
-@@ -165,0 +170,24 @@
+@@ -166,0 +171,24 @@
 +_EXPECTED_VERIFICATION_PROFILES = (
 +    ("lock-check",),
 +    ("sync",),
@@ -2155,7 +2195,7 @@ byte-for-byte:
 +    "git",
 +    "powershell",
 +}
-@@ -206,0 +235,83 @@
+@@ -207,0 +236,83 @@
 +
 +
 +def _normalized_source(path: Path) -> str:
@@ -2239,7 +2279,7 @@ byte-for-byte:
 +        )
 +        == ("& git diff --check",)
 +    )
-@@ -328,0 +440,35 @@
+@@ -344,0 +456,35 @@
 +def test_complete_verifier_has_exact_offline_order(repository_root: Path) -> None:
 +    verifier = repository_root / "scripts" / "verify.ps1"
 +    assert _verifier_is_exactly_closed(verifier, repository_root)
@@ -6281,6 +6321,10 @@ Apply this exact cumulative patch to `pyproject.toml` across Tasks 1, 7, and 8:
 +[[tool.mypy.overrides]]
 +module = ["jsonschema", "jsonschema.*"]
 +ignore_missing_imports = true
+@@
+ [tool.pytest.ini_options]
++pythonpath = ["scripts"]
+ addopts = [
 ```
 
 The wheel force-include has exactly one source key and one package destination.
@@ -6289,7 +6333,11 @@ source, optional dependency group, global missing-import policy, or broader
 module override. The sole override is exactly `jsonschema` and
 `jsonschema.*`, because the locked development-only distribution has no typed
 package marker. `uv.lock` is regenerated only by the Task 1 commands and is
-never hand-edited; this mypy-only metadata does not change the lock.
+never hand-edited; these tool-only metadata changes do not change the lock.
+The sole pytest path entry is exactly `scripts`; Hatch's exact wheel package
+and development-mode roots remain `src/crypto_lab` and `src`, so the
+un-packaged schema tools are neither application modules nor editable runtime
+exposure.
 
 Create `scripts/invoke-uv.ps1` in Task 1 with exactly:
 
@@ -8393,6 +8441,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -8821,6 +8870,21 @@ def test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctl
     assert "protocol/adapter-descriptor-v1.schema.json" in paths
     assert all(not path.startswith("adapters/") for path in paths)
     assert all("semantic-version" not in path for path in paths)
+
+
+def test_schema_tool_import_path_is_pytest_only_and_not_runtime_packaged(
+    repository_root: Path,
+) -> None:
+    project = tomllib.loads(
+        (repository_root / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    pytest_options = project["tool"]["pytest"]["ini_options"]
+    assert pytest_options["pythonpath"] == ["scripts"]
+    wheel = project["tool"]["hatch"]["build"]["targets"]["wheel"]
+    assert wheel["packages"] == ["src/crypto_lab"]
+    assert wheel["dev-mode-dirs"] == ["src"]
+    assert wheel["force-include"] == {"schemas": "crypto_lab/schemas"}
+    assert not (repository_root / "scripts" / "__init__.py").exists()
 
 
 def test_complete_verifier_has_exact_offline_order(repository_root: Path) -> None:
@@ -12284,6 +12348,10 @@ def test_every_selected_branch_rejects_foreign_fields(
 
 ### A.12 Exact schema and distribution test files
 
+These tests import the two schema tools by the top-level module IDs supplied
+only by pytest's exact `scripts` import root. Do not add `scripts.*` package
+imports or a `scripts/__init__.py` package marker.
+
 Create `tests/unit/test_schema_registry.py` with exactly:
 
 ```python
@@ -12296,13 +12364,13 @@ from typing import Any, cast
 import pytest
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
-from scripts.generate_schemas import _check, _write
 
 from crypto_lab.schema_registry import (
     JSON_SCHEMA_DRAFT,
     SCHEMA_DEFINITIONS,
     render_schema_files,
 )
+from generate_schemas import _check, _write
 
 _EXPECTED = {
     PurePosixPath(
@@ -12925,15 +12993,15 @@ from pathlib import Path, PurePosixPath
 from typing import Literal
 
 import pytest
-from scripts.verify_schema_distribution import (
+
+from crypto_lab.schema_registry import render_schema_files
+from verify_schema_distribution import (
     _single,
     _verify_sdist,
     _verify_source,
     _verify_wheel,
     main,
 )
-
-from crypto_lab.schema_registry import render_schema_files
 
 type Variant = Literal[
     "exact",
