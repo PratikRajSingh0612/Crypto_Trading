@@ -9619,14 +9619,14 @@ from decimal import Decimal
 from enum import IntEnum, StrEnum
 
 import pytest
+from pydantic.experimental.missing_sentinel import MISSING
+
+from crypto_lab.domain.base import CanonicalModel
 from crypto_lab.domain.canonical_json import (
     canonical_json_bytes,
     canonical_json_text,
 )
 from crypto_lab.domain.hashing import sha256_bytes
-from pydantic.experimental.missing_sentinel import MISSING
-
-from crypto_lab.domain.base import CanonicalModel
 
 
 class ExampleEnum(StrEnum):
