@@ -1,8 +1,8 @@
 # Crypto Trading Lab
 
-**Status:** Project 1 Stage 3 implementation under acceptance review
+**Status:** Project 1 Stages 1-3 complete
 
-Crypto Trading Lab is a personal, local-only Windows project for building an engine-neutral research and simulated-trading foundation. Stage 1 supplies the Python scaffold and offline workflow; Stage 2 records GitNexus as `DISABLED_WITH_EVIDENCE`; Stage 3 adds strict canonical values, explicit configuration, deterministic hashes, dataset metadata, structural descriptors, artifact ownership, and generated schemas without adding an engine or runtime service.
+Crypto Trading Lab is a personal, local-only Windows project for building an engine-neutral research and simulated-trading foundation. Stage 1 supplies the Python scaffold and offline workflow; Stage 2 records GitNexus as `DISABLED_WITH_EVIDENCE`; Stage 3 completes the strict canonical-value, explicit-configuration, deterministic-hashing, dataset-metadata, structural-descriptor, artifact-ownership, and generated-schema foundation without adding an engine or runtime service.
 
 ## Planned future engine adapters
 

@@ -1,12 +1,12 @@
 # Project 1 Engine-Neutral Core Implementation Roadmap
 
-**Status:** Approved planning decomposition; Stages 1 and 2 complete
+**Status:** Approved planning decomposition; Stages 1 through 3 complete
 
 ## 1. Purpose
 
 This roadmap decomposes the approved Project 1 engine-neutral core design into ten ordered implementation stages. It fixes ownership, dependencies, exclusions, review gates, and acceptance evidence without authorizing implementation or embedding stage-level executable instructions.
 
-Stages 1 and 2 have approved detailed implementation plans. Every later detailed plan is written just in time after its prerequisite implementation is complete, verified, reviewed, and committed.
+Stages 1 through 3 have approved detailed implementation plans. Every later detailed plan is written just in time after its prerequisite implementation is complete, verified, reviewed, and committed.
 
 ## 2. Normative source documents and commits
 
@@ -110,12 +110,12 @@ If a plan, GitNexus result, code comment, or implementation choice conflicts wit
 
 **Exit evidence:** The reviewed launcher proves the exact fixed Pydantic control is effective without allowing application environment access; canonical serialization and hashes are deterministic; invalid boundary values fail; every initial schema regenerates without diff; configuration safety invariants pass offline; and cumulative lint, types, tests, build, and review gates are green.
 
-**Planned detailed implementation plan:** `docs/superpowers/plans/2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-implementation-plan.md`.
+**Approved detailed implementation plan:** `docs/superpowers/plans/2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-implementation-plan.md`.
 
 | Control | Stage 3 permission |
 |---|---|
 | GitNexus expected | Use only after `ENABLED` while healthy; otherwise use the manual fallback; always advisory and non-blocking |
-| Dependency bootstrap network | Offline resolution, lock check, and synchronization first; only the exact one-time Task 1 `uv lock` and `uv sync --frozen --no-install-project` fallbacks may run after separate user approval when required metadata or locked distributions are absent; verification never uses the network |
+| Dependency bootstrap network | Run launcher profiles `lock-resolve-offline`, `lock-check`, and `sync` first; only the exact Stage 3 Task 1 `lock-acquire` and `sync-acquire` profiles may omit offline after separate one-time approval; the historical Stage 1 exceptions grant no Stage 3 authority; verification never uses the network |
 | Relational schema changes | No |
 | Canonical schema changes | Yes, limited to foundational domain, configuration, dataset, descriptor, ownership, and generator contracts |
 
@@ -378,8 +378,8 @@ From Stage 3 onward, GitNexus is expected to be available when healthy after `EN
 |---|---|---|---|
 | 1 — Repository Foundation and Quality Gates | Approved and executed | Complete at `56d029e8e6d3c67dc6309b267c74833a09d2e419` | Complete |
 | 2 — Guarded GitNexus Development Tooling | Approved and executed | `DISABLED_WITH_EVIDENCE`: pinned 1.6.9 lacks mandatory MCP controls; no partial tooling remains | Complete; ordinary offline verification and manual fallback recorded |
-| 3 — Canonical Domain, Configuration, Hashing, and Schemas | Eligible for just-in-time planning after the completed Stage 2 governance decision | Not started | Not evaluated |
-| 4 — Portable Strategy, Capabilities, and Comparison | Intentionally deferred until Stage 3 completion | Not started | Not evaluated |
+| 3 — Canonical Domain, Configuration, Hashing, and Schemas | Approved and executed | Complete at `d50744547d121d1b5925a5d92d752345902f5e56` | Complete; canonical models, explicit configuration, named hashes, dataset metadata, structural descriptors, artifact owners, and 11 generated schemas verified offline |
+| 4 — Portable Strategy, Capabilities, and Comparison | Eligible for just-in-time planning after Stage 3 completion | Not started | Not evaluated |
 | 5 — Experiment, Run, Invocation, Retry, and Aggregation Logic | Intentionally deferred until Stages 3–4 completion | Not started | Not evaluated |
 | 6 — Adapter Protocol and Fake-Adapter Contract Harness | Intentionally deferred until Stages 3 and 5 completion | Not started | Not evaluated |
 | 7 — Windows Process Supervision | Intentionally deferred until Stage 6 completion | Not started | Not evaluated |

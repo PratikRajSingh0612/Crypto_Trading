@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import tomllib
@@ -603,3 +604,54 @@ def test_gitnexus_remains_disabled_with_evidence(repository_root: Path) -> None:
         encoding="utf-8"
     )
     assert '"outcome": "DISABLED_WITH_EVIDENCE"' in outcome
+
+
+STAGE3_IMPLEMENTATION_COMMIT = "d50744547d121d1b5925a5d92d752345902f5e56"
+
+
+def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
+    assert re.fullmatch(r"[0-9a-f]{40}", STAGE3_IMPLEMENTATION_COMMIT) is not None
+    roadmap = (
+        repository_root
+        / "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
+    ).read_text(encoding="utf-8")
+    readme = (repository_root / "README.md").read_text(encoding="utf-8")
+    assert "Stages 1 through 3 complete" in roadmap
+    assert "Stages 1 through 3 have approved detailed implementation plans." in roadmap
+    assert (
+        "**Approved detailed implementation plan:** "
+        "`docs/superpowers/plans/"
+        "2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-"
+        "implementation-plan.md`."
+    ) in roadmap
+    assert (
+        "**Planned detailed implementation plan:** "
+        "`docs/superpowers/plans/"
+        "2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-"
+        "implementation-plan.md`."
+    ) not in roadmap
+    assert (
+        "| Dependency bootstrap network | Run launcher profiles "
+        "`lock-resolve-offline`, `lock-check`, and `sync` first; only the exact "
+        "Stage 3 Task 1 `lock-acquire` and `sync-acquire` profiles may omit "
+        "offline after separate one-time approval; the historical Stage 1 "
+        "exceptions grant no Stage 3 authority; verification never uses the "
+        "network |"
+    ) in roadmap
+    assert (
+        "| Dependency bootstrap network | Offline resolution, lock check, and "
+        "synchronization first; only the exact one-time Task 1 `uv lock` and "
+        "`uv sync --frozen --no-install-project` fallbacks may run after "
+        "separate user approval when required metadata or locked distributions "
+        "are absent; verification never uses the network |"
+    ) not in roadmap
+    assert (
+        "| 3 — Canonical Domain, Configuration, Hashing, and Schemas | "
+        "Approved and executed | Complete at "
+        f"`{STAGE3_IMPLEMENTATION_COMMIT}` | Complete; canonical models, "
+        "explicit configuration, named hashes, dataset metadata, structural "
+        "descriptors, artifact owners, and 11 generated schemas verified offline |"
+    ) in roadmap
+    assert "Eligible for just-in-time planning after Stage 3 completion" in roadmap
+    assert "`DISABLED_WITH_EVIDENCE`" in roadmap
+    assert "**Status:** Project 1 Stages 1-3 complete" in readme
