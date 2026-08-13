@@ -612,7 +612,8 @@ Expected staged paths: exactly those six files.
 **Interfaces:**
 - Produces: `CanonicalModel`; the ten normative prefixed ID aliases plus the
   reviewed `strv_` strategy-version and `part_` dataset-partition conventions;
-  `Sha256`, `NormalizedIdentifier`, `AssetCode`; `UtcDateTime`;
+  `Sha256`, `NormalizedIdentifier`, `AssetCode`; `exact_string_schema`;
+  `UtcDateTime`;
   `CanonicalDecimal`, `PositiveDecimal`, `NonNegativeDecimal`;
   `InstrumentRef`, `Money`, `Price`, and `Quantity`.
 - Consumed later by: every Stage 3 model, canonical serializer, hashes, schemas,
@@ -628,6 +629,7 @@ files must contain parameterized assertions for this exact matrix:
 | IDs | lowercase canonical UUID4 with the matching `exp_`, `run_`, `art_`, `ds_`, `strat_`, `inv_`, `evt_`, `cand_`, `diag_`, `audit_` prefix | wrong prefix, UUID1, nil UUID, uppercase UUID, braces, missing prefix, leading/trailing whitespace |
 | SHA-256 | exactly 64 lowercase hex characters | uppercase, wrong length, non-hex, whitespace |
 | names/codes | normalized lowercase names; uppercase asset/venue codes | spaces, uppercase normalized name, lowercase asset code, empty, punctuation outside `._-` |
+| instrument ID | direct `TypeAdapter(InstrumentId)` validation of canonical venue/base/quote components from one through 32 characters | malformed separators or market type; lowercase or malformed components; each of venue, base, and quote at 33 characters |
 | UTC | aware `datetime.UTC` datetime and JSON string ending `Z` | naive datetime; nonzero offset; invalid date; Python string passed to strict `model_validate` |
 | Decimal | typed `Decimal("0")`, `Decimal("1E+3")`, and `Decimal("1.2300")` normalized to JSON strings `"0"`, `"1000"`, and `"1.23"`; canonical JSON string `"1.23"` | JSON numeric tokens, Python float/int/bool, noncanonical JSON/string forms `"1E+3"`, `"1.2300"`, `"1.0"`, plus signs, leading zeros, negative zero, NaN, Infinity, malformed/empty/whitespace string |
 | `InstrumentRef` | `BINANCE:BTC/USDT:SPOT` reconstructed from fields | different canonical ID, same base/quote, malformed ID, unknown market type, unknown field |
@@ -648,6 +650,12 @@ with pytest.raises(ValidationError, match="extra_forbidden"):
         }
     )
 ```
+
+The `InstrumentRef` same-base/quote regression must use the otherwise
+self-consistent canonical ID `BINANCE:BTC/BTC:SPOT`; a mismatched canonical ID
+would let reconstruction validation mask removal of the distinct-assets
+invariant. Appendix A.9 supplies both that mutation-sensitive case and the
+exact `extra_forbidden` assertion above.
 
 Create `tests/property/test_canonical_primitives.py` with exactly the Task 2
 contents in Appendix A.9. Its `DecimalProbe` and `UtcProbe` are test-local
@@ -773,6 +781,7 @@ three non-prefixed aliases have this exact shape:
 type Sha256 = Annotated[
     str,
     StringConstraints(strict=True, pattern=r"^[0-9a-f]{64}$"),
+    WithJsonSchema(exact_string_schema(r"^[0-9a-f]{64}$")),
 ]
 type NormalizedIdentifier = Annotated[
     str,
@@ -781,6 +790,13 @@ type NormalizedIdentifier = Annotated[
         min_length=1,
         max_length=128,
         pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+    ),
+    WithJsonSchema(
+        exact_string_schema(
+            r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+            min_length=1,
+            max_length=128,
+        )
     ),
 ]
 type AssetCode = Annotated[
@@ -791,8 +807,22 @@ type AssetCode = Annotated[
         max_length=32,
         pattern=r"^[A-Z][A-Z0-9]*(?:[._-][A-Z0-9]+)*$",
     ),
+    WithJsonSchema(
+        exact_string_schema(
+            r"^[A-Z][A-Z0-9]*(?:[._-][A-Z0-9]+)*$",
+            min_length=1,
+            max_length=32,
+        )
+    ),
 ]
 ```
+
+`exact_string_schema` is the pure Appendix A.1 helper used by these aliases
+and later Stage 3 canonical string types.
+It replaces only a schema pattern's final `$` with `(?![\s\S])`; runtime
+`StringConstraints` retain their Rust-compatible patterns. This gives both
+validation and serialization schemas an ECMA-262/Python-compatible absolute
+end and prevents terminal line terminators from passing schema validation.
 
 Do not subclass `str` with a permissive constructor and do not generate a UUID
 inside validation.
@@ -869,10 +899,17 @@ Quantity:       parse the same form and require base_asset == BASE
 ```
 
 The parser uses one anchored regular expression and validates all four
-components; it never guesses from a partial string. Market types outside the
-enum fail. Do not modify `domain/__init__.py` in Task 2. Task 4 owns the final
-import-only public surface after canonical JSON, diagnostics, and versioning
-all exist.
+components; it never guesses from a partial string. `InstrumentId` composes
+its strict string constraints with an `AfterValidator` that calls that public
+parser and returns the original string, so direct alias validation enforces
+the same one-through-32-character venue/base/quote bounds as record
+validation. Its validation and serialization JSON Schemas use the intersection
+of the canonical grammar and an anchored component-bounds pattern, with only
+the reviewed terminal negative lookahead supplying an absolute end, so Draft
+2020-12 consumers enforce the same bounds. Market types
+outside the enum fail. Do not modify `domain/__init__.py` in Task 2. Task 4
+owns the final import-only public surface after canonical JSON, diagnostics,
+and versioning all exist.
 
 - [ ] **Step 5: Run focused and broader green checks**
 
@@ -2622,9 +2659,30 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import AfterValidator, StringConstraints
+from pydantic import AfterValidator, StringConstraints, WithJsonSchema
+from pydantic.json_schema import JsonSchemaValue
 
 _UUID4 = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+
+
+def exact_string_schema(
+    runtime_pattern: str,
+    *,
+    min_length: int | None = None,
+    max_length: int | None = None,
+) -> JsonSchemaValue:
+    """Return a string schema whose pattern has an absolute ECMA-compatible end."""
+    if not runtime_pattern.endswith("$"):
+        raise ValueError("runtime pattern must end with '$'")
+    schema: JsonSchemaValue = {
+        "type": "string",
+        "pattern": runtime_pattern[:-1] + r"(?![\s\S])",
+    }
+    if min_length is not None:
+        schema["minLength"] = min_length
+    if max_length is not None:
+        schema["maxLength"] = max_length
+    return schema
 
 
 def validate_prefixed_uuid4(value: str, prefix: str) -> str:
@@ -2690,65 +2748,78 @@ type ExperimentId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^exp_{_UUID4}$"),
     AfterValidator(_experiment_id),
+    WithJsonSchema(exact_string_schema(rf"^exp_{_UUID4}$")),
 ]
 type RunId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^run_{_UUID4}$"),
     AfterValidator(_run_id),
+    WithJsonSchema(exact_string_schema(rf"^run_{_UUID4}$")),
 ]
 type ArtifactId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^art_{_UUID4}$"),
     AfterValidator(_artifact_id),
+    WithJsonSchema(exact_string_schema(rf"^art_{_UUID4}$")),
 ]
 type DatasetId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^ds_{_UUID4}$"),
     AfterValidator(_dataset_id),
+    WithJsonSchema(exact_string_schema(rf"^ds_{_UUID4}$")),
 ]
 type StrategyId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^strat_{_UUID4}$"),
     AfterValidator(_strategy_id),
+    WithJsonSchema(exact_string_schema(rf"^strat_{_UUID4}$")),
 ]
 type StrategyVersionId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^strv_{_UUID4}$"),
     AfterValidator(_strategy_version_id),
+    WithJsonSchema(exact_string_schema(rf"^strv_{_UUID4}$")),
 ]
 type InvocationId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^inv_{_UUID4}$"),
     AfterValidator(_invocation_id),
+    WithJsonSchema(exact_string_schema(rf"^inv_{_UUID4}$")),
 ]
 type EventId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^evt_{_UUID4}$"),
     AfterValidator(_event_id),
+    WithJsonSchema(exact_string_schema(rf"^evt_{_UUID4}$")),
 ]
 type CandidateArtifactId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^cand_{_UUID4}$"),
     AfterValidator(_candidate_id),
+    WithJsonSchema(exact_string_schema(rf"^cand_{_UUID4}$")),
 ]
 type DiagnosticId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^diag_{_UUID4}$"),
     AfterValidator(_diagnostic_id),
+    WithJsonSchema(exact_string_schema(rf"^diag_{_UUID4}$")),
 ]
 type AuditEventId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^audit_{_UUID4}$"),
     AfterValidator(_audit_id),
+    WithJsonSchema(exact_string_schema(rf"^audit_{_UUID4}$")),
 ]
 type DatasetPartitionId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^part_{_UUID4}$"),
     AfterValidator(_partition_id),
+    WithJsonSchema(exact_string_schema(rf"^part_{_UUID4}$")),
 ]
 type Sha256 = Annotated[
     str,
     StringConstraints(strict=True, pattern=r"^[0-9a-f]{64}$"),
+    WithJsonSchema(exact_string_schema(r"^[0-9a-f]{64}$")),
 ]
 type NormalizedIdentifier = Annotated[
     str,
@@ -2758,6 +2829,13 @@ type NormalizedIdentifier = Annotated[
         max_length=128,
         pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
     ),
+    WithJsonSchema(
+        exact_string_schema(
+            r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$",
+            min_length=1,
+            max_length=128,
+        )
+    ),
 ]
 type AssetCode = Annotated[
     str,
@@ -2766,6 +2844,13 @@ type AssetCode = Annotated[
         min_length=1,
         max_length=32,
         pattern=r"^[A-Z][A-Z0-9]*(?:[._-][A-Z0-9]+)*$",
+    ),
+    WithJsonSchema(
+        exact_string_schema(
+            r"^[A-Z][A-Z0-9]*(?:[._-][A-Z0-9]+)*$",
+            min_length=1,
+            max_length=32,
+        )
     ),
 ]
 ```
@@ -2786,10 +2871,11 @@ from pydantic import BeforeValidator, PlainSerializer, ValidationInfo, WithJsonS
 _UTC_PATTERN = (
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{6})?Z$"
 )
+_UTC_SCHEMA_PATTERN = _UTC_PATTERN[:-1] + r"(?![\s\S])"
 _UTC_SCHEMA = {
     "type": "string",
     "format": "date-time",
-    "pattern": _UTC_PATTERN,
+    "pattern": _UTC_SCHEMA_PATTERN,
 }
 
 
@@ -2939,7 +3025,7 @@ def require_non_negative(value: Decimal) -> Decimal:
 def _schema(pattern: str, description: str) -> dict[str, object]:
     return {
         "type": "string",
-        "pattern": pattern,
+        "pattern": pattern[:-1] + r"(?![\s\S])",
         "maxLength": MAX_DECIMAL_TEXT_LENGTH,
         "description": description,
     }
@@ -3006,7 +3092,13 @@ import re
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import StringConstraints, model_validator
+from pydantic import (
+    AfterValidator,
+    StringConstraints,
+    WithJsonSchema,
+    model_validator,
+)
+from pydantic.json_schema import JsonSchemaValue
 
 from crypto_lab.domain.base import CanonicalModel
 from crypto_lab.domain.financial import (
@@ -3017,30 +3109,37 @@ from crypto_lab.domain.financial import (
 from crypto_lab.domain.identifiers import AssetCode
 
 _INSTRUMENT_PATTERN = (
+    r"^[A-Z][A-Z0-9]*(?:[._-][A-Z0-9]+)*:"
+    r"[A-Z][A-Z0-9]*(?:[._-][A-Z0-9]+)*/"
+    r"[A-Z][A-Z0-9]*(?:[._-][A-Z0-9]+)*:"
+    r"(?:SPOT|MARGIN|FUTURES|EQUITIES)$"
+)
+_INSTRUMENT_PARSE_PATTERN = (
     r"^(?P<venue>[A-Z][A-Z0-9]*(?:[._-][A-Z0-9]+)*):"
     r"(?P<base>[A-Z][A-Z0-9]*(?:[._-][A-Z0-9]+)*)/"
     r"(?P<quote>[A-Z][A-Z0-9]*(?:[._-][A-Z0-9]+)*):"
     r"(?P<market>SPOT|MARGIN|FUTURES|EQUITIES)$"
 )
-_INSTRUMENT = re.compile(_INSTRUMENT_PATTERN)
-type InstrumentId = Annotated[
-    str,
-    StringConstraints(
-        strict=True,
-        min_length=10,
-        max_length=107,
-        pattern=_INSTRUMENT_PATTERN,
-    ),
-]
-
-
-class MarketType(StrEnum):
-    """Canonical market vocabulary available for descriptor compatibility."""
-
-    SPOT = "SPOT"
-    MARGIN = "MARGIN"
-    FUTURES = "FUTURES"
-    EQUITIES = "EQUITIES"
+_INSTRUMENT_COMPONENT_BOUNDS_PATTERN = (
+    r"^[A-Z][A-Z0-9._-]{0,31}:"
+    r"[A-Z][A-Z0-9._-]{0,31}/"
+    r"[A-Z][A-Z0-9._-]{0,31}:"
+    r"(?:SPOT|MARGIN|FUTURES|EQUITIES)$"
+)
+_INSTRUMENT_SCHEMA_PATTERN = _INSTRUMENT_PATTERN[:-1] + r"(?![\s\S])"
+_INSTRUMENT_COMPONENT_BOUNDS_SCHEMA_PATTERN = (
+    _INSTRUMENT_COMPONENT_BOUNDS_PATTERN[:-1] + r"(?![\s\S])"
+)
+_INSTRUMENT_JSON_SCHEMA: JsonSchemaValue = {
+    "type": "string",
+    "minLength": 10,
+    "maxLength": 107,
+    "allOf": [
+        {"pattern": _INSTRUMENT_SCHEMA_PATTERN},
+        {"pattern": _INSTRUMENT_COMPONENT_BOUNDS_SCHEMA_PATTERN},
+    ],
+}
+_INSTRUMENT = re.compile(_INSTRUMENT_PARSE_PATTERN)
 
 
 def parse_instrument_id(value: str) -> tuple[str, str, str, str]:
@@ -3057,6 +3156,34 @@ def parse_instrument_id(value: str) -> tuple[str, str, str, str]:
     if any(len(component) > 32 for component in components[:3]):
         raise ValueError("instrument components must not exceed 32 characters")
     return components
+
+
+def _validate_instrument_id(value: str) -> str:
+    parse_instrument_id(value)
+    return value
+
+
+type InstrumentId = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        min_length=10,
+        max_length=107,
+        pattern=_INSTRUMENT_PATTERN,
+    ),
+    AfterValidator(_validate_instrument_id),
+    WithJsonSchema(_INSTRUMENT_JSON_SCHEMA, mode="validation"),
+    WithJsonSchema(_INSTRUMENT_JSON_SCHEMA, mode="serialization"),
+]
+
+
+class MarketType(StrEnum):
+    """Canonical market vocabulary available for descriptor compatibility."""
+
+    SPOT = "SPOT"
+    MARGIN = "MARGIN"
+    FUTURES = "FUTURES"
+    EQUITIES = "EQUITIES"
 
 
 class InstrumentRef(CanonicalModel):
@@ -3124,7 +3251,9 @@ from __future__ import annotations
 import re
 from typing import Annotated
 
-from pydantic import AfterValidator, StringConstraints
+from pydantic import AfterValidator, StringConstraints, WithJsonSchema
+
+from crypto_lab.domain.identifiers import exact_string_schema
 
 SEMANTIC_VERSION_PATTERN = r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 _SEMANTIC_VERSION = re.compile(SEMANTIC_VERSION_PATTERN)
@@ -3153,6 +3282,13 @@ type SemanticVersion = Annotated[
         pattern=SEMANTIC_VERSION_PATTERN,
     ),
     AfterValidator(_validate_semantic_version),
+    WithJsonSchema(
+        exact_string_schema(
+            SEMANTIC_VERSION_PATTERN,
+            min_length=5,
+            max_length=64,
+        )
+    ),
 ]
 ```
 
@@ -3319,6 +3455,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    WithJsonSchema,
     field_validator,
     model_validator,
 )
@@ -3333,6 +3470,7 @@ from crypto_lab.domain.identifiers import (
     InvocationId,
     NormalizedIdentifier,
     RunId,
+    exact_string_schema,
 )
 from crypto_lab.domain.time import UtcDateTime
 
@@ -3383,6 +3521,13 @@ type ErrorCode = Annotated[
         min_length=3,
         max_length=128,
         pattern=_ERROR_CODE_PATTERN,
+    ),
+    WithJsonSchema(
+        exact_string_schema(
+            _ERROR_CODE_PATTERN,
+            min_length=3,
+            max_length=128,
+        )
     ),
 ]
 type DiagnosticDetailKey = Annotated[
@@ -3727,14 +3872,14 @@ SafeFilename = Annotated[
             "minLength": 1,
             "maxLength": 255,
             "allOf": [
-                {"pattern": r"^[^<>:\"/\\|?*\x00-\x1f]+$"},
-                {"not": {"pattern": r"[ .]$"}},
+                {"pattern": r"^[^<>:\"/\\|?*\x00-\x1f]+(?![\s\S])"},
+                {"not": {"pattern": r"[ .](?![\s\S])"}},
                 {
                     "not": {
                         "pattern": (
                             r"^(?:[Aa][Uu][Xx]|[Cc][Oo][Nn]|[Nn][Uu][Ll]|"
                             r"[Pp][Rr][Nn]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])"
-                            r"(?:\..*)?$"
+                            r"(?:\..*)?(?![\s\S])"
                         )
                     }
                 },
@@ -3791,7 +3936,7 @@ _WINDOWS_RESERVED_SCHEMA_PATTERN = (
     r"(?:^|[\\/])"
     r"(?:[Aa][Uu][Xx]|[Cc][Oo][Nn]|[Nn][Uu][Ll]|[Pp][Rr][Nn]|"
     r"[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])"
-    r"(?:\.|[\\/]|$)"
+    r"(?:\.|[\\/]|(?![\s\S]))"
 )
 MAX_CONFIGURATION_BYTES = 1_048_576
 _LOCAL_PATH_JSON_SCHEMA: JsonSchemaValue = {
@@ -3803,11 +3948,11 @@ _LOCAL_PATH_JSON_SCHEMA: JsonSchemaValue = {
             "pattern": (
                 r"^(?:[A-Za-z]:[\\/])?"
                 r'[^<>:"/\\|?*\x00-\x1f]+'
-                r'(?:[\\/][^<>:"/\\|?*\x00-\x1f]+)*$'
+                r'(?:[\\/][^<>:"/\\|?*\x00-\x1f]+)*(?![\s\S])'
             )
         },
-        {"not": {"pattern": r"(?:^|[\\/])\.{1,2}(?:[\\/]|$)"}},
-        {"not": {"pattern": r"[ .](?:[\\/]|$)"}},
+        {"not": {"pattern": r"(?:^|[\\/])\.{1,2}(?:[\\/]|(?![\s\S]))"}},
+        {"not": {"pattern": r"[ .](?:[\\/]|(?![\s\S]))"}},
         {"not": {"pattern": _WINDOWS_RESERVED_SCHEMA_PATTERN}},
     ],
 }
@@ -3820,11 +3965,11 @@ _ABSOLUTE_LOCAL_PATH_JSON_SCHEMA: JsonSchemaValue = {
             "pattern": (
                 r"^[A-Za-z]:[\\/]"
                 r'[^<>:"/\\|?*\x00-\x1f]+'
-                r'(?:[\\/][^<>:"/\\|?*\x00-\x1f]+)*$'
+                r'(?:[\\/][^<>:"/\\|?*\x00-\x1f]+)*(?![\s\S])'
             )
         },
-        {"not": {"pattern": r"(?:^|[\\/])\.{1,2}(?:[\\/]|$)"}},
-        {"not": {"pattern": r"[ .](?:[\\/]|$)"}},
+        {"not": {"pattern": r"(?:^|[\\/])\.{1,2}(?:[\\/]|(?![\s\S]))"}},
+        {"not": {"pattern": r"[ .](?:[\\/]|(?![\s\S]))"}},
         {"not": {"pattern": _WINDOWS_RESERVED_SCHEMA_PATTERN}},
     ],
 }
@@ -4616,6 +4761,7 @@ from crypto_lab.domain.identifiers import (
     DiagnosticId,
     NormalizedIdentifier,
     Sha256,
+    exact_string_schema,
 )
 from crypto_lab.domain.records import InstrumentRef
 from crypto_lab.domain.time import UtcDateTime
@@ -4629,10 +4775,17 @@ Timeframe = Annotated[
     StringConstraints(
         strict=True, pattern=r"^[1-9][0-9]*(?:s|m|h|d|w)$", max_length=16
     ),
+    WithJsonSchema(
+        exact_string_schema(
+            r"^[1-9][0-9]*(?:s|m|h|d|w)$",
+            max_length=16,
+        )
+    ),
 ]
 _WINDOWS_RESERVED_SEGMENT_PATTERN = (
     r"(?:^|/)(?:[Aa][Uu][Xx]|[Cc][Oo][Nn]|[Nn][Uu][Ll]|[Pp][Rr][Nn]|"
-    r"[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\.[^/]*)?(?:/|$)"
+    r"[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])"
+    r"(?:\.[^/]*)?(?:/|(?![\s\S]))"
 )
 _REGISTRY_RELATIVE_PATH_SCHEMA: JsonSchemaValue = {
     "type": "string",
@@ -4642,11 +4795,11 @@ _REGISTRY_RELATIVE_PATH_SCHEMA: JsonSchemaValue = {
         {
             "pattern": (
                 r"^[^/<>:\"\\|?*\x00-\x1f]+"
-                r"(?:/[^/<>:\"\\|?*\x00-\x1f]+)*$"
+                r"(?:/[^/<>:\"\\|?*\x00-\x1f]+)*(?![\s\S])"
             )
         },
-        {"not": {"pattern": r"(?:^|/)\.{1,2}(?:/|$)"}},
-        {"not": {"pattern": r"[ .](?:/|$)"}},
+        {"not": {"pattern": r"(?:^|/)\.{1,2}(?:/|(?![\s\S]))"}},
+        {"not": {"pattern": r"[ .](?:/|(?![\s\S]))"}},
         {"not": {"pattern": _WINDOWS_RESERVED_SEGMENT_PATTERN}},
     ],
 }
@@ -5183,13 +5336,18 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    WithJsonSchema,
     field_validator,
     model_validator,
 )
 from pydantic.json_schema import JsonSchemaValue
 
 from crypto_lab.domain.base import CanonicalModel
-from crypto_lab.domain.identifiers import NormalizedIdentifier, Sha256
+from crypto_lab.domain.identifiers import (
+    NormalizedIdentifier,
+    Sha256,
+    exact_string_schema,
+)
 from crypto_lab.domain.versioning import SemanticVersion, parse_semantic_version
 
 BoundedText = Annotated[
@@ -5203,11 +5361,24 @@ CapabilityName = Annotated[
         max_length=128,
         pattern=r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$",
     ),
+    WithJsonSchema(
+        exact_string_schema(
+            r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$",
+            min_length=3,
+            max_length=128,
+        )
+    ),
 ]
 VocabularyVersion = Annotated[
     str,
     StringConstraints(
         strict=True, pattern=r"^capabilities/v[1-9][0-9]*$", max_length=32
+    ),
+    WithJsonSchema(
+        exact_string_schema(
+            r"^capabilities/v[1-9][0-9]*$",
+            max_length=32,
+        )
     ),
 ]
 
@@ -5414,6 +5585,7 @@ from pydantic import (
     JsonValue,
     StringConstraints,
     TypeAdapter,
+    WithJsonSchema,
     model_validator,
 )
 from pydantic.experimental.missing_sentinel import MISSING
@@ -5428,6 +5600,7 @@ from crypto_lab.domain.identifiers import (
     RunId,
     Sha256,
     StrategyVersionId,
+    exact_string_schema,
 )
 from crypto_lab.domain.versioning import SemanticVersion
 
@@ -5438,6 +5611,13 @@ CorrelationId = Annotated[
         min_length=1,
         max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    ),
+    WithJsonSchema(
+        exact_string_schema(
+            r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            min_length=1,
+            max_length=128,
+        )
     ),
 ]
 
@@ -8652,6 +8832,8 @@ Create `tests/unit/domain/test_identifiers.py` with exactly:
 from __future__ import annotations
 
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import TypeAdapter, ValidationError
 
 from crypto_lab.domain.identifiers import (
@@ -8741,6 +8923,34 @@ def test_constrained_string_aliases(
             adapter.validate_python(value)
     with pytest.raises(ValidationError):
         adapter.validate_python(1)
+
+
+@pytest.mark.parametrize(
+    ("adapter", "valid"),
+    [
+        *((adapter, f"{prefix}{_UUID4}") for adapter, prefix in _ID_CASES),
+        (TypeAdapter(Sha256), "a" * 64),
+        (TypeAdapter(NormalizedIdentifier), "schema.registry-v1"),
+        (TypeAdapter(AssetCode), "BTC.USDT-V1"),
+    ],
+)
+def test_identifier_schemas_reject_terminal_newline(
+    adapter: TypeAdapter[str],
+    valid: str,
+) -> None:
+    schemas = (
+        adapter.json_schema(mode="validation"),
+        adapter.json_schema(mode="serialization"),
+    )
+    for schema in schemas:
+        assert schema["pattern"].endswith(r"(?![\s\S])")
+        validator = Draft202012Validator(schema)
+        validator.validate(valid)
+        for terminator in ("\n", "\r", "\r\n"):
+            with pytest.raises(ValidationError):
+                adapter.validate_python(valid + terminator)
+            with pytest.raises(JsonSchemaValidationError):
+                validator.validate(valid + terminator)
 ```
 
 Create `tests/unit/domain/test_time.py` with exactly:
@@ -8748,9 +8958,12 @@ Create `tests/unit/domain/test_time.py` with exactly:
 ```python
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import TypeAdapter, ValidationError
 
 from crypto_lab.domain.base import CanonicalModel
@@ -8827,10 +9040,22 @@ def test_json_validation_rejects_noncanonical_utc_text(document: str) -> None:
 
 
 def test_utc_schema_requires_the_exact_z_form() -> None:
-    schema = TypeAdapter(UtcDateTime).json_schema(mode="serialization")
-    assert schema["type"] == "string"
-    assert schema["format"] == "date-time"
-    assert schema["pattern"].endswith(r"(?:\.[0-9]{6})?Z$")
+    adapter = TypeAdapter(UtcDateTime)
+    schemas = (
+        adapter.json_schema(mode="validation"),
+        adapter.json_schema(mode="serialization"),
+    )
+    for schema in schemas:
+        assert schema["type"] == "string"
+        assert schema["format"] == "date-time"
+        assert schema["pattern"].endswith(r"Z(?![\s\S])")
+        validator = Draft202012Validator(schema)
+        validator.validate("2026-08-10T01:02:03Z")
+        for terminator in ("\n", "\r", "\r\n"):
+            with pytest.raises(ValidationError):
+                adapter.validate_json(json.dumps("2026-08-10T01:02:03Z" + terminator))
+            with pytest.raises(JsonSchemaValidationError):
+                validator.validate("2026-08-10T01:02:03Z" + terminator)
 ```
 
 Create `tests/unit/domain/test_financial.py` with exactly:
@@ -8838,9 +9063,12 @@ Create `tests/unit/domain/test_financial.py` with exactly:
 ```python
 from __future__ import annotations
 
+import json
 from decimal import Decimal, localcontext
 
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import TypeAdapter, ValidationError
 
 from crypto_lab.domain.base import CanonicalModel
@@ -8952,10 +9180,21 @@ def test_extreme_exponent_is_rejected_before_render_allocation() -> None:
 def test_decimal_json_schemas_are_string_only(
     adapter: TypeAdapter[Decimal],
 ) -> None:
-    schema = adapter.json_schema(mode="serialization")
-    assert schema["type"] == "string"
-    assert "pattern" in schema
-    assert "maxLength" in schema
+    schemas = (
+        adapter.json_schema(mode="validation"),
+        adapter.json_schema(mode="serialization"),
+    )
+    for schema in schemas:
+        assert schema["type"] == "string"
+        assert schema["pattern"].endswith(r"(?![\s\S])")
+        assert "maxLength" in schema
+        validator = Draft202012Validator(schema)
+        validator.validate("1")
+        for terminator in ("\n", "\r", "\r\n"):
+            with pytest.raises(ValidationError):
+                adapter.validate_json(json.dumps("1" + terminator))
+            with pytest.raises(JsonSchemaValidationError):
+                validator.validate("1" + terminator)
 ```
 
 Create `tests/unit/domain/test_records.py` with exactly:
@@ -8966,6 +9205,8 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import TypeAdapter, ValidationError
 
 from crypto_lab.domain.records import (
@@ -9002,12 +9243,73 @@ def test_instrument_id_is_a_strict_canonical_boundary() -> None:
         "BINANCE:BTC//USDT:SPOT",
         "binance:BTC/USDT:SPOT",
         "BINANCE:_BTC/USDT:SPOT",
-        f"{'A' * 33}:BTC/USDT:SPOT",
     ):
         with pytest.raises(ValidationError):
             adapter.validate_python(invalid)
     with pytest.raises(ValidationError):
         adapter.validate_python(1)
+
+
+@pytest.mark.parametrize(
+    ("valid", "invalid"),
+    [
+        (
+            f"{'A' * 32}:BTC/USDT:SPOT",
+            f"{'A' * 33}:BTC/USDT:SPOT",
+        ),
+        (
+            f"BINANCE:{'A' * 32}/USDT:SPOT",
+            f"BINANCE:{'A' * 33}/USDT:SPOT",
+        ),
+        (
+            f"BINANCE:BTC/{'A' * 32}:SPOT",
+            f"BINANCE:BTC/{'A' * 33}:SPOT",
+        ),
+    ],
+)
+def test_instrument_id_enforces_each_component_length(
+    valid: str,
+    invalid: str,
+) -> None:
+    adapter = TypeAdapter(InstrumentId)
+    assert adapter.validate_python(valid) == valid
+    with pytest.raises(ValidationError, match="32 characters"):
+        adapter.validate_python(invalid)
+
+
+def test_instrument_id_json_schemas_enforce_component_bounds() -> None:
+    adapter = TypeAdapter(InstrumentId)
+    schemas = (
+        adapter.json_schema(mode="validation"),
+        adapter.json_schema(mode="serialization"),
+    )
+    invalid = [
+        "BINANCE:BTC-USDT:SPOT",
+        "BINANCE:BTC/USDT:UNKNOWN",
+        "BINANCE::BTC/USDT:SPOT",
+        "BINANCE:BTC//USDT:SPOT",
+        "binance:BTC/USDT:SPOT",
+        "BINANCE:_BTC/USDT:SPOT",
+        f"{'A' * 33}:BTC/USDT:SPOT",
+        f"BINANCE:{'A' * 33}/USDT:SPOT",
+        f"BINANCE:BTC/{'A' * 33}:SPOT",
+    ]
+    invalid.extend(_INSTRUMENT + terminator for terminator in ("\n", "\r", "\r\n"))
+    for schema in schemas:
+        assert schema["type"] == "string"
+        assert schema["minLength"] == 10
+        assert schema["maxLength"] == 107
+        assert len(schema["allOf"]) == 2
+        patterns = [branch["pattern"] for branch in schema["allOf"]]
+        assert all("(?P<" not in pattern for pattern in patterns)
+        assert all("(?=" not in pattern for pattern in patterns)
+        validator = Draft202012Validator(schema)
+        validator.validate(_INSTRUMENT)
+        for value in invalid:
+            with pytest.raises(ValidationError):
+                adapter.validate_python(value)
+            with pytest.raises(JsonSchemaValidationError):
+                validator.validate(value)
 
 
 def test_instrument_ref_reconstructs_exact_identity() -> None:
@@ -9025,10 +9327,8 @@ def test_instrument_ref_reconstructs_exact_identity() -> None:
     "update",
     [
         {"canonical_id": "BINANCE:ETH/USDT:SPOT"},
-        {"quote_asset": "BTC"},
         {"canonical_id": "BINANCE:BTC-USDT:SPOT"},
         {"market_type": "UNKNOWN"},
-        {"unexpected": "rejected"},
     ],
 )
 def test_instrument_ref_rejects_inconsistent_or_foreign_fields(
@@ -9038,6 +9338,31 @@ def test_instrument_ref_rejects_inconsistent_or_foreign_fields(
     payload.update(update)
     with pytest.raises(ValidationError):
         InstrumentRef.model_validate(payload)
+
+
+def test_instrument_ref_rejects_same_base_and_quote() -> None:
+    payload = _instrument().model_dump(mode="python")
+    payload.update(
+        {
+            "canonical_id": "BINANCE:BTC/BTC:SPOT",
+            "quote_asset": "BTC",
+        }
+    )
+    with pytest.raises(
+        ValidationError,
+        match="base_asset and quote_asset must differ",
+    ):
+        InstrumentRef.model_validate(payload)
+
+
+def test_instrument_ref_rejects_unknown_fields() -> None:
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        InstrumentRef.model_validate(
+            {
+                **_instrument().model_dump(mode="python"),
+                "unexpected": "rejected",
+            }
+        )
 
 
 def test_money_price_and_quantity_round_trip() -> None:
@@ -9084,6 +9409,15 @@ def test_money_price_and_quantity_round_trip() -> None:
             {
                 "schema_version": "1.0.0",
                 "instrument_id": _INSTRUMENT,
+                "quote_asset": "USDT",
+                "value": Decimal("-1"),
+            },
+        ),
+        (
+            Price,
+            {
+                "schema_version": "1.0.0",
+                "instrument_id": _INSTRUMENT,
                 "quote_asset": "BTC",
                 "value": Decimal("1"),
             },
@@ -9113,6 +9447,30 @@ def test_financial_records_reject_invalid_values(
     payload: dict[str, object],
 ) -> None:
     with pytest.raises((TypeError, ValidationError)):
+        model_type.model_validate(payload)
+
+
+def test_money_rejects_noncanonical_json_decimal_string() -> None:
+    with pytest.raises(ValidationError):
+        Money.model_validate_json(
+            '{"schema_version":"1.0.0","currency":"USDT","amount":"1.0"}'
+        )
+
+
+@pytest.mark.parametrize("model_type", [Price, Quantity])
+def test_instrument_linked_records_reject_malformed_instrument_id(
+    model_type: type[Price] | type[Quantity],
+) -> None:
+    payload = {
+        "schema_version": "1.0.0",
+        "instrument_id": "BINANCE:BTC-USDT:SPOT",
+        "value": Decimal("1"),
+    }
+    if model_type is Price:
+        payload["quote_asset"] = "USDT"
+    else:
+        payload["base_asset"] = "BTC"
+    with pytest.raises(ValidationError):
         model_type.model_validate(payload)
 
 
@@ -11864,6 +12222,39 @@ def _references(value: object) -> tuple[str, ...]:
     return ()
 
 
+def _patterns(value: object) -> tuple[str, ...]:
+    if isinstance(value, dict):
+        direct = (value["pattern"],) if isinstance(value.get("pattern"), str) else ()
+        return direct + tuple(
+            pattern for nested in value.values() for pattern in _patterns(nested)
+        )
+    if isinstance(value, list):
+        return tuple(pattern for nested in value for pattern in _patterns(nested))
+    return ()
+
+
+def _resolve_local_ref(
+    document: dict[str, Any],
+    node: dict[str, Any],
+) -> dict[str, Any]:
+    resolved = node
+    seen: set[str] = set()
+    while isinstance(resolved.get("$ref"), str):
+        reference = cast(str, resolved["$ref"])
+        if not reference.startswith("#/") or reference in seen:
+            raise AssertionError(f"invalid local schema reference: {reference}")
+        seen.add(reference)
+        target: object = document
+        for token in reference.removeprefix("#/").split("/"):
+            if not isinstance(target, dict):
+                raise AssertionError(f"unresolvable schema reference: {reference}")
+            target = target[token.replace("~1", "/").replace("~0", "~")]
+        if not isinstance(target, dict):
+            raise AssertionError(f"schema reference is not an object: {reference}")
+        resolved = cast(dict[str, Any], target)
+    return resolved
+
+
 def test_registry_has_exactly_the_closed_eleven_paths_and_ids() -> None:
     assert {
         definition.relative_path: definition.schema_id
@@ -11890,6 +12281,14 @@ def test_every_schema_reference_is_document_local() -> None:
         assert all(reference.startswith("#/") for reference in _references(schema))
 
 
+def test_every_schema_pattern_uses_absolute_end_semantics() -> None:
+    patterns = tuple(
+        pattern for schema in _schemas().values() for pattern in _patterns(schema)
+    )
+    assert patterns
+    assert all(not pattern.endswith("$") for pattern in patterns)
+
+
 @pytest.mark.parametrize(
     ("path", "field"),
     [
@@ -11902,7 +12301,8 @@ def test_decimal_schema_fields_are_string_only(
     path: PurePosixPath,
     field: str,
 ) -> None:
-    field_schema = _schemas()[path]["properties"][field]
+    document = _schemas()[path]
+    field_schema = _resolve_local_ref(document, document["properties"][field])
     assert field_schema["type"] == "string"
     assert "pattern" in field_schema
     assert "maxLength" in field_schema
@@ -12040,7 +12440,13 @@ def test_configuration_schema_compiles_local_windows_path_rules() -> None:
 def test_utc_and_structured_schema_version_shapes_are_explicit() -> None:
     schemas = _schemas()
     partition = schemas[PurePosixPath("datasets/dataset-partition-v1.schema.json")]
-    assert partition["properties"]["start_utc"]["pattern"].endswith("Z$")
+    start_utc = _resolve_local_ref(partition, partition["properties"]["start_utc"])
+    assert start_utc["pattern"].endswith(r"Z(?![\s\S])")
+    validator = Draft202012Validator(start_utc)
+    validator.validate("2026-08-10T00:00:00Z")
+    for terminator in ("\n", "\r", "\r\n"):
+        with pytest.raises(JsonSchemaValidationError):
+            validator.validate("2026-08-10T00:00:00Z" + terminator)
     adapter = schemas[PurePosixPath("protocol/adapter-descriptor-v1.schema.json")]
     supported = adapter["properties"]["supported_schema_versions"]
     assert supported["type"] == "array"
