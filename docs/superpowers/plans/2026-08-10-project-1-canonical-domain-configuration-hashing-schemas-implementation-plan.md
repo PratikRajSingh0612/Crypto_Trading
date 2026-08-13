@@ -238,8 +238,8 @@ Create  tests/unit/domain/test_diagnostics.py
 Create  tests/unit/configuration/test_models.py
 Create  tests/unit/configuration/test_loader.py
 Create  tests/unit/configuration/test_snapshot.py
-Create  tests/unit/datasets/test_models.py
-Create  tests/unit/datasets/test_hashing.py
+Create  tests/unit/datasets/test_dataset_models.py
+Create  tests/unit/datasets/test_dataset_metadata_hashing.py
 Create  tests/property/test_dataset_hashing.py
 Create  tests/unit/adapters/test_versioning.py
 Create  tests/unit/adapters/test_descriptors.py
@@ -1478,8 +1478,8 @@ git commit -m "feat: add strict local configuration"
 - Create: `src/crypto_lab/datasets/models.py`
 - Create: `src/crypto_lab/datasets/hashing.py`
 - Modify: `src/crypto_lab/datasets/__init__.py`
-- Create: `tests/unit/datasets/test_models.py`
-- Create: `tests/unit/datasets/test_hashing.py`
+- Create: `tests/unit/datasets/test_dataset_models.py`
+- Create: `tests/unit/datasets/test_dataset_metadata_hashing.py`
 - Create: `tests/property/test_dataset_hashing.py`
 
 **Interfaces:**
@@ -10966,7 +10966,7 @@ def test_largest_adapter_catalog_remains_snapshot_eligible() -> None:
     assert len(snapshot.configuration_json.encode("utf-8")) <= 1_048_576
 ```
 
-Create `tests/unit/datasets/test_models.py` with exactly:
+Create `tests/unit/datasets/test_dataset_models.py` with exactly:
 
 ```python
 from __future__ import annotations
@@ -11245,7 +11245,7 @@ def test_ordered_checksum_tuples_may_contain_valid_duplicate_hashes() -> None:
     assert descriptor.normalized_checksums == ("2" * 64, "2" * 64)
 ```
 
-Create `tests/unit/datasets/test_hashing.py` with exactly:
+Create `tests/unit/datasets/test_dataset_metadata_hashing.py` with exactly:
 
 ```python
 from __future__ import annotations
