@@ -11,6 +11,11 @@ from pathlib import Path
 PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab",
     "crypto_lab.domain",
+    "crypto_lab.domain.base",
+    "crypto_lab.domain.identifiers",
+    "crypto_lab.domain.time",
+    "crypto_lab.domain.financial",
+    "crypto_lab.domain.records",
     "crypto_lab.strategy",
     "crypto_lab.capabilities",
     "crypto_lab.adapters",
@@ -44,7 +49,18 @@ def _unexpected_operation(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("package import attempted a forbidden side effect")
 
 
-os.getenv = _unexpected_operation
+def _guarded_getenv(key: str, default: object = None) -> str:
+    del default
+    caller_module = sys._getframe(1).f_globals.get("__name__")
+    if (
+        key == "PYDANTIC_DISABLE_PLUGINS"
+        and caller_module == "pydantic.plugin._loader"
+    ):
+        return "__all__"
+    return _unexpected_operation(key, caller_module)
+
+
+os.getenv = _guarded_getenv
 socket.create_connection = _unexpected_operation
 subprocess.Popen = _unexpected_operation
 urllib.request.urlopen = _unexpected_operation

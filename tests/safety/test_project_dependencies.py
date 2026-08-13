@@ -248,3 +248,15 @@ def test_lock_registry_artifacts_are_sha256_pinned(repository_root: Path) -> Non
             digest = artifact_table.get("hash")
             assert isinstance(digest, str)
             assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is not None
+
+
+def test_mypy_untyped_import_override_is_exact(repository_root: Path) -> None:
+    document = _load_pyproject(repository_root / "pyproject.toml")
+    tool = _mapping(document.get("tool"), "[tool]")
+    mypy = _mapping(tool.get("mypy"), "[tool.mypy]")
+    assert mypy.get("overrides") == [
+        {
+            "module": ["jsonschema", "jsonschema.*"],
+            "ignore_missing_imports": True,
+        }
+    ]
