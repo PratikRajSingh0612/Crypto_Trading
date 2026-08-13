@@ -11724,8 +11724,6 @@ Create `tests/unit/adapters/test_versioning.py` with exactly:
 ```python
 from __future__ import annotations
 
-from typing import cast
-
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
@@ -11801,10 +11799,7 @@ def test_highest_common_version_validates_every_input_before_intersection(
     adapter: tuple[str, ...],
 ) -> None:
     with pytest.raises(ValueError, match="stable canonical"):
-        highest_common_stable_version(
-            cast(tuple[SemanticVersion, ...], core),
-            cast(tuple[SemanticVersion, ...], adapter),
-        )
+        highest_common_stable_version(core, adapter)
 ```
 
 Create `tests/unit/adapters/test_descriptors.py` with exactly:
