@@ -10264,17 +10264,25 @@ def test_heartbeat_ratio_and_retry_normalization() -> None:
             heartbeat_interval_seconds=30,
             missing_heartbeat_seconds=59,
         )
-    retry = RetryConfig(automatically_retry_terminal_states=("UNAVAILABLE", "FAILED"))
+    retry = RetryConfig.model_validate(
+        {"automatically_retry_terminal_states": ("UNAVAILABLE", "FAILED")}
+    )
     assert retry.automatically_retry_terminal_states == (
         "FAILED",
         "UNAVAILABLE",
     )
     with pytest.raises(ValidationError, match="unique"):
-        RetryConfig(automatically_retry_terminal_states=("FAILED", "FAILED"))
+        RetryConfig.model_validate(
+            {"automatically_retry_terminal_states": ("FAILED", "FAILED")}
+        )
     with pytest.raises(ValidationError, match="foreign"):
-        RetryConfig(automatically_retry_terminal_states=("CANCELLED",))
+        RetryConfig.model_validate(
+            {"automatically_retry_terminal_states": ("CANCELLED",)}
+        )
     with pytest.raises(ValidationError):
-        RetryConfig(require_fresh_availability_observation_for_unavailable=False)
+        RetryConfig.model_validate(
+            {"require_fresh_availability_observation_for_unavailable": False}
+        )
 
 
 def test_adapter_catalog_is_sorted_unique_and_rejects_secret_like_keys() -> None:
@@ -10330,12 +10338,14 @@ def test_runtime_metadata_rejects_depth_nodes_and_encoded_bytes() -> None:
         ({"payload": ["x" * 2_048 for _ in range(8)]}, "encoded bytes"),
     ):
         with pytest.raises(ValidationError, match=message):
-            AdapterEntryConfig(
-                adapter_name="adapter.alpha",
-                adapter_version="1.0.0",
-                executable_path=r"C:\adapter.exe",
-                executable_hash=_HASH,
-                runtime_metadata=metadata,
+            AdapterEntryConfig.model_validate(
+                {
+                    "adapter_name": "adapter.alpha",
+                    "adapter_version": "1.0.0",
+                    "executable_path": r"C:\adapter.exe",
+                    "executable_hash": _HASH,
+                    "runtime_metadata": metadata,
+                }
             )
 
 
@@ -10583,7 +10593,7 @@ def test_invalid_layers_use_one_path_only_error(
             cli_overrides=None,
             invocation_base=tmp_path,
         )
-    assert contents not in str(captured.value)
+    assert str(captured.value) == f"CONFIG.LAYER_INVALID: {primary}"
 
 
 def test_oversized_layer_is_rejected_before_decode_or_parse(tmp_path: Path) -> None:
@@ -10682,19 +10692,21 @@ def test_explicit_loading_uses_no_ambient_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     primary = _write(tmp_path / "primary.toml", 'schema_version = "1.0.0"')
-    monkeypatch.setattr(os, "getenv", _forbidden)
-    monkeypatch.setattr(os, "environ", ForbiddenEnvironment())
-    monkeypatch.setattr(Path, "home", _forbidden)
-    monkeypatch.setattr(Path, "cwd", _forbidden)
-    monkeypatch.setattr(Path, "expanduser", _forbidden)
-    monkeypatch.setattr(socket, "create_connection", _forbidden)
-    monkeypatch.setattr(urllib.request, "urlopen", _forbidden)
-    config = load_configuration(
-        primary_path=primary,
-        local_override_path=None,
-        cli_overrides=None,
-        invocation_base=tmp_path,
-    )
+    with monkeypatch.context() as boundary:
+        boundary.setattr(os, "getenv", _forbidden)
+        boundary.setattr(os, "environ", ForbiddenEnvironment())
+        boundary.setattr(Path, "home", _forbidden)
+        boundary.setattr(Path, "cwd", _forbidden)
+        boundary.setattr(Path, "expanduser", _forbidden)
+        boundary.setattr(Path, "resolve", _forbidden)
+        boundary.setattr(socket, "create_connection", _forbidden)
+        boundary.setattr(urllib.request, "urlopen", _forbidden)
+        config = load_configuration(
+            primary_path=primary,
+            local_override_path=None,
+            cli_overrides=None,
+            invocation_base=tmp_path,
+        )
     assert config.schema_version == "1.0.0"
 
 
