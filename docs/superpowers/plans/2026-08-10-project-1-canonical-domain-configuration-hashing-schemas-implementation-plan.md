@@ -1613,27 +1613,30 @@ git commit -m "feat: add dataset metadata contracts"
 - [ ] **Step 1: Write the schema, import, source, and distribution tests red**
 
 Apply the exact Appendix A changes to the fresh-process import test. Pytest is
-already a launcher-controlled process. Its test starts the repository
+already a launcher-controlled process whose child inherits the fixed
+`PYDANTIC_DISABLE_PLUGINS=__all__` control. The test starts the repository
 `.venv`'s exact `sys.executable -I -B` descendant in `tmp_path`, imports only
-standard-library guard machinery, installs every guard, and only then imports
-the listed project modules and their Pydantic dependency. The `os.getenv`
-guard returns `__all__` only for the exact `pydantic.plugin._loader` caller and
-rejects every other query without reading the environment. The `os.environ`
-mapping returns a fixed truthy synthetic absolute Windows path only for the
-exact `PYTHONUSERBASE`/`None`/`sysconfig` lookup, returns `False` only for
-`sysconfig` membership of `_PYTHON_PROJECT_BASE`, and returns the supplied
-`None` only for the exact `PYTHONTZPATH`/`None`/`zoneinfo._tzpath` lookup. It
-never reads or preserves an ambient value; every other mapping query or
-operation fails closed. Three direct child self-checks require those same
-expressions from `__main__` to raise. The child prints one sentinel; the parent
-requires zero exit, exact stdout, empty stderr, and an untouched `tmp_path`.
+standard-library guard machinery, installs network/process/filesystem-write
+guards that do not break CPython or pytest internals, and only then imports the
+listed project modules and their Pydantic dependency. The child leaves the
+process-global `os.environ` mapping intact; dependency-internal platform reads
+by CPython, Pydantic, `zoneinfo`, or `sysconfig` are not application
+configuration and are not intercepted. The child does not replace or wrap
+`os.environ`, patch `os.getenv`, or patch `Path.cwd` or `Path.resolve`. The
+child prints one sentinel; the parent requires zero exit, exact stdout, empty
+stderr, and an untouched `tmp_path`.
 
-The new safety scanner parses every `src/crypto_lab/**/*.py` file and rejects
-imports of real engines, exchanges, networking clients, `socket`, `urllib`,
-`http.client`, `subprocess`, `sqlite3`, SQLAlchemy, Alembic, pickle, YAML,
-PyArrow, and dataframe libraries. It separately rejects environment/profile/
-credential access and later-stage class/function names. It allows only
-Pydantic plus the standard-library modules explicitly used in this stage.
+The new safety scanner parses every `src/crypto_lab/**/*.py` file without
+importing it and rejects real engines, exchanges, networking clients,
+`socket`, `urllib`, `http.client`, `subprocess`, `sqlite3`, SQLAlchemy,
+Alembic, pickle, YAML, PyArrow, and dataframe libraries. It separately rejects
+project-owned environment access through a deterministic AST scan that tracks
+`os` aliases, rejects `getenv`/`environ`/`putenv`/`unsetenv` attribute
+references and `from os import` forms, rejects `getattr` access to those names
+on an `os` alias, rejects the literal control name `PYDANTIC_DISABLE_PLUGINS`,
+and reports stable relative path, line number, and prohibited access. It also
+rejects later-stage class/function names. It allows only Pydantic plus the
+standard-library modules explicitly used in this stage.
 It also requires the sole pytest import root to be exactly `scripts`, while
 proving that directory remains outside Hatch's wheel and editable-runtime
 package roots and has no `__init__.py` package marker.
@@ -1709,25 +1712,13 @@ _ALLOWED_IMPORT_ROOTS = {
     "typing",
     "uuid",
 }
-_FORBIDDEN_AMBIENT_NAMES = {
-    "os.environ",
-    "os.getenv",
-    "os.putenv",
-    "os.spawnl",
-    "os.spawnle",
-    "os.spawnlp",
-    "os.spawnlpe",
-    "os.spawnv",
-    "os.spawnve",
-    "os.spawnvp",
-    "os.spawnvpe",
-    "os.startfile",
-    "os.system",
-    "os.unsetenv",
+_FORBIDDEN_PATH_ACCESS = {
     "pathlib.Path.cwd",
     "pathlib.Path.expanduser",
     "pathlib.Path.home",
 }
+_PROHIBITED_OS_ATTRIBUTES = frozenset({"getenv", "environ", "putenv", "unsetenv"})
+_PROHIBITED_CONTROL_LITERAL = "PYDANTIC_DISABLE_PLUGINS"
 _DEFERRED_DEFINITIONS = {
     "AdapterCatalog",
     "AdapterCatalogEntry",
@@ -1848,6 +1839,55 @@ def _resolved_qualified_name(
     return resolved if not separator else f"{resolved}.{tail}"
 
 
+def _os_aliases(tree: ast.AST) -> frozenset[str]:
+    aliases: set[str] = {"os"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "os":
+                    aliases.add(alias.asname or "os")
+        elif isinstance(node, ast.ImportFrom) and node.module == "os":
+            aliases.add("os")
+    return frozenset(aliases)
+
+
+def _environment_access_violations(
+    tree: ast.AST,
+    relative_path: str,
+) -> list[str]:
+    violations: list[str] = []
+    os_aliases = _os_aliases(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "os":
+            for alias in node.names:
+                if alias.name in _PROHIBITED_OS_ATTRIBUTES:
+                    violations.append(
+                        f"{relative_path}:{node.lineno}: "
+                        f"prohibited from os import {alias.name}"
+                    )
+        if isinstance(node, ast.Attribute) and node.attr in _PROHIBITED_OS_ATTRIBUTES:
+            base = _qualified_name(node.value)
+            if base in os_aliases:
+                violations.append(
+                    f"{relative_path}:{node.lineno}: prohibited os.{node.attr}"
+                )
+        if isinstance(node, ast.Call) and _qualified_name(node.func) == "getattr":
+            if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+                attr = node.args[1].value
+                if isinstance(attr, str) and attr in _PROHIBITED_OS_ATTRIBUTES:
+                    base = _qualified_name(node.args[0])
+                    if base in os_aliases:
+                        violations.append(
+                            f"{relative_path}:{node.lineno}: "
+                            f"prohibited getattr os access {attr}"
+                        )
+        if isinstance(node, ast.Constant) and node.value == _PROHIBITED_CONTROL_LITERAL:
+            violations.append(
+                f"{relative_path}:{node.lineno}: prohibited control literal"
+            )
+    return violations
+
+
 def _source_files(repository_root: Path) -> tuple[Path, ...]:
     return tuple(sorted((repository_root / "src/crypto_lab").rglob("*.py")))
 
@@ -1879,7 +1919,19 @@ def test_source_imports_only_the_explicit_stage3_allowlist(
     assert failures == []
 
 
-def test_source_has_no_ambient_access_or_later_stage_definitions(
+def test_project_source_has_no_environment_access(
+    repository_root: Path,
+) -> None:
+    source_root = repository_root / "src/crypto_lab"
+    failures: list[str] = []
+    for path in _source_files(repository_root):
+        relative = path.relative_to(source_root).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        failures.extend(_environment_access_violations(tree, relative))
+    assert failures == []
+
+
+def test_source_has_no_path_ambient_access_or_later_stage_definitions(
     repository_root: Path,
 ) -> None:
     failures: list[str] = []
@@ -1889,30 +1941,35 @@ def test_source_has_no_ambient_access_or_later_stage_definitions(
         for node in ast.walk(tree):
             if isinstance(node, ast.Name | ast.Attribute):
                 name = _resolved_qualified_name(node, aliases)
-                if name in _FORBIDDEN_AMBIENT_NAMES:
-                    failures.append(f"{path}: forbidden ambient access {name}")
+                if name in _FORBIDDEN_PATH_ACCESS:
+                    failures.append(f"{path}: forbidden path access {name}")
             if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
                 if node.name in _DEFERRED_DEFINITIONS:
                     failures.append(f"{path}: later-stage definition {node.name}")
     assert failures == []
 
 
-def test_alias_resolution_cannot_hide_ambient_access() -> None:
+def test_environment_scan_detects_aliased_os_access() -> None:
     tree = ast.parse(
         "import os as operating\n"
-        "from pathlib import Path as LocalPath\n"
         "operating.getenv('name')\n"
-        "LocalPath.home()\n"
+        "getattr(operating, 'environ')\n"
     )
-    aliases = _import_aliases(tree)
-    resolved = {
-        name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name | ast.Attribute)
-        and (name := _resolved_qualified_name(node, aliases)) is not None
-    }
-    assert "os.getenv" in resolved
-    assert "pathlib.Path.home" in resolved
+    violations = _environment_access_violations(tree, "probe.py")
+    assert any("getenv" in item for item in violations)
+    assert any("environ" in item for item in violations)
+
+
+def test_environment_scan_detects_from_os_import() -> None:
+    tree = ast.parse("from os import putenv\n")
+    violations = _environment_access_violations(tree, "probe.py")
+    assert any("putenv" in item for item in violations)
+
+
+def test_environment_scan_detects_control_literal() -> None:
+    tree = ast.parse('control = "PYDANTIC_DISABLE_PLUGINS"\n')
+    violations = _environment_access_violations(tree, "probe.py")
+    assert violations == ["probe.py:1: prohibited control literal"]
 
 
 @pytest.mark.parametrize("name", sorted(_DEFERRED_DEFINITIONS))
@@ -8357,11 +8414,8 @@ import subprocess
 import sys
 import urllib.request
 import winreg
-from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn
-
-_SYNTHETIC_USER_BASE = "C:/__crypto_lab_import_probe_userbase__"
 
 
 def _unexpected_operation(*args: object, **kwargs: object) -> NoReturn:
@@ -8369,64 +8423,7 @@ def _unexpected_operation(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("package import attempted a forbidden side effect")
 
 
-def _guarded_getenv(key: str, default: object = None) -> str:
-    del default
-    caller_module = sys._getframe(1).f_globals.get("__name__")
-    if (
-        key == "PYDANTIC_DISABLE_PLUGINS"
-        and caller_module == "pydantic.plugin._loader"
-    ):
-        return "__all__"
-    return _unexpected_operation(key, caller_module)
-
-
-class ForbiddenEnvironment:
-    def __getitem__(self, key: object) -> NoReturn:
-        return _unexpected_operation(key)
-
-    def __iter__(self) -> NoReturn:
-        return _unexpected_operation()
-
-    def __len__(self) -> NoReturn:
-        return _unexpected_operation()
-
-    def get(self, key: object, default: object = None) -> object:
-        caller_module = sys._getframe(1).f_globals.get("__name__")
-        if (
-            key == "PYTHONUSERBASE"
-            and default is None
-            and caller_module == "sysconfig"
-        ):
-            return _SYNTHETIC_USER_BASE
-        if (
-            key == "PYTHONTZPATH"
-            and default is None
-            and caller_module == "zoneinfo._tzpath"
-        ):
-            return default
-        return _unexpected_operation(key, default, caller_module)
-
-    def items(self) -> NoReturn:
-        return _unexpected_operation()
-
-    def keys(self) -> NoReturn:
-        return _unexpected_operation()
-
-    def values(self) -> NoReturn:
-        return _unexpected_operation()
-
-    def copy(self) -> NoReturn:
-        return _unexpected_operation()
-
-    def __contains__(self, key: object) -> bool:
-        caller_module = sys._getframe(1).f_globals.get("__name__")
-        if key == "_PYTHON_PROJECT_BASE" and caller_module == "sysconfig":
-            return False
-        return _unexpected_operation(key, caller_module)
-
-
 builtins.open = _unexpected_operation
-os.getenv = _guarded_getenv
 os.putenv = _unexpected_operation
 os.unsetenv = _unexpected_operation
 os.system = _unexpected_operation
@@ -8439,25 +8436,6 @@ os.spawnve = _unexpected_operation
 os.spawnvp = _unexpected_operation
 os.spawnvpe = _unexpected_operation
 os.startfile = _unexpected_operation
-os.environ = ForbiddenEnvironment()
-
-
-def _require_environment_call_rejected(
-    operation: Callable[[], object],
-) -> None:
-    try:
-        operation()
-    except AssertionError:
-        return
-    raise AssertionError("environment guard allowed a non-stdlib caller")
-
-
-for environment_call in (
-    lambda: os.environ.get("PYTHONUSERBASE", None),
-    lambda: "_PYTHON_PROJECT_BASE" in os.environ,
-    lambda: os.environ.get("PYTHONTZPATH", None),
-):
-    _require_environment_call_rejected(environment_call)
 socket.socket = _unexpected_operation
 socket.create_connection = _unexpected_operation
 subprocess.Popen = _unexpected_operation
@@ -8470,7 +8448,6 @@ winreg.QueryValue = _unexpected_operation
 winreg.QueryValueEx = _unexpected_operation
 winreg.EnumKey = _unexpected_operation
 winreg.EnumValue = _unexpected_operation
-Path.cwd = _unexpected_operation
 Path.home = _unexpected_operation
 Path.expanduser = _unexpected_operation
 Path.open = _unexpected_operation
@@ -8482,7 +8459,6 @@ Path.is_file = _unexpected_operation
 Path.iterdir = _unexpected_operation
 Path.glob = _unexpected_operation
 Path.rglob = _unexpected_operation
-Path.resolve = _unexpected_operation
 Path.stat = _unexpected_operation
 Path.lstat = _unexpected_operation
 Path.mkdir = _unexpected_operation
@@ -8553,27 +8529,19 @@ Pytest itself starts through the repository launcher, so its exact
 `sys.executable` and every descendant inherit the fixed control before Python
 starts. The test pins that interpreter to the repository `.venv` and starts it
 directly with an argument array, avoiding any caller-selectable launcher Python
-profile. The child itself imports no Pydantic package before installing guards;
-its `os.getenv` guard returns the fixed literal only for the exact
-`pydantic.plugin._loader` caller and rejects every application call, while its
-`os.environ` mapping exposes only three deterministic standard-library import
-results: the fixed truthy absolute Windows path
-`C:/__crypto_lab_import_probe_userbase__` for the exact
-`PYTHONUSERBASE`/`None`/`sysconfig` lookup, `False` for `sysconfig` membership
-of `_PYTHON_PROJECT_BASE`, and the supplied `None` for the exact
-`PYTHONTZPATH`/`None`/`zoneinfo._tzpath` lookup. The mapping does not allow
-`APPDATA`, project-base indexing, or any private Pydantic schema-environment
-lookup; it neither reads nor preserves an ambient value. Three
-mutation-sensitive child self-checks require all three expressions from
-`__main__` to raise, and every other mapping query or operation fails closed.
-Before importing any entry in `PACKAGE_MODULES`, the child traps ambient
-environment/profile/registry access, file reads and writes through the guarded
-APIs, network creation, and process launch APIs. It runs in isolated mode from
+profile. The child leaves the process-global `os.environ` mapping intact;
+dependency-internal platform reads by CPython, Pydantic, `zoneinfo`, or
+`sysconfig` are not application configuration and are not intercepted. The child
+does not replace or wrap `os.environ`, patch `os.getenv`, or patch `Path.cwd` or
+`Path.resolve`. Before importing any entry in `PACKAGE_MODULES`, the child traps
+network creation, process launch APIs, profile-oriented path helpers, and file
+reads and writes through the guarded APIs. It runs in isolated mode from
 `tmp_path`, uses an argument array with `shell=False`, and retains exact
 sentinel/stdout/stderr/filesystem assertions. The separate launcher behavior
-test proves fixed child inheritance and parent isolation. Exact source/AST
-review remains necessary; this bounded guard is not claimed to intercept every
-possible operating-system call.
+test proves fixed child inheritance and parent isolation. Project-owned
+environment access is enforced separately by the deterministic AST scan in
+`tests/safety/test_stage3_boundaries.py`; this bounded guard is not claimed to
+intercept every possible operating-system call.
 
 Apply the exact Task 1 patch to
 `tests/safety/test_project_dependencies.py` shown in Task 1 Step 1; no
@@ -8664,25 +8632,13 @@ _ALLOWED_IMPORT_ROOTS = {
     "typing",
     "uuid",
 }
-_FORBIDDEN_AMBIENT_NAMES = {
-    "os.environ",
-    "os.getenv",
-    "os.putenv",
-    "os.spawnl",
-    "os.spawnle",
-    "os.spawnlp",
-    "os.spawnlpe",
-    "os.spawnv",
-    "os.spawnve",
-    "os.spawnvp",
-    "os.spawnvpe",
-    "os.startfile",
-    "os.system",
-    "os.unsetenv",
+_FORBIDDEN_PATH_ACCESS = {
     "pathlib.Path.cwd",
     "pathlib.Path.expanduser",
     "pathlib.Path.home",
 }
+_PROHIBITED_OS_ATTRIBUTES = frozenset({"getenv", "environ", "putenv", "unsetenv"})
+_PROHIBITED_CONTROL_LITERAL = "PYDANTIC_DISABLE_PLUGINS"
 _DEFERRED_DEFINITIONS = {
     "AdapterCatalog",
     "AdapterCatalogEntry",
@@ -8827,6 +8783,55 @@ def _resolved_qualified_name(
     return resolved if not separator else f"{resolved}.{tail}"
 
 
+def _os_aliases(tree: ast.AST) -> frozenset[str]:
+    aliases: set[str] = {"os"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "os":
+                    aliases.add(alias.asname or "os")
+        elif isinstance(node, ast.ImportFrom) and node.module == "os":
+            aliases.add("os")
+    return frozenset(aliases)
+
+
+def _environment_access_violations(
+    tree: ast.AST,
+    relative_path: str,
+) -> list[str]:
+    violations: list[str] = []
+    os_aliases = _os_aliases(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "os":
+            for alias in node.names:
+                if alias.name in _PROHIBITED_OS_ATTRIBUTES:
+                    violations.append(
+                        f"{relative_path}:{node.lineno}: "
+                        f"prohibited from os import {alias.name}"
+                    )
+        if isinstance(node, ast.Attribute) and node.attr in _PROHIBITED_OS_ATTRIBUTES:
+            base = _qualified_name(node.value)
+            if base in os_aliases:
+                violations.append(
+                    f"{relative_path}:{node.lineno}: prohibited os.{node.attr}"
+                )
+        if isinstance(node, ast.Call) and _qualified_name(node.func) == "getattr":
+            if len(node.args) >= 2 and isinstance(node.args[1], ast.Constant):
+                attr = node.args[1].value
+                if isinstance(attr, str) and attr in _PROHIBITED_OS_ATTRIBUTES:
+                    base = _qualified_name(node.args[0])
+                    if base in os_aliases:
+                        violations.append(
+                            f"{relative_path}:{node.lineno}: "
+                            f"prohibited getattr os access {attr}"
+                        )
+        if isinstance(node, ast.Constant) and node.value == _PROHIBITED_CONTROL_LITERAL:
+            violations.append(
+                f"{relative_path}:{node.lineno}: prohibited control literal"
+            )
+    return violations
+
+
 def _source_files(repository_root: Path) -> tuple[Path, ...]:
     return tuple(sorted((repository_root / "src/crypto_lab").rglob("*.py")))
 
@@ -8941,7 +8946,19 @@ def test_source_imports_only_the_explicit_stage3_allowlist(
     assert failures == []
 
 
-def test_source_has_no_ambient_access_or_later_stage_definitions(
+def test_project_source_has_no_environment_access(
+    repository_root: Path,
+) -> None:
+    source_root = repository_root / "src/crypto_lab"
+    failures: list[str] = []
+    for path in _source_files(repository_root):
+        relative = path.relative_to(source_root).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        failures.extend(_environment_access_violations(tree, relative))
+    assert failures == []
+
+
+def test_source_has_no_path_ambient_access_or_later_stage_definitions(
     repository_root: Path,
 ) -> None:
     failures: list[str] = []
@@ -8951,30 +8968,35 @@ def test_source_has_no_ambient_access_or_later_stage_definitions(
         for node in ast.walk(tree):
             if isinstance(node, ast.Name | ast.Attribute):
                 name = _resolved_qualified_name(node, aliases)
-                if name in _FORBIDDEN_AMBIENT_NAMES:
-                    failures.append(f"{path}: forbidden ambient access {name}")
+                if name in _FORBIDDEN_PATH_ACCESS:
+                    failures.append(f"{path}: forbidden path access {name}")
             if isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
                 if node.name in _DEFERRED_DEFINITIONS:
                     failures.append(f"{path}: later-stage definition {node.name}")
     assert failures == []
 
 
-def test_alias_resolution_cannot_hide_ambient_access() -> None:
+def test_environment_scan_detects_aliased_os_access() -> None:
     tree = ast.parse(
         "import os as operating\n"
-        "from pathlib import Path as LocalPath\n"
         "operating.getenv('name')\n"
-        "LocalPath.home()\n"
+        "getattr(operating, 'environ')\n"
     )
-    aliases = _import_aliases(tree)
-    resolved = {
-        name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Name | ast.Attribute)
-        and (name := _resolved_qualified_name(node, aliases)) is not None
-    }
-    assert "os.getenv" in resolved
-    assert "pathlib.Path.home" in resolved
+    violations = _environment_access_violations(tree, "probe.py")
+    assert any("getenv" in item for item in violations)
+    assert any("environ" in item for item in violations)
+
+
+def test_environment_scan_detects_from_os_import() -> None:
+    tree = ast.parse("from os import putenv\n")
+    violations = _environment_access_violations(tree, "probe.py")
+    assert any("putenv" in item for item in violations)
+
+
+def test_environment_scan_detects_control_literal() -> None:
+    tree = ast.parse('control = "PYDANTIC_DISABLE_PLUGINS"\n')
+    violations = _environment_access_violations(tree, "probe.py")
+    assert violations == ["probe.py:1: prohibited control literal"]
 
 
 @pytest.mark.parametrize("name", sorted(_DEFERRED_DEFINITIONS))
