@@ -196,6 +196,7 @@ Create  scripts/invoke-uv.ps1
 Modify  scripts/verify.ps1
 Modify  docs/development/verification.md
 Modify  README.md
+Modify  docs/superpowers/plans/2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-implementation-plan.md
 Modify  docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md
 Modify  src/crypto_lab/domain/__init__.py
 Create  src/crypto_lab/domain/base.py
@@ -2569,6 +2570,15 @@ Extend the two named safety files with exact assertions that:
 
 - roadmap status says `Stages 1 through 3 complete`;
 - Stage 3's plan label is `Approved detailed implementation plan`;
+- the obsolete `Planned detailed implementation plan` label is absent from
+  Stage 3;
+- Stage 3's dependency-control row requires `lock-resolve-offline`,
+  `lock-check`, and `sync` first; permits only the exact Stage 3 Task 1
+  `lock-acquire` and `sync-acquire` profiles to omit offline after separate
+  one-time approval; and says the historical Stage 1 exceptions grant no
+  Stage 3 authority;
+- the old raw Stage 3 `uv lock` and
+  `uv sync --frozen --no-install-project` dependency-control row is absent;
 - its status row says `Approved and executed`, records the exact
   `$stage3ImplementationCommit`, and marks the exit gate `Complete`;
 - Stage 4 is `Eligible for just-in-time planning after Stage 3 completion`;
@@ -2596,7 +2606,9 @@ Use `apply_patch`. Replace the roadmap header status with:
 ```
 
 Change the introductory sentence to say Stages 1 through 3 have approved
-detailed implementation plans. Change only Stage 3's plan label from
+detailed implementation plans. Replace Stage 3's stale raw dependency-control
+row with the exact closed launcher-profile row in Appendix A.13. Change only
+Stage 3's plan label from
 `Planned detailed implementation plan` to `Approved detailed implementation
 plan`. Replace the Stage 3 status row with this exact text after binding
 `__STAGE3_IMPLEMENTATION_COMMIT__` to the already captured 40-character
@@ -2611,14 +2623,16 @@ the patch, require the value to match `^[0-9a-f]{40}$`; after applying it,
 require `rg -n "__STAGE3_IMPLEMENTATION_COMMIT__"` to return exit 1 with no
 output.
 
-Replace Stage 4's detailed-plan status with
+The dependency-control correction is the only additional roadmap change:
+retain Stage 1's historical row verbatim and do not reinterpret its exceptions
+as Stage 3 authority. Replace Stage 4's detailed-plan status with
 `Eligible for just-in-time planning after Stage 3 completion`. In README,
 replace `**Status:** Project 1 Stage 3 implementation under acceptance review`
 with
 `**Status:** Project 1 Stages 1-3 complete` and update only the opening scope
 sentence to name the completed Stage 3 foundation. Do not change the ten-stage
 order, 21 edges, 15 gates, Stage 2 outcome, any later stage scope, or the
-architecture/ADR.
+architecture/ADR or any other roadmap row.
 
 - [ ] **Step 5: Run focused status checks, commit, and recollect all evidence**
 
@@ -9135,6 +9149,33 @@ def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
     assert "Stages 1 through 3 complete" in roadmap
     assert "Stages 1 through 3 have approved detailed implementation plans." in roadmap
     assert (
+        "**Approved detailed implementation plan:** "
+        "`docs/superpowers/plans/"
+        "2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-"
+        "implementation-plan.md`."
+    ) in roadmap
+    assert (
+        "**Planned detailed implementation plan:** "
+        "`docs/superpowers/plans/"
+        "2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-"
+        "implementation-plan.md`."
+    ) not in roadmap
+    assert (
+        "| Dependency bootstrap network | Run launcher profiles "
+        "`lock-resolve-offline`, `lock-check`, and `sync` first; only the exact "
+        "Stage 3 Task 1 `lock-acquire` and `sync-acquire` profiles may omit "
+        "offline after separate one-time approval; the historical Stage 1 "
+        "exceptions grant no Stage 3 authority; verification never uses the "
+        "network |"
+    ) in roadmap
+    assert (
+        "| Dependency bootstrap network | Offline resolution, lock check, and "
+        "synchronization first; only the exact one-time Task 1 `uv lock` and "
+        "`uv sync --frozen --no-install-project` fallbacks may run after "
+        "separate user approval when required metadata or locked distributions "
+        "are absent; verification never uses the network |"
+    ) not in roadmap
+    assert (
         "| 3 — Canonical Domain, Configuration, Hashing, and Schemas | "
         "Approved and executed | Complete at "
         f"`{STAGE3_IMPLEMENTATION_COMMIT}` | Complete; canonical models, "
@@ -13449,6 +13490,9 @@ constant—with the same captured lowercase 40-character
 -**Planned detailed implementation plan:** `docs/superpowers/plans/2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-implementation-plan.md`.
 +**Approved detailed implementation plan:** `docs/superpowers/plans/2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-implementation-plan.md`.
 @@
+-| Dependency bootstrap network | Offline resolution, lock check, and synchronization first; only the exact one-time Task 1 `uv lock` and `uv sync --frozen --no-install-project` fallbacks may run after separate user approval when required metadata or locked distributions are absent; verification never uses the network |
++| Dependency bootstrap network | Run launcher profiles `lock-resolve-offline`, `lock-check`, and `sync` first; only the exact Stage 3 Task 1 `lock-acquire` and `sync-acquire` profiles may omit offline after separate one-time approval; the historical Stage 1 exceptions grant no Stage 3 authority; verification never uses the network |
+@@
 -| 3 — Canonical Domain, Configuration, Hashing, and Schemas | Eligible for just-in-time planning after the completed Stage 2 governance decision | Not started | Not evaluated |
 -| 4 — Portable Strategy, Capabilities, and Comparison | Intentionally deferred until Stage 3 completion | Not started | Not evaluated |
 +| 3 — Canonical Domain, Configuration, Hashing, and Schemas | Approved and executed | Complete at `__STAGE3_IMPLEMENTATION_COMMIT__` | Complete; canonical models, explicit configuration, named hashes, dataset metadata, structural descriptors, artifact owners, and 11 generated schemas verified offline |
@@ -13493,7 +13537,7 @@ This is a review of the executable plan, not a claim that Stage 3 has run:
 - [x] Tasks 1 through 9 are physically ordered by dependency. Task 9 performs
   the roadmap/README completion update only after Task 8's fresh full verifier
   succeeds and its implementation commit is captured.
-- [x] The closed file map has 68 paths: 56 text paths with literal complete
+- [x] The closed file map has 69 paths: 57 text paths with literal complete
   contents or exact patches, `uv.lock` generated only by uv, and 11 schema
   files generated only from the closed deterministic registry.
 - [x] The registry has exactly 11 unique paths and stable URN IDs. Descriptor
