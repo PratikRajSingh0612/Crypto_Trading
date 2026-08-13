@@ -1617,9 +1617,13 @@ already a launcher-controlled process. Its test starts the repository
 standard-library guard machinery, installs every guard, and only then imports
 the listed project modules and their Pydantic dependency. The `os.getenv`
 guard returns `__all__` only for the exact `pydantic.plugin._loader` caller and
-rejects every other query without reading the environment; `os.environ` fails
-closed. The child prints one sentinel; the parent requires zero exit, exact
-stdout, empty stderr, and an untouched `tmp_path`.
+rejects every other query without reading the environment. The `os.environ`
+mapping returns only the caller-supplied default for the exact
+`PYTHONUSERBASE` key, `None` default, and immediate `sysconfig` caller, so
+CPython treats the launcher-purged value as unset; every other mapping query or
+operation fails closed. A direct child self-check requires the same lookup from
+`__main__` to raise. The child prints one sentinel; the parent requires zero
+exit, exact stdout, empty stderr, and an untouched `tmp_path`.
 
 The new safety scanner parses every `src/crypto_lab/**/*.py` file and rejects
 imports of real engines, exchanges, networking clients, `socket`, `urllib`,
@@ -8367,8 +8371,15 @@ class ForbiddenEnvironment:
     def __len__(self) -> NoReturn:
         return _unexpected_operation()
 
-    def get(self, key: object, default: object = None) -> NoReturn:
-        return _unexpected_operation(key, default)
+    def get(self, key: object, default: object = None) -> object:
+        caller_module = sys._getframe(1).f_globals.get("__name__")
+        if (
+            key == "PYTHONUSERBASE"
+            and default is None
+            and caller_module == "sysconfig"
+        ):
+            return default
+        return _unexpected_operation(key, default, caller_module)
 
     def items(self) -> NoReturn:
         return _unexpected_operation()
@@ -8401,6 +8412,12 @@ os.spawnvp = _unexpected_operation
 os.spawnvpe = _unexpected_operation
 os.startfile = _unexpected_operation
 os.environ = ForbiddenEnvironment()
+try:
+    os.environ.get("PYTHONUSERBASE", None)
+except AssertionError:
+    pass
+else:
+    raise AssertionError("environment guard allowed a non-sysconfig caller")
 socket.socket = _unexpected_operation
 socket.create_connection = _unexpected_operation
 subprocess.Popen = _unexpected_operation
@@ -8499,14 +8516,20 @@ directly with an argument array, avoiding any caller-selectable launcher Python
 profile. The child itself imports no Pydantic package before installing guards;
 its `os.getenv` guard returns the fixed literal only for the exact
 `pydantic.plugin._loader` caller and rejects every application call, while its
-`os.environ` mapping fails closed. Before importing any entry in
-`PACKAGE_MODULES`, the child traps ambient environment/profile/registry access,
-file reads and writes through the guarded APIs, network creation, and process
-launch APIs. It runs in isolated mode from `tmp_path`, uses an argument array
-with `shell=False`, and retains exact sentinel/stdout/stderr/filesystem
-assertions. The separate launcher behavior test proves fixed child inheritance
-and parent isolation. Exact source/AST review remains necessary; this bounded
-guard is not claimed to intercept every possible operating-system call.
+`os.environ` mapping returns only the supplied default for the exact
+`PYTHONUSERBASE` lookup with a `None` default by the immediate `sysconfig`
+caller. The launcher has already purged that fixed Python-selection variable,
+and the mapping neither reads nor preserves an ambient value. A
+mutation-sensitive child self-check requires the same call from `__main__` to
+raise; every other mapping query and operation fails closed. Before importing
+any entry in `PACKAGE_MODULES`, the child traps ambient environment/profile/
+registry access, file reads and writes through the guarded APIs, network
+creation, and process launch APIs. It runs in isolated mode from `tmp_path`,
+uses an argument array with `shell=False`, and retains exact
+sentinel/stdout/stderr/filesystem assertions. The separate launcher behavior
+test proves fixed child inheritance and parent isolation. Exact source/AST
+review remains necessary; this bounded guard is not claimed to intercept every
+possible operating-system call.
 
 Apply the exact Task 1 patch to
 `tests/safety/test_project_dependencies.py` shown in Task 1 Step 1; no
