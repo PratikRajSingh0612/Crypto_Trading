@@ -159,8 +159,9 @@ invents no alternative.
   `DATASET_METADATA_V1`, `ARTIFACT_OWNER_V1`; `CanonicalHashEnvelope`
   (`schema_version`, `hashing_profile`, `payload`); `sha256_bytes`;
   `profile_hash(profile, payload)`; `attempt_token_hash`.
-- Stage 4 adds exactly one member, `STRATEGY_VERSION_V1 = "strategy-version/v1"`,
-  and hashes through `profile_hash`. It defines no ad-hoc digest.
+- Stage 4 adds exactly two members: `DIAGNOSTIC_IDENTITY_V1 = "diagnostic-identity/v1"`
+  in Task 2 and `STRATEGY_VERSION_V1 = "strategy-version/v1"` in Task 5. Both
+  hash through `profile_hash`. Stage 4 defines no ad-hoc digest.
 
 ### 3.5 Diagnostics (`crypto_lab.domain.diagnostics`)
 
@@ -242,7 +243,7 @@ cannot add a single source file, import root, or schema without editing it.
 | Guard | Current value | Stage 4 obligation |
 |---|---|---|
 | `_ALLOWED_SOURCE_FILES` | 33 exact relative paths | Add every new `strategy/*.py`, `capabilities/*.py`, and `domain/*.py` file |
-| `_ALLOWED_IMPORT_ROOTS` | 17 roots | Add `yaml` only; the bytes-only contract of section 5.2 removes any need for `io` |
+| `_ALLOWED_IMPORT_ROOTS` | 17 roots | Add `codecs`, `contextlib`, and `yaml`. The bytes-only contract of section 5.2 removes any need for `io`, but items 3 and 12 of that section require the first two |
 | `_DEFERRED_DEFINITIONS` | 79 names | Remove exactly the names Stage 4 defines (section 9.8) |
 | `test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctly` | `assert len(paths) == 11` | Change to `20` |
 | `test_stage3_completion_status_is_exact` | Pins roadmap Stage 3 row text | Leave unchanged by Stage 4; owned by the separate roadmap-status repair |
@@ -588,8 +589,8 @@ implementation and hide the defect. Tests must assert:
 2. rejection occurs during the single pass, proven by asserting that
    `yaml.compose`, `yaml.compose_all`, `yaml.load`, and `yaml.safe_load` are
    never called — the Task 1 source guard already forbids naming them;
-3. expanded depth beyond `MAX_NESTING_DEPTH` is rejected even when event-stream
-   depth stays under it, using an alias-composed fixture;
+3. expanded depth beyond `MAX_EXPANDED_DEPTH` is rejected even when event-stream
+   depth stays under `MAX_EVENT_DEPTH`, using an alias-composed fixture;
 4. `&a [*a]` is rejected with `STRATEGY.YAML_RECURSIVE_ALIAS`;
 5. an alias to a never-defined name is rejected;
 6. a redefined anchor name is rejected.
@@ -627,8 +628,10 @@ unsatisfiable. Stage 4 resolves this as follows:
    `RuntimeAvailabilityObservation.observed_at_utc`, which specification
    section 11.3 already requires, so `resolve` gains no parameter beyond the
    section 8.2 signature.
-3. Task 5 adds `DIAGNOSTIC_IDENTITY_V1 = "diagnostic-identity/v1"` to
-   `HashingProfile` alongside `STRATEGY_VERSION_V1`.
+3. **Task 2** adds `DIAGNOSTIC_IDENTITY_V1 = "diagnostic-identity/v1"` and the
+   `_uuid4_shaped` helper to `crypto_lab/domain/hashing.py`, because Task 2 is the
+   first task that emits a `Diagnostic`. Task 5 later adds `STRATEGY_VERSION_V1`
+   to the same enum.
 4. Tests assert that two independent runs over equal inputs produce
    byte-identical `Result` failures, including IDs, and that no Stage 4 module
    imports `uuid`, `random`, or `time`.
@@ -819,7 +822,7 @@ COMPARISON.SCHEMA_VERSION_MISMATCH   COMPARISON.METHODOLOGY_MISMATCH
 | `src/crypto_lab/domain/capability_names.py` | `CapabilityName`, `VocabularyVersion` relocated from `adapters/descriptors.py` |
 | `src/crypto_lab/domain/descriptors.py` | `EngineDescriptor`, `AdapterDescriptor`, `SupportedSchemaVersion`, `OperatingSystem` relocated from `adapters/descriptors.py`; new `RuntimeAvailabilityObservation` |
 | `src/crypto_lab/domain/comparison_levels.py` | `ComparisonLevel`, kept in `domain` so Stage 6's `EngineRunRequest` never needs an `adapters -> capabilities` edge |
-| `src/crypto_lab/strategy/yaml_source.py` | Safe YAML loading, pre-construction bounds scan, node-to-value conversion |
+| `src/crypto_lab/strategy/yaml_source.py` | Safe YAML loading and the single-pass bounded event-to-value builder of sections 5.2 and 5.3; no node graph is ever composed |
 | `src/crypto_lab/strategy/expressions.py` | Closed discriminated expression AST |
 | `src/crypto_lab/strategy/models.py` | `StrategySpec` and every sub-model |
 | `src/crypto_lab/strategy/feature_graph.py` | DAG validation, cycle diagnostics, stable topological order |
@@ -884,6 +887,11 @@ Nine schemas are added in total.
 | `tests/unit/capabilities/test_capability_comparison.py` | Levels, eligibility, difference classification |
 | `tests/unit/domain/test_domain_results.py` | `Result` discrimination |
 | `tests/unit/domain/test_domain_descriptors.py` | Relocated descriptors and `RuntimeAvailabilityObservation` |
+| `tests/property/test_strategy_hashing.py` | Formatting independence, material sensitivity |
+| `tests/property/test_compatibility_resolution.py` | Order-independence, reason stability |
+| `tests/property/test_expression_evaluation.py` | Decimal and missing-value invariants |
+| `tests/safety/test_stage4_boundaries.py` | Forbidden YAML API names, import closure, no global mutation |
+| `tests/architecture/test_package_import_boundaries.py` | `strategy` and `capabilities` dependency direction |
 
 **Every test module basename must be globally unique.** `tests/` contains no
 `__init__.py`, and neither `pyproject.toml` nor `conftest.py` sets
@@ -895,11 +903,6 @@ its prefix for exactly this reason. Unprefixed `test_models.py`,
 `test_versioning.py`, and `test_loader.py` would each collide with an existing
 module, and Appendix A forbids the `pyproject.toml` change that would otherwise
 allow `importmode=importlib`.
-| `tests/property/test_strategy_hashing.py` | Formatting independence, material sensitivity |
-| `tests/property/test_compatibility_resolution.py` | Order-independence, reason stability |
-| `tests/property/test_expression_evaluation.py` | Decimal and missing-value invariants |
-| `tests/safety/test_stage4_boundaries.py` | Forbidden YAML API names, import closure, no global mutation |
-| `tests/architecture/test_package_import_boundaries.py` | `strategy` and `capabilities` dependency direction |
 
 ### 6.5 New fixtures
 
@@ -1035,6 +1038,25 @@ test change.
 Eight separately reviewable tasks. No task may be merged into another, and each
 ends in a clean committed worktree.
 
+**Closed-world guard rule.** `tests/safety/test_stage3_boundaries.py` is in the
+Files list of **every** task from Task 2 onward, and each task applies only the
+subset of Appendix C matching the files and deferred names it actually creates.
+This is mandatory because `test_stage3_source_file_set_is_closed` asserts exact
+set equality against the real filesystem: a task that adds a source file
+without extending `_ALLOWED_SOURCE_FILES` fails, and a task that adds the whole
+Appendix C list up front also fails, because the allowlist would then name
+files that do not yet exist. `_DEFERRED_DEFINITIONS` removals follow the same
+rule — remove a name in the task that defines it, never earlier.
+`_ALLOWED_IMPORT_ROOTS` is membership-only, so its three additions may be made
+once in Task 2.
+
+**Task 2 additionally owns `strategy/expressions.py`.** `StrategySpec` declares
+`entry_rules` and `exit_rules` as expression trees, so the model cannot be
+defined without the AST, and the source-file guard forbids Task 2 from creating
+a file Task 3 owns. Task 2 therefore defines the closed AST node models; Task 3
+owns `validation.py`, the static type and reference checking, and the exhaustive
+per-node tests.
+
 ### Task 1 — YAML dependency, lock gates, and security tests
 
 **Files:** `pyproject.toml`, `uv.lock`, `tests/safety/test_project_dependencies.py`,
@@ -1063,46 +1085,47 @@ source-level security guard.
    `Loader=StrictStrategySafeLoader` keyword does not self-collide with the
    banned bare name `Loader`.
    **Expected RED:** the test file does not exist, so collection fails.
-2. Add an **absolute** global-state test, not a before/after snapshot: assert
+2. Add the **absolute** part of the global-state test that does not depend on
+   Stage 4 code: assert
    `frozenset(yaml.SafeLoader.yaml_constructors) == _EXPECTED_SAFELOADER_TAGS`
-   against a tag set pinned literally in the test file, and assert
-   `"yaml_constructors" not in StrictStrategySafeLoader.__dict__` and
-   `yaml.SafeLoader in StrictStrategySafeLoader.__mro__`. A before/after-load
-   comparison is structurally incapable of detecting class-body or import-time
-   mutation, and would also miss a third-party `yaml.YAMLObject` registration;
-   an absolute assertion catches both. **Expected RED:** module missing.
-3. Add an import-closure test asserting that the set of files under
-   `src/crypto_lab` importing any module rooted at `yaml` is exactly
-   `{"strategy/yaml_source.py"}`. `_ALLOWED_IMPORT_ROOTS` is repository-wide
-   and cannot express this, so without a dedicated test the single most
-   important containment property of the YAML trust boundary would be prose
-   plus a manual checklist item. **Expected RED:** module missing.
-4. Add a typing-integrity test asserting that no file under `src/crypto_lab`
+   against a tag set pinned literally in the test file. This holds at import
+   time and catches a third-party `yaml.YAMLObject` registration. A
+   before/after-load comparison is structurally incapable of detecting
+   class-body or import-time mutation, which is why the assertion is absolute.
+   **Expected RED:** module missing.
+   The two assertions that name `StrictStrategySafeLoader` — that
+   `"yaml_constructors" not in StrictStrategySafeLoader.__dict__` and that
+   `yaml.SafeLoader in StrictStrategySafeLoader.__mro__` — and the
+   import-closure test asserting the yaml-importing file set is exactly
+   `{"strategy/yaml_source.py"}` are **Task 2** steps, because both require the
+   loader Task 2 creates. Task 1 cannot reach GREEN on a test that references a
+   symbol that does not yet exist, and every task must end clean.
+3. Add a typing-integrity test asserting that no file under `src/crypto_lab`
    contains `type: ignore[import-untyped]`, `type: ignore[import-not-found]`,
    or a bare `type: ignore` on an `import` line. Under offline pressure this is
    the shortest route to a green mypy with an untyped trust boundary, and
    `warn_unused_ignores` will not flag it while the stubs are genuinely absent.
-5. Extend `test_mypy_untyped_import_override_is_exact` to assert
+4. Extend `test_mypy_untyped_import_override_is_exact` to assert
    `set(mypy) == {"python_version", "strict", "files", "overrides"}`. The
    existing assertion pins only `overrides`, so a top-level
    `ignore_missing_imports = true` or `disable_error_code = [...]` would relax
    typing repository-wide while leaving the test green.
-6. Add a test asserting `_EXPECTED_RUNTIME_REQUIREMENTS == ("pydantic>=2.12,<3",
+5. Add a test asserting `_EXPECTED_RUNTIME_REQUIREMENTS == ("pydantic>=2.12,<3",
    "pyyaml>=6.0.3,<7")` and that `_EXPECTED_DEVELOPMENT_NAMES` contains
    `types-pyyaml`. **Expected RED:**
    `AssertionError` comparing the current one-element tuple.
-7. Add a lock test asserting that `uv.lock` contains a `types-pyyaml` package —
+6. Add a lock test asserting that `uv.lock` contains a `types-pyyaml` package —
    so a silent stub-less install is caught — and that the locked `pyyaml`
    package has a `wheels` entry matching `cp312` and `win_amd64`. The existing
    `test_lock_registry_artifacts_are_sha256_pinned` does not distinguish sdist
    from wheel, and `no-build-isolation = true` means an sdist path would run
    PyYAML's `setup.py` against the project environment.
-8. Update `pyproject.toml` to add `"pyyaml>=6.0.3,<7"` to
+7. Update `pyproject.toml` to add `"pyyaml>=6.0.3,<7"` to
    `[project].dependencies` and `"types-pyyaml>=6.0.12,<7"` to
    `[dependency-groups].dev`.
-9. Run the section 8 dependency flow.
-10. Update `_EXPECTED_RUNTIME_REQUIREMENTS` and `_EXPECTED_DEVELOPMENT_NAMES`
-    to the new exact values.
+8. Run the section 8 dependency flow.
+9. Update `_EXPECTED_RUNTIME_REQUIREMENTS` and `_EXPECTED_DEVELOPMENT_NAMES`
+   to the new exact values.
 
 **Minimum GREEN:** every guard test above passes and the environment
 synchronizes offline.
@@ -1130,8 +1153,10 @@ prohibited dependency family entered.
 **Files:** `src/crypto_lab/domain/results.py`,
 `src/crypto_lab/domain/hashing.py` (adds `DIAGNOSTIC_IDENTITY_V1` and
 `_uuid4_shaped` only), `src/crypto_lab/strategy/yaml_source.py`,
+`src/crypto_lab/strategy/expressions.py`,
 `src/crypto_lab/strategy/models.py`,
 `tests/unit/domain/test_domain_results.py`,
+`tests/unit/domain/test_domain_descriptors.py`,
 `tests/unit/strategy/test_strategy_yaml_source.py`,
 `tests/unit/strategy/test_strategy_yaml_bounds.py`,
 `tests/unit/strategy/test_strategy_models.py`,
@@ -1830,7 +1855,7 @@ Change the registry-count assertion:
 
 `test_stage3_completion_status_is_exact` is **not** modified by Stage 4.
 
-### Appendix D — `crypto_lab/domain/hashing.py` patch (Task 5)
+### Appendix D — `crypto_lab/domain/hashing.py` patch (Tasks 2 and 5)
 
 ```diff
  class HashingProfile(StrEnum):
@@ -1876,9 +1901,19 @@ all names importable from this module so no existing import site changes:
 +]
 ```
 
-Every relocated class and annotation must be moved **verbatim**, including
-`StringConstraints` bounds, validators, `json_schema_extra` hooks, and the
-`exact_string_schema` calls. The generated
+The private module helpers `_unique_sorted_text`, `_unique_sorted_versions`,
+and `_set_unique_items` move **with** the classes into
+`crypto_lab/domain/descriptors.py`. This is mandatory, not tidiness: if they
+stayed behind, `domain/descriptors.py` would have to import from
+`crypto_lab.adapters.descriptors`, and `crypto_lab.adapters` is in
+`_PROHIBITED_PROJECT_PACKAGES` for
+`test_repository_domain_package_has_no_prohibited_imports`. That would
+re-introduce the exact dependency-direction violation section 5.7 exists to
+remove, through the back door.
+
+Every relocated class, annotation, and helper must be moved **verbatim**,
+including `StringConstraints` bounds, validators, `json_schema_extra` hooks, and
+the `exact_string_schema` calls. The generated
 `schemas/protocol/adapter-descriptor-v1.schema.json` keys its `$defs` by bare
 class and alias names, never by module path, and the capability annotations are
 inlined with no `$def`, so a verbatim move cannot change the emitted bytes.
@@ -2009,7 +2044,8 @@ def _build_document(text: str, source_name: SourceName) -> Result[YamlDocument]:
 
 `_Budget` carries `events`, `expanded`, `alias_references`,
 `anchor_definitions`, a `dict[str, int]` of completed anchor **expanded**
-sizes, a `dict[str, list]` of recorded anchor event subsequences for replay,
+sizes, a `dict[str, list[yaml.Event]]` of recorded anchor event subsequences for
+replay,
 and a stack of open anchor frames. Its `charge` method is the single place
 every ceiling is enforced:
 
@@ -2069,11 +2105,12 @@ Required changes:
 
 **Expected RED before the registry change:** `AssertionError: assert 11 == 20`.
 
-### Appendix J — `tests/unit/test_package_layout.py` patch (Task 8)
+### Appendix J — `tests/unit/test_package_layout.py` patch (Task 2 onward)
 
-`PACKAGE_MODULES` is a closed module list that drives the fresh-import probe
-named in section 11.1. Add every new `crypto_lab.strategy.*`,
-`crypto_lab.capabilities.*`, and `crypto_lab.domain.*` module from section 6.1.
+`PACKAGE_MODULES` is a positive module list that drives the fresh-import probe
+named in section 11.1. Nothing compares it to the filesystem, so omitting a
+module weakens coverage rather than failing a test; each task nevertheless
+appends the modules it creates, starting with Task 2.
 
 The probe asserts that importing project modules performs no file read, so
 Task 2 must additionally prove that importing `crypto_lab.strategy.yaml_source`
