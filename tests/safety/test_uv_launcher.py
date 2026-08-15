@@ -6,13 +6,14 @@ import json
 import os
 import shutil
 import subprocess
+import tomllib
 from base64 import b64decode
 from pathlib import Path
 
 import pytest
 
 _EXPECTED_NORMALIZED_SHA256 = (
-    "1aee7c257068e9fd68ba741f24dd1e6a02fca7592a609185cd1afffab7cd8041"
+    "c26114189aff63fa5f6e517ac64a23ec13f45d8a534096967807f6a37ca98dd3"
 )
 _ALLOWED_COMMANDS = {
     "<dynamic>",
@@ -26,6 +27,45 @@ _ALLOWED_COMMANDS = {
     "Resolve-ClosedRepositoryPath",
     "Resolve-ClosedSchemaWriteDirectory",
     "Set-StrictMode",
+}
+_BOOTSTRAP_OPERATIONS = (
+    "lock-acquire",
+    "lock-check",
+    "lock-resolve-offline",
+    "sync",
+    "sync-acquire",
+)
+_PYTHON_BEARING_OPERATIONS = (
+    "build",
+    "cli-help",
+    "cli-module-version",
+    "cli-unknown",
+    "cli-version",
+    "mypy-all",
+    "pydantic-proof",
+    "pytest-all",
+    "pytest-launcher-bootstrap",
+    "ruff-check-all",
+    "ruff-format-all",
+    "schema-distribution",
+    "schema-generate-check",
+    "schema-generate-write",
+)
+_TARGETED_OPERATIONS = ("pytest-focused",)
+_EXPECTED_OPERATIONS = frozenset(
+    _BOOTSTRAP_OPERATIONS + _PYTHON_BEARING_OPERATIONS + _TARGETED_OPERATIONS
+)
+_BOOTSTRAP_COMMANDS = {
+    "lock-check": ["--offline", "lock", "--check"],
+    "lock-resolve-offline": ["--offline", "lock"],
+    "sync": ["--offline", "sync", "--frozen", "--no-build-isolation"],
+    "lock-acquire": ["lock"],
+    "sync-acquire": [
+        "sync",
+        "--frozen",
+        "--no-install-project",
+        "--no-build-isolation",
+    ],
 }
 _PURGED_ENVIRONMENT_NAMES = (
     "UV_PROJECT",
@@ -244,6 +284,46 @@ def _powershell_command_records(
     return tuple((record["name"], record["extent"]) for record in records)
 
 
+def _powershell_switch_statements(
+    path: Path,
+    repository_root: Path,
+) -> tuple[tuple[tuple[str, ...], bool], ...]:
+    """Return each switch statement's clause labels and whether it defaults."""
+    parser = (
+        "$path=[Console]::In.ReadLine();$tokens=$null;$errors=$null;"
+        "$ast=[System.Management.Automation.Language.Parser]::ParseFile("
+        "$path,[ref]$tokens,[ref]$errors);"
+        "if($errors.Count-ne 0){[Console]::Error.WriteLine("
+        "(($errors|ForEach-Object{$_.Message}) -join '; '));exit 91};"
+        "$records=@($ast.FindAll({param($node) $node -is "
+        "[System.Management.Automation.Language.SwitchStatementAst]},$true)|"
+        "ForEach-Object{[pscustomobject]@{"
+        "labels=@($_.Clauses|ForEach-Object{$_.Item1.Extent.Text});"
+        "hasDefault=($null -ne $_.Default)}});"
+        "ConvertTo-Json -Compress -Depth 5 -InputObject @($records)"
+    )
+    completed = subprocess.run(  # noqa: S603 - reviewed fixed parser boundary
+        [_powershell(), "-NoProfile", "-Command", parser],
+        cwd=repository_root,
+        input=f"{path}\n",
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        shell=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    parsed = json.loads(completed.stdout)
+    assert isinstance(parsed, list)
+    statements: list[tuple[tuple[str, ...], bool]] = []
+    for record in parsed:
+        labels = record["labels"]
+        if isinstance(labels, str):
+            labels = [labels]
+        statements.append((tuple(labels), bool(record["hasDefault"])))
+    return tuple(statements)
+
+
 def _fake_uv_environment(tmp_path: Path) -> dict[str, str]:
     source = tmp_path / "FakeUv.cs"
     source.write_text(
@@ -361,8 +441,28 @@ def test_launcher_has_exact_reviewed_normalized_source(repository_root: Path) ->
     assert source.count('"pytest-launcher-bootstrap"') == 1
     assert "function Resolve-ClosedRepositoryPath" in source
     assert "function Resolve-ClosedSchemaWriteDirectory" in source
-    assert source.count("[System.IO.FileAttributes]::ReparsePoint") == 4
-    assert 'Join-Path $repositoryRoot ".venv\\Scripts\\python.exe"' in source
+    assert source.count("[System.IO.FileAttributes]::ReparsePoint") == 6
+    assert source.count('Join-Path $repositoryRoot ".venv\\Scripts\\python.exe"') == 1
+    assert source.count('Join-Path $repositoryRoot "pyproject.toml"') == 1
+    assert source.count('throw "Repository root must not be a reparse point"') == 3
+    assert (
+        source.count('throw "Project environment must not traverse a reparse point"')
+        == 1
+    )
+    assert (
+        source.count('throw "uv.exe must resolve to an absolute application path"') == 1
+    )
+    assert "# Dispatch order:" in source
+    root_index = source.index("$repositoryRootItem = Get-Item -LiteralPath")
+    environment_index = source.index("$projectEnvironmentPath = $repositoryRoot")
+    coverage_index = source.index("$coverageConfig = Resolve-ClosedRepositoryPath")
+    uv_index = source.index("Get-Command uv.exe -CommandType Application -All")
+    python_index = source.index("$pythonExecutable = Resolve-ClosedRepositoryPath")
+    assert root_index < environment_index < coverage_index < uv_index
+    for operation in _BOOTSTRAP_OPERATIONS:
+        operation_index = source.index(f'"{operation}" {{')
+        assert uv_index < operation_index
+        assert operation_index < python_index
     block_start = source.index("$environmentNamesToRemove = @(")
     block_end = source.index("\n)\n\nPush-Location", block_start)
     declared_names = tuple(
@@ -372,6 +472,37 @@ def test_launcher_has_exact_reviewed_normalized_source(repository_root: Path) ->
     assert declared_names == _PURGED_ENVIRONMENT_NAMES
     for name in declared_names:
         assert f"$env:{name}" not in source
+
+
+def test_launcher_operation_set_is_closed_and_partitioned(
+    repository_root: Path,
+) -> None:
+    launcher = repository_root / "scripts" / "invoke-uv.ps1"
+    source = _normalized_source(launcher)
+    # Read the clause labels from the PowerShell parser, not from the text. A
+    # text scan cannot see a clause written with a different quote style,
+    # casing, indentation, or with its opening brace on the following line, so
+    # a twenty-first operation in any of those forms would stay invisible.
+    statements = _powershell_switch_statements(launcher, repository_root)
+    assert len(statements) == 2
+    assert all(has_default for _, has_default in statements)
+    quoted = [label for labels, _ in statements for label in labels]
+    assert all(
+        label.startswith('"') and label.endswith('"') and len(label) > 2
+        for label in quoted
+    )
+    labels = [label[1:-1] for label in quoted]
+    assert len(labels) == len(set(labels))
+    assert set(labels) == set(_EXPECTED_OPERATIONS)
+    assert len(_EXPECTED_OPERATIONS) == 20
+    assert source.count("switch -CaseSensitive ($operation) {") == 2
+    clause_sets = [{label[1:-1] for label in labels} for labels, _ in statements]
+    assert set(_BOOTSTRAP_OPERATIONS) in clause_sets
+    assert set(_PYTHON_BEARING_OPERATIONS) | set(_TARGETED_OPERATIONS) in clause_sets
+    assert set(_BOOTSTRAP_OPERATIONS).isdisjoint(_PYTHON_BEARING_OPERATIONS)
+    assert set(_BOOTSTRAP_OPERATIONS).isdisjoint(_TARGETED_OPERATIONS)
+    assert set(_PYTHON_BEARING_OPERATIONS).isdisjoint(_TARGETED_OPERATIONS)
+    assert set(_BOOTSTRAP_COMMANDS) == set(_BOOTSTRAP_OPERATIONS)
 
 
 def test_launcher_ast_has_only_closed_commands(repository_root: Path) -> None:
@@ -422,6 +553,28 @@ def launcher_repository(
     return root
 
 
+def _bootstrap_repository(root: Path, repository_root: Path) -> Path:
+    """Return a fresh-worktree stand-in: tracked metadata but no `.venv`."""
+    (root / "scripts").mkdir(parents=True)
+    shutil.copy2(
+        repository_root / "scripts" / "invoke-uv.ps1",
+        root / "scripts" / "invoke-uv.ps1",
+    )
+    (root / "pyproject.toml").touch()
+    (root / ".python-version").touch()
+    return root
+
+
+@pytest.fixture
+def bootstrap_repository(tmp_path: Path, repository_root: Path) -> Path:
+    return _bootstrap_repository(tmp_path / "bootstrap-repository", repository_root)
+
+
+@pytest.fixture
+def bootstrap_exit_repository(tmp_path: Path, repository_root: Path) -> Path:
+    return _bootstrap_repository(tmp_path / "bootstrap-__exit37__", repository_root)
+
+
 def _base_arguments(repository_root: Path) -> list[str]:
     root = str(repository_root)
     return [
@@ -453,34 +606,11 @@ def _run_arguments(repository_root: Path, *arguments: str) -> list[str]:
 @pytest.mark.parametrize(
     ("arguments", "command"),
     [
-        (["lock-check"], ["--offline", "lock", "--check", "--python", _PYTHON]),
-        (
-            ["lock-resolve-offline"],
-            ["--offline", "lock", "--python", _PYTHON],
-        ),
-        (
-            ["sync"],
-            [
-                "--offline",
-                "sync",
-                "--frozen",
-                "--no-build-isolation",
-                "--python",
-                _PYTHON,
-            ],
-        ),
-        (["lock-acquire"], ["lock", "--python", _PYTHON]),
-        (
-            ["sync-acquire"],
-            [
-                "sync",
-                "--frozen",
-                "--no-install-project",
-                "--no-build-isolation",
-                "--python",
-                _PYTHON,
-            ],
-        ),
+        (["lock-check"], _BOOTSTRAP_COMMANDS["lock-check"]),
+        (["lock-resolve-offline"], _BOOTSTRAP_COMMANDS["lock-resolve-offline"]),
+        (["sync"], _BOOTSTRAP_COMMANDS["sync"]),
+        (["lock-acquire"], _BOOTSTRAP_COMMANDS["lock-acquire"]),
+        (["sync-acquire"], _BOOTSTRAP_COMMANDS["sync-acquire"]),
         (["ruff-format-all"], ["RUN", _RUFF, "format", "--check", "."]),
         (["ruff-check-all"], ["RUN", _RUFF, "check", "."]),
         (
@@ -869,6 +999,292 @@ def test_launcher_propagates_native_exit_code(
         cwd=tmp_path,
     )
     assert completed.returncode == 37
+
+
+@pytest.mark.parametrize("operation", sorted(_BOOTSTRAP_OPERATIONS))
+def test_launcher_bootstrap_profile_reaches_uv_without_a_project_environment(
+    bootstrap_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+    operation: str,
+) -> None:
+    environment = fake_uv_environment.copy()
+    completed = _run_launcher(
+        bootstrap_repository,
+        [operation],
+        environment=environment,
+        cwd=tmp_path,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert not (bootstrap_repository / ".venv").exists()
+    assert (bootstrap_repository / "pyproject.toml").exists()
+    parsed = _parse_fake_uv(completed.stdout)
+    assert parsed == {
+        "argv": [
+            *_base_arguments(bootstrap_repository),
+            *_BOOTSTRAP_COMMANDS[operation],
+        ],
+        "cwd": str(bootstrap_repository),
+        "environment": {
+            **dict.fromkeys(_PURGED_ENVIRONMENT_NAMES),
+            "PYDANTIC_DISABLE_PLUGINS": "__all__",
+        },
+    }
+    argv = parsed["argv"]
+    assert isinstance(argv, list)
+    assert "--python" not in argv
+    assert "run" not in argv
+    assert "-m" not in argv
+    assert not any(argument.casefold().endswith("python.exe") for argument in argv)
+    for index, name in enumerate(_PURGED_ENVIRONMENT_NAMES):
+        assert environment[name] == f"hostile-{index}"
+    assert environment["PYDANTIC_DISABLE_PLUGINS"] == "ambient-test-value"
+
+
+@pytest.mark.parametrize("operation", sorted(_PYTHON_BEARING_OPERATIONS))
+def test_launcher_python_bearing_profile_fails_closed_without_the_interpreter(
+    bootstrap_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+    operation: str,
+) -> None:
+    completed = _run_launcher(
+        bootstrap_repository,
+        [operation],
+        environment=fake_uv_environment,
+        cwd=tmp_path,
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert ".venv" in completed.stderr
+
+
+def test_launcher_focused_profile_fails_closed_without_the_interpreter(
+    bootstrap_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+) -> None:
+    completed = _run_launcher(
+        bootstrap_repository,
+        ["pytest-focused", "tests/safety/test_uv_launcher.py"],
+        environment=fake_uv_environment,
+        cwd=tmp_path,
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert ".venv" in completed.stderr
+
+
+def test_launcher_bootstrap_propagates_native_uv_exit_code(
+    bootstrap_exit_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+) -> None:
+    completed = _run_launcher(
+        bootstrap_exit_repository,
+        ["sync"],
+        environment=fake_uv_environment,
+        cwd=tmp_path,
+    )
+    assert completed.returncode == 37
+
+
+def test_launcher_bootstrap_rejects_ambiguous_uv_application_resolution(
+    bootstrap_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+) -> None:
+    first_directory = Path(fake_uv_environment["PATH"])
+    second_directory = tmp_path / "second-bootstrap-uv"
+    second_directory.mkdir()
+    shutil.copy2(first_directory / "uv.exe", second_directory / "uv.exe")
+    environment = fake_uv_environment.copy()
+    environment["PATH"] = f"{first_directory}{os.pathsep}{second_directory}"
+    completed = _run_launcher(
+        bootstrap_repository,
+        ["sync"],
+        environment=environment,
+        cwd=tmp_path,
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert "Exactly one uv.exe application" in completed.stderr
+
+
+def test_launcher_rejects_a_working_directory_only_uv_executable(
+    bootstrap_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+) -> None:
+    planted = tmp_path / "planted"
+    planted.mkdir()
+    shutil.copy2(
+        Path(fake_uv_environment["PATH"]) / "uv.exe",
+        planted / "uv.exe",
+    )
+    empty_directory = tmp_path / "empty-path"
+    empty_directory.mkdir()
+    environment = fake_uv_environment.copy()
+    environment["PATH"] = str(empty_directory)
+    completed = _run_launcher(
+        bootstrap_repository,
+        ["sync"],
+        environment=environment,
+        cwd=planted,
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert "uv.exe" in completed.stderr
+    assert ".venv" not in completed.stderr
+
+
+def test_launcher_rejects_a_relative_uv_application_source(
+    bootstrap_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+) -> None:
+    # A relative PATH element makes Get-Command return a relative Source, which
+    # GetFullPath would then resolve against the process working directory --
+    # validating one file and executing another. Rejecting a non-rooted source
+    # is the control; no location change can anchor application discovery.
+    planted = tmp_path / "relative-planted"
+    (planted / "sub").mkdir(parents=True)
+    shutil.copy2(
+        Path(fake_uv_environment["PATH"]) / "uv.exe",
+        planted / "sub" / "uv.exe",
+    )
+    environment = fake_uv_environment.copy()
+    environment["PATH"] = "sub"
+    completed = _run_launcher(
+        bootstrap_repository,
+        ["sync"],
+        environment=environment,
+        cwd=planted,
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert "uv.exe must resolve to an absolute application path" in completed.stderr
+
+
+def test_launcher_resolves_uv_before_the_project_interpreter(
+    bootstrap_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+) -> None:
+    first_directory = Path(fake_uv_environment["PATH"])
+    second_directory = tmp_path / "second-ordering-uv"
+    second_directory.mkdir()
+    shutil.copy2(first_directory / "uv.exe", second_directory / "uv.exe")
+    environment = fake_uv_environment.copy()
+    environment["PATH"] = f"{first_directory}{os.pathsep}{second_directory}"
+    completed = _run_launcher(
+        bootstrap_repository,
+        ["mypy-all"],
+        environment=environment,
+        cwd=tmp_path,
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert "Exactly one uv.exe application" in completed.stderr
+    assert ".venv" not in completed.stderr
+
+
+@pytest.mark.parametrize("operation", sorted(_BOOTSTRAP_OPERATIONS))
+def test_launcher_bootstrap_rejects_a_reparse_point_project_environment(
+    bootstrap_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+    operation: str,
+) -> None:
+    outside = tmp_path / "outside-environment"
+    outside.mkdir()
+    _create_junction(bootstrap_repository / ".venv", outside)
+    completed = _run_launcher(
+        bootstrap_repository,
+        [operation],
+        environment=fake_uv_environment,
+        cwd=tmp_path,
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert "reparse point" in completed.stderr
+
+
+def test_launcher_bootstrap_rejects_a_reparse_point_scripts_directory(
+    bootstrap_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+) -> None:
+    outside = tmp_path / "outside-scripts"
+    outside.mkdir()
+    (bootstrap_repository / ".venv").mkdir()
+    _create_junction(bootstrap_repository / ".venv" / "Scripts", outside)
+    completed = _run_launcher(
+        bootstrap_repository,
+        ["sync"],
+        environment=fake_uv_environment,
+        cwd=tmp_path,
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert "reparse point" in completed.stderr
+
+
+def test_launcher_bootstrap_rejects_a_reparse_point_repository_root(
+    bootstrap_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+) -> None:
+    linked_root = tmp_path / "linked-root"
+    _create_junction(linked_root, bootstrap_repository)
+    completed = _run_launcher(
+        linked_root,
+        ["sync"],
+        environment=fake_uv_environment,
+        cwd=tmp_path,
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert "reparse point" in completed.stderr
+
+
+def test_launcher_bootstrap_requires_the_project_metadata_file(
+    bootstrap_repository: Path,
+    tmp_path: Path,
+    fake_uv_environment: dict[str, str],
+) -> None:
+    (bootstrap_repository / "pyproject.toml").unlink()
+    completed = _run_launcher(
+        bootstrap_repository,
+        ["sync"],
+        environment=fake_uv_environment,
+        cwd=tmp_path,
+    )
+    assert completed.returncode != 0
+    assert completed.stdout == ""
+    assert "pyproject.toml" in completed.stderr
+
+
+def test_launcher_bootstrap_interpreter_selection_inputs_are_pinned(
+    repository_root: Path,
+) -> None:
+    # Every profile passes --no-config, which makes uv ignore `.python-version`
+    # and `[tool.uv]`. The bootstrap profiles pass no `--python`, so the only
+    # interpreter constraints left are the launcher's own `--managed-python`
+    # and `--no-python-downloads` flags, pinned by the exact argument tests
+    # above, and `requires-python`, pinned here. Before this correction every
+    # profile passed an explicit `--python <path>`, which overrides discovery,
+    # so `requires-python` became load-bearing only now. `.python-version` is
+    # pinned to stop the declared interpreter drifting; it governs no launcher
+    # profile, because the documented `uv python find` prerequisite checks pass
+    # an explicit `3.12` that overrides the version file anyway.
+    project = tomllib.loads(
+        (repository_root / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert project["project"]["requires-python"] == ">=3.12,<3.13"
+    assert (repository_root / ".python-version").read_text(
+        encoding="utf-8"
+    ).strip() == "3.12"
 
 
 def test_validation_libraries_are_available() -> None:
