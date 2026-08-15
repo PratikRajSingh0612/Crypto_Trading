@@ -145,7 +145,12 @@ def test_all_planned_modules_import_fresh_without_observable_side_effects(
         capture_output=True,
         shell=False,
         text=True,
-        timeout=10,
+        # Stage 3 stability qualification measured this test body at 1.35-1.91s
+        # idle and 3.50-5.46s with all 14 logical cores saturated; the child's
+        # own startup is strictly less. A 10s ceiling left too little margin
+        # above legitimate loaded startup, so it is raised to 30s, which still
+        # bounds a hung child.
+        timeout=30,
     )
 
     assert completed.returncode == 0, completed.stderr
