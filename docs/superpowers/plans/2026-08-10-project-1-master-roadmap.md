@@ -378,8 +378,8 @@ From Stage 3 onward, GitNexus is expected to be available when healthy after `EN
 |---|---|---|---|
 | 1 — Repository Foundation and Quality Gates | Approved and executed | Complete at `56d029e8e6d3c67dc6309b267c74833a09d2e419` | Complete |
 | 2 — Guarded GitNexus Development Tooling | Approved and executed | `DISABLED_WITH_EVIDENCE`: pinned 1.6.9 lacks mandatory MCP controls; no partial tooling remains | Complete; ordinary offline verification and manual fallback recorded |
-| 3 — Canonical Domain, Configuration, Hashing, and Schemas | Approved and executed | Complete at `d50744547d121d1b5925a5d92d752345902f5e56` | Complete; canonical models, explicit configuration, named hashes, dataset metadata, structural descriptors, artifact owners, and 11 generated schemas verified offline |
-| 4 — Portable Strategy, Capabilities, and Comparison | Eligible for just-in-time planning after Stage 3 completion | Not started | Not evaluated |
+| 3 — Canonical Domain, Configuration, Hashing, and Schemas | Approved and executed | Implementation complete at `88711307ff377e645bb17c798e599b6bac1c2be4`; post-completion stability correction merged at `e1c821453459f5eccf86a472e9204b6a90829d64` | Complete; canonical models, explicit configuration, named hashes, dataset metadata, structural descriptors, artifact owners, and 11 generated schemas verified offline |
+| 4 — Portable Strategy, Capabilities, and Comparison | Eligible for just-in-time planning after Stage 3 completion; detailed plan created and independently reviewed at `bf5e427a8fe055be2b6cb803b69d4c2334aeee69` | Not started | Not evaluated |
 | 5 — Experiment, Run, Invocation, Retry, and Aggregation Logic | Intentionally deferred until Stages 3–4 completion | Not started | Not evaluated |
 | 6 — Adapter Protocol and Fake-Adapter Contract Harness | Intentionally deferred until Stages 3 and 5 completion | Not started | Not evaluated |
 | 7 — Windows Process Supervision | Intentionally deferred until Stage 6 completion | Not started | Not evaluated |

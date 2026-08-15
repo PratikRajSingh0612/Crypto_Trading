@@ -606,11 +606,19 @@ def test_gitnexus_remains_disabled_with_evidence(repository_root: Path) -> None:
     assert '"outcome": "DISABLED_WITH_EVIDENCE"' in outcome
 
 
-STAGE3_IMPLEMENTATION_COMMIT = "d50744547d121d1b5925a5d92d752345902f5e56"
+STAGE3_TASK8_COMMIT = "d50744547d121d1b5925a5d92d752345902f5e56"
+STAGE3_IMPLEMENTATION_COMMIT = "88711307ff377e645bb17c798e599b6bac1c2be4"
+STAGE3_STABILITY_CORRECTION_COMMIT = "e1c821453459f5eccf86a472e9204b6a90829d64"
 
 
 def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
-    assert re.fullmatch(r"[0-9a-f]{40}", STAGE3_IMPLEMENTATION_COMMIT) is not None
+    for commit in (
+        STAGE3_TASK8_COMMIT,
+        STAGE3_IMPLEMENTATION_COMMIT,
+        STAGE3_STABILITY_CORRECTION_COMMIT,
+    ):
+        assert re.fullmatch(r"[0-9a-f]{40}", commit) is not None
+    assert len({STAGE3_IMPLEMENTATION_COMMIT, STAGE3_STABILITY_CORRECTION_COMMIT}) == 2
     roadmap = (
         repository_root
         / "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
@@ -647,11 +655,14 @@ def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
     ) not in roadmap
     assert (
         "| 3 — Canonical Domain, Configuration, Hashing, and Schemas | "
-        "Approved and executed | Complete at "
-        f"`{STAGE3_IMPLEMENTATION_COMMIT}` | Complete; canonical models, "
-        "explicit configuration, named hashes, dataset metadata, structural "
-        "descriptors, artifact owners, and 11 generated schemas verified offline |"
+        "Approved and executed | Implementation complete at "
+        f"`{STAGE3_IMPLEMENTATION_COMMIT}`; post-completion stability "
+        f"correction merged at `{STAGE3_STABILITY_CORRECTION_COMMIT}` | "
+        "Complete; canonical models, explicit configuration, named hashes, "
+        "dataset metadata, structural descriptors, artifact owners, and 11 "
+        "generated schemas verified offline |"
     ) in roadmap
+    assert f"Complete at `{STAGE3_TASK8_COMMIT}`" not in roadmap
     assert "Eligible for just-in-time planning after Stage 3 completion" in roadmap
     assert "`DISABLED_WITH_EVIDENCE`" in roadmap
     assert "**Status:** Project 1 Stages 1-3 complete" in readme
