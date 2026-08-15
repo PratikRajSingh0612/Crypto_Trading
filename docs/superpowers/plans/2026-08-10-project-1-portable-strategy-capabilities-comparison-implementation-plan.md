@@ -1,9 +1,17 @@
 # Project 1 Portable Strategy, Capabilities, and Comparison Implementation Plan
 
-**Status:** Detailed Stage 4 implementation plan awaiting independent review
+**Status:** Approved for Project 1 Stage 4 implementation
 **Stage:** 4 of 10
 **Planning base commit:** `e1c821453459f5eccf86a472e9204b6a90829d64`
+**Correction base commit:** `350fac49ff5b1db4ec62b60c7ade76580f9894dd`
+**Execution prerequisites, both of which must be ancestors of local `main`
+before Stage 4 implementation begins:** the launcher bootstrap correction at
+`350fac49ff5b1db4ec62b60c7ade76580f9894dd`, and the separate
+roadmap-and-guard commit that records this plan's approval in roadmap section 9
+and adds the executable plan-approval guard. Section 9.0 step 1 checks both by
+ancestry
 **Date:** 2026-08-10
+**Revised:** 2026-08-15
 
 This plan authorizes Stage 4 implementation only. It does not authorize Stage 5
 or any later stage, and it does not itself change source, tests, schemas,
@@ -44,7 +52,8 @@ Stage 4 populates two previously empty packages, `crypto_lab.strategy` and
 ```text
                 domain
    (canonical records, primitives, descriptors,
-    comparison levels, capability names, Result)
+    comparison levels, capability names,
+    capability requirements, Result)
        ^          ^              ^
        |          |              |
    strategy   capabilities    adapters
@@ -84,6 +93,15 @@ Reference commits:
 | Stage 3 Task 9 — completion status | `88711307ff377e645bb17c798e599b6bac1c2be4` |
 | Stage 3 implementation complete | `88711307ff377e645bb17c798e599b6bac1c2be4` |
 | Stage 3 post-completion stability correction | `e1c821453459f5eccf86a472e9204b6a90829d64` |
+| Stage 4 launcher bootstrap prerequisite | `350fac49ff5b1db4ec62b60c7ade76580f9894dd` |
+
+The launcher bootstrap commit is an **execution prerequisite**, not Stage 4
+work. It repaired a genuine deadlock: the launcher resolved
+`.venv\Scripts\python.exe` before dispatching any operation, so a fresh
+worktree could not run `sync`, which is the operation that creates `.venv`.
+Section 3.8 records the corrected behaviour, and section 9.0 makes the
+prerequisite an executable preflight check. Stage 4 implementation must leave
+that corrected launcher unchanged.
 
 If an authoritative requirement conflicts with another, stop before editing and
 report `BLOCKED_ARCHITECTURE_CONFLICT` with exact files, headings, and the
@@ -220,10 +238,28 @@ invents no alternative.
 
 ### 3.8 Launcher and verifier
 
-- `scripts/invoke-uv.ps1` resolves `.venv\Scripts\python.exe` **before** the
-  operation switch, so every profile requires an existing project environment.
-  Closed profiles: `lock-check`, `lock-resolve-offline`, `sync`,
-  `lock-acquire`, `sync-acquire`, `ruff-format-all`, `ruff-check-all`,
+- `scripts/invoke-uv.ps1`, as corrected at
+  `350fac49ff5b1db4ec62b60c7ade76580f9894dd`, dispatches **five uv bootstrap
+  profiles without resolving the project interpreter**:
+  `lock-resolve-offline`, `lock-check`, `sync`, `lock-acquire`, and
+  `sync-acquire`. Those five do not require `.venv`, and they pass no
+  `--python` argument, because uv rejects a `--python` path that does not
+  exist with `error: No interpreter found at path`. They select the
+  uv-managed CPython 3.12 through `--managed-python`, `--no-python-downloads`,
+  and the project `requires-python = ">=3.12,<3.13"`. Every profile passes
+  `--no-config`, so uv ignores `.python-version` and `[tool.uv]`; the
+  equivalent controls are supplied as explicit flags instead.
+- **Every other profile still requires the project interpreter.** The
+  remaining fifteen share one dispatch branch that resolves and validates
+  `.venv\Scripts\python.exe` and fails closed when it is absent.
+- **`sync` is the supported fresh-worktree environment bootstrap.** A new
+  worktree runs the launcher `sync` profile first; no direct `uv` command is
+  needed, and none is authorized.
+- The launcher validates the repository root, and the existing prefix of
+  `.venv` → `Scripts` → `python.exe`, for reparse points on **every**
+  operation, before dispatch.
+- Closed profiles, unchanged at twenty: `lock-check`, `lock-resolve-offline`,
+  `sync`, `lock-acquire`, `sync-acquire`, `ruff-format-all`, `ruff-check-all`,
   `mypy-all`, `pytest-all`, `pytest-launcher-bootstrap`, `pytest-focused`,
   `schema-generate-write`, `schema-generate-check`, `schema-distribution`,
   `cli-version`, `cli-module-version`, `cli-help`, `cli-unknown`,
@@ -242,11 +278,41 @@ cannot add a single source file, import root, or schema without editing it.
 
 | Guard | Current value | Stage 4 obligation |
 |---|---|---|
-| `_ALLOWED_SOURCE_FILES` | 33 exact relative paths | Add every new `strategy/*.py`, `capabilities/*.py`, and `domain/*.py` file |
-| `_ALLOWED_IMPORT_ROOTS` | 17 roots | Add `codecs`, `contextlib`, and `yaml`. The bytes-only contract of section 5.2 removes any need for `io`, but items 3 and 12 of that section require the first two |
+| `_ALLOWED_SOURCE_FILES` | 33 exact relative paths | Add all 18 new `strategy/*.py`, `capabilities/*.py`, and `domain/*.py` files listed in Appendix C, each in the task that creates it, taking the set to 51 |
+| `_ALLOWED_IMPORT_ROOTS` | 17 roots | Add `codecs`, `contextlib`, `copy`, and `yaml`, taking the set to 21. The bytes-only contract of section 5.2 removes any need for `io`; `re` is already present |
 | `_DEFERRED_DEFINITIONS` | 79 names | Remove exactly the names Stage 4 defines (section 9.8) |
 | `test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctly` | `assert len(paths) == 11` | Change to `20` |
-| `test_stage3_completion_status_is_exact` | Pins roadmap Stage 3 row text | Leave unchanged by Stage 4; owned by the separate roadmap-status repair |
+| `test_stage3_completion_status_is_exact` | Pins far more than the Stage 3 row: the roadmap status line `Stages 1 through 3 complete`; the sentence `Stages 1 through 3 have approved detailed implementation plans.`; the Stage 3 approved-plan line; the Stage 3 dependency-bootstrap control row; three negative assertions, one of which pins the absence of `Complete at` plus the Stage 3 Task 8 hash; the Stage 4 phrase `Eligible for just-in-time planning after Stage 3 completion`; the literal `` `DISABLED_WITH_EVIDENCE` ``; and the README line `**Status:** Project 1 Stages 1-3 complete` | See the status-authority rule below. No task may weaken a Stage 3 assertion |
+| Stage 4 plan-approval status guard | Added by the **separate roadmap-and-guard commit** that follows this plan's approval commit — not by the plan commit itself, which cannot pin its own hash. It pins the corrected-plan approval commit and the launcher bootstrap prerequisite, and asserts Stage 4 implementation is not started | Task 9 replaces the not-started assertions with completion assertions; no other task touches it |
+
+**Status-authority rule.** Stage 4 completion necessarily invalidates four
+strings that `test_stage3_completion_status_is_exact` pins, so a blanket "no
+Stage 4 task touches this test" is unsatisfiable. Authority is therefore split
+narrowly and exhaustively:
+
+- **Task 8** may update exactly the README status-line assertion, in the same
+  commit that updates `README.md`. Nothing else.
+- **Task 9** may update exactly the roadmap status line, the
+  `Stages 1 through 3 have approved detailed implementation plans.` sentence,
+  and the `Eligible for just-in-time planning after Stage 3 completion` phrase,
+  each replaced by an equally exact Stage 4 assertion. Nothing else.
+- **No task** may weaken, delete, or relax any Stage 3 assertion: the Stage 3
+  row, its approved-plan line, its dependency-bootstrap control row, all three
+  negative assertions, and the `DISABLED_WITH_EVIDENCE` literal all remain
+  verbatim. The third negative assertion pins the absence of ``Complete at
+  `d5074454…` ``; Task 9 writes a different hash and the phrase
+  "Implementation complete at", so it survives untouched.
+- Every replacement stays an exact verbatim substring pin. Loosening an
+  assertion to a regex or a substring-of-substring is prohibited.
+- **The separate roadmap-and-guard commit** that precedes Stage 4 is bound by
+  the same rule. It records the corrected plan as approved in the Stage 4 row
+  and adds the plan-approval guard; it does not touch any Stage 3 assertion and
+  does not pre-empt Task 8's or Task 9's allocations. Note that from that commit
+  until Task 9, the roadmap sentence `Stages 1 through 3 have approved detailed
+  implementation plans.` understates reality, because Stage 4's plan is
+  approved too. That is deliberate: the sentence is reserved to Task 9, and
+  restating it earlier would leave two commits competing for one assertion. The
+  Stage 4 row carries the precise status in the meantime.
 
 `tests/safety/test_project_dependencies.py` pins
 `_EXPECTED_RUNTIME_REQUIREMENTS = ("pydantic>=2.12,<3",)`,
@@ -341,10 +407,12 @@ key directly and asserts `STRATEGY.YAML_DUPLICATE_KEY`.
 Section 4.2 also records that PyYAML ships no pure-Python wheel. Every safety
 argument in this plan reasons about the **pure-Python** implementation — the
 non-recursive Scanner and Parser, `Event` semantics, and copy-on-write
-constructor registration. The compensating control is that Task 1 forbids the
-libyaml surface by name and pins `yaml.SafeLoader` in the loader's MRO, so a
-future change cannot silently route through `CSafeLoader` and invalidate that
-reasoning.
+constructor registration. Importing `yaml` nevertheless loads the optional
+compiled extension on the selected Windows wheel; Appendix J records that
+evidence and the exact consequences. The compensating control is that Task 1
+forbids the libyaml surface by name and pins `yaml.SafeLoader` in the loader's
+MRO, so a future change cannot silently route through `CSafeLoader` and
+invalidate that reasoning.
 
 ### 4.4 Official security record
 
@@ -415,8 +483,26 @@ load_yaml_document(
 ) -> Result[YamlDocument]
 ```
 
-It must, in this exact order:
+It must, in this exact order. **Step 0 comes before everything else:**
 
+0. **Validate `source_name` at the entry point.** `SourceName` is an
+   `Annotated` alias, and Python performs no runtime validation on a plain
+   function parameter, so the type alone guarantees nothing about a real
+   caller. Validate it with a module-level
+   `TypeAdapter(SourceName).validate_python(source_name)` before touching
+   `source`, converting failure to a `Result` failure carrying
+   `STRATEGY.SOURCE_NAME_INVALID`. **That diagnostic must not echo the
+   offending value**, for the same reason step 0 exists: a rejected
+   `source_name` is exactly the path or username the step is guarding against.
+   It carries the fixed project-authored message for its code and no detail
+   derived from the input, and a test asserts the rejected value's distinctive
+   substrings are absent from the emitted diagnostic. Item 14 below bans
+   `Mark.name`, but a
+   caller-supplied `source_name` is the wider redaction channel: it flows into
+   diagnostics and into `StrategySourceProvenance`, and specification section
+   24.3 forbids a local path or username reaching either. Without step 0 the
+   first validation would be `StrategySourceProvenance` construction in Task 5,
+   on the success path only.
 1. Accept only `bytes`. Reject `str`, `pathlib.Path`, `io.StringIO`,
    `io.BytesIO`, and every object exposing `read`, `name`, or `fileno`. A
    stream branch is prohibited: PyYAML's `Reader.determine_encoding()` performs
@@ -438,39 +524,36 @@ It must, in this exact order:
    scan-versus-compose divergence is possible. Aliases are expanded by the
    builder itself under the accounting of section 5.3, so no shared node graph
    and no cyclic graph can ever exist.
-7. Accept only the resolved tags `tag:yaml.org,2002:map`, `:seq`, `:str`,
-   `:int`, `:bool`, and `:null`. Every other tag — including `:float`,
-   `:timestamp`, `:binary`, `:set`, `:omap`, `:merge`, every `!!python/...`
-   form, and every unknown custom tag — is rejected with
-   `STRATEGY.YAML_FORBIDDEN_TAG`. Floats are rejected outright so that
+7. Classify every event with the **project-owned event classifier** of section
+   5.2.1. That classifier, not `event.tag`, decides the type of every
+   implicitly typed scalar, because a `yaml.parse` event carries **no resolved
+   implicit tag**. An earlier draft of this plan said the pass could "accept
+   only the resolved tags"; that was wrong, and section 5.2.1 records the
+   PyYAML 6.0.3 evidence that disproves it.
+8. Apply the mapping-key contract of section 5.2.2 to every event in key
+   position. Floats, timestamps, nulls, YAML 1.1 boolean aliases, alternate
+   integer notations, merge forms, and empty plain scalars are all rejected, so
    authoritative numeric values reach Pydantic only as canonical decimal
-   strings or integers.
-8. Re-validate the **raw scalar text** of every implicitly resolved scalar, not
-   merely its resolved tag. PyYAML's `SafeLoader` applies YAML 1.1 implicit
-   resolution, under which `010` resolves to `8`, `1_000` to `1000`, `0x20` to
-   `32`, `12:30` to `750`, and `no`/`off`/`n` to `False`. Silently accepting
-   those would write a value the author never expressed into a permanent
-   `content_hash`. Therefore:
-   - `:int` is accepted only when `ScalarNode`-equivalent style is plain and
-     the text matches `^-?(0|[1-9][0-9]*)$`;
-   - `:bool` is accepted only for exactly `true` or `false`;
-   - `:null` is accepted only where a field's declared type is an explicit
-     nullable union; the bare empty plain scalar is always rejected. Because
-     the repository uses `MISSING`, never `None`, for absence, `strategy/v1`
-     declares no nullable field, so in practice every `:null` is rejected with
-     `STRATEGY.YAML_NONCANONICAL_SCALAR`. Omit the key instead.
-   Every other form is rejected with `STRATEGY.YAML_NONCANONICAL_SCALAR`. Tests
-   cover `010`, `1_000`, `12:30`, `0x20`, `+1`, `yes`, `no`, `on`, `off`, `y`,
-   `n`, their case variants, and the empty value.
+   strings or integers, and no value the author never wrote can enter a
+   permanent `content_hash`. `canonical_json_bytes` rejects floats as a second
+   independent net.
 9. Reject duplicate mapping keys deterministically **before** any mapping value
-   is materialised, reporting the first duplicate in document order with its
-   key and its line and column. There is no code path that produces a `dict`
-   without this check having run. PyYAML's own behaviour is silent last-wins,
-   so this control is the only thing standing between a duplicated key and a
-   silently wrong permanent hash.
-10. Reject the `<<` merge key unconditionally in `strategy/v1`. Merge semantics
-    would make canonical content depend on resolution order and are
-    unnecessary for version 1.
+   is materialised, comparing the **classified key strings** of section 5.2.2
+   and reporting the first duplicate in document order with its key and its
+   line and column. There is no code path that produces a `dict` without this
+   check having run. PyYAML's own behaviour is silent last-wins, so this control
+   is the only thing standing between a duplicated key and a silently wrong
+   permanent hash.
+10. Reject the `<<` merge key unconditionally in `strategy/v1` **in key
+    position**, whether it arrives as the classified string `<<`, as the quoted
+    `"<<"`, or as an explicit `tag:yaml.org,2002:merge`, under the precedence
+    order of section 5.2.2. Merge semantics would make canonical content depend
+    on resolution order and are unnecessary for version 1. Also reject any
+    `DocumentStartEvent` carrying a `%YAML` or `%TAG` directive — assert
+    `event.version is None and not event.tags` — with
+    `STRATEGY.YAML_DIRECTIVE_FORBIDDEN`. PyYAML accepts a `%YAML 1.2` header
+    while its resolver remains YAML 1.1, and `%TAG` remaps shorthand prefixes;
+    neither may silently redefine the semantics this section fixes.
 11. Leave global parser state untouched. `StrictStrategySafeLoader` is a
     private subclass of `yaml.SafeLoader` whose **class body is empty** except
     for its name, because the Constructor is never invoked and therefore no
@@ -489,7 +572,10 @@ It must, in this exact order:
     deterministically rather than at garbage collection. A test parses an
     invalid document and then a valid document in the same process and asserts
     a result identical to loading the valid document alone.
-13. Hand off to Pydantic in **JSON mode**. The bounded plain value is
+13. Hand off to Pydantic in **JSON mode**. `load_yaml_document` itself returns
+    `Result[YamlDocument]` and imports no model; the handoff is performed by the
+    **caller** — `StrategyLoader` in production, and the test body in Task 2
+    step 14. The bounded plain value is
     serialised with `crypto_lab.domain.canonical_json.canonical_json_bytes` and
     validated with `StrategySpec.model_validate_json(...)`. This is mandatory,
     not stylistic: `crypto_lab.domain.financial.parse_decimal` branches on
@@ -501,22 +587,393 @@ It must, in this exact order:
     string in exact `CANONICAL_DECIMAL_PATTERN` form. `"1"` is valid; `"1.50"`,
     `"+1"`, `"1e3"`, and unquoted `1` are not. Every fixture must comply.
 14. Never let a `Diagnostic` carry `str(yaml.YAMLError)`, `Mark.get_snippet()`,
-    `Mark.buffer`, or `Mark.name`. Only the integer `line` and `column` from a
-    `Mark`, plus a fixed project-authored message per error code, may enter a
-    diagnostic. A test asserts that a syntax-error diagnostic contains none of
-    the document's distinctive tokens.
-
-`SourceName` is a constrained type declared with `exact_string_schema` and the
-pattern `^[a-z0-9][a-z0-9._-]{0,127}$`, which forbids `/`, `\`, `:`, `..`, and
-a leading `~`. It is a label, never a filesystem path. Tests reject
-`C:\x\y.yaml`, `../x.yaml`, and `//host/share/x.yaml`. This matters because
-`StrategySourceProvenance` retains `source_name` for audit, and specification
-section 24.3 requires diagnostics and audit details to be redacted; a raw path
-would leak a local username.
+    `Mark.buffer`, `Mark.name`, or `MarkedYAMLError.problem`, `.context`, or
+    `.note`. The three `MarkedYAMLError` attributes matter independently:
+    `problem` embeds document characters verbatim — for example
+    `found unknown escape character %r` — so a document byte would reach a
+    diagnostic through it. Only the integer `line` and `column` from a `Mark`,
+    plus a fixed project-authored message per error code, may enter a
+    diagnostic. The Task 1 AST guard bans five of these attribute names —
+    `get_snippet`, `buffer`, `problem`, `context`, `note` — statically.
+    `Mark.name` is **not** in the static guard, because bare `name` is bound in
+    three comprehensions in `crypto_lab/configuration/loader.py` and banning it
+    would be un-greenable; with a `str` stream `Mark.name` is the constant
+    `"<unicode string>"`, so there is no live leak channel, and `Mark.name`
+    remains prohibited at the test level. A test asserts that a syntax-error
+    diagnostic contains none of the document's distinctive tokens.
 
 Typing note: typeshed annotates PyYAML node and event `value` attributes as
 `Any`. `disallow_any_expr` is not part of mypy `strict`, so the builder must
 narrow with `isinstance` rather than assigning through an `Any`.
+
+#### 5.2.1 Project-owned event classifier
+
+**Recorded PyYAML 6.0.3 evidence.** This subsection is the review package for
+the event contract; both plan reviewers read it directly, because PyYAML is not
+installed during planning and the evidence is therefore documentary.
+
+- `yaml/parser.py` `parse_node` constructs `ScalarEvent(anchor, tag, implicit,
+  value, start_mark, end_mark, style=style)`. `tag` is `None` when the node
+  carries no tag property. `implicit` is `(True, False)` for a plain untagged
+  scalar, `(False, True)` for a quoted or block untagged scalar, and
+  `(False, False)` for a scalar carrying a specific tag.
+- **The non-specific tag `!` is the one exception, and it is load-bearing.**
+  `parse_node` computes `implicit = (tag is None or tag == '!')` and then, for a
+  scalar, `if (token.plain and tag is None) or tag == '!': implicit = (True,
+  False)`. With `DEFAULT_TAGS = {'!': '!', '!!': 'tag:yaml.org,2002:'}` and
+  `Scanner.scan_tag` returning `'!'` for a bare `!`, the node `! abc` yields
+  `ScalarEvent(tag='!', implicit=(True, False), style=None)` and `! "yes"`
+  yields `ScalarEvent(tag='!', implicit=(True, False), style='"')`.
+  `MappingStartEvent` and `SequenceStartEvent` behave the same way, carrying
+  `tag='!'` with `implicit=True`. `yaml/composer.py` matches this with the guard
+  `if tag is None or tag == '!': tag = self.resolve(...)`.
+- `yaml/composer.py` `Composer.compose_scalar_node` is where implicit type
+  resolution happens: under that guard it calls `self.resolve(ScalarNode,
+  event.value, event.implicit)` against `yaml/resolver.py`. Stage 4 never
+  enters the Composer, so **no parse event ever carries a resolved implicit
+  tag**. Reading an implicit type from `event.tag` reads `None`.
+- `yaml/scanner.py` fixes the style values: `scan_plain` produces
+  `ScalarToken(..., plain=True)` with the default `style=None`;
+  `scan_flow_scalar` passes `'` or `"`; `scan_block_scalar` passes `|` or `>`.
+- `yaml/events.py` defines exactly ten concrete event classes:
+  `StreamStartEvent`, `StreamEndEvent`, `DocumentStartEvent`,
+  `DocumentEndEvent`, `AliasEvent`, `ScalarEvent`, `SequenceStartEvent`,
+  `SequenceEndEvent`, `MappingStartEvent`, `MappingEndEvent`. `AliasEvent`
+  derives from `NodeEvent` and carries **neither** `.tag` nor `.implicit`, so
+  dispatch must be explicit rather than duck-typed.
+- `yaml/resolver.py` registers exactly eight default implicit resolvers:
+  `bool`, `float`, `int`, `merge`, `null`, `timestamp`, `value`, and `yaml`.
+  The `yaml` resolver is unreachable — PyYAML's own comment records that a
+  plain scalar cannot begin with `!`, `&`, or `*` — leaving seven reachable
+  families the classifier must account for.
+
+**The "explicit tag" predicate is `event.tag is not None`.** That single
+predicate selects between the two scalar rule sets below and between the two
+collection rules. The non-specific tag `!` therefore counts as an explicit tag
+and is **rejected** with `STRATEGY.YAML_FORBIDDEN_TAG`, on scalars and on
+collections alike, because `strategy/v1` accepts no tag it has not named.
+
+**The classifier dispatches on the exact event class, and is total by
+construction.** Its roles are fixed:
+
+| Event class | Role |
+|---|---|
+| `StreamStartEvent`, `StreamEndEvent` | stream framing; consumed, no value |
+| `DocumentStartEvent` | first one opens the document; a second is `STRATEGY.YAML_MULTIPLE_DOCUMENTS`; none is `STRATEGY.YAML_EMPTY_DOCUMENT` |
+| `DocumentEndEvent` | closes the document; any later value event is `STRATEGY.YAML_MULTIPLE_DOCUMENTS` |
+| `ScalarEvent` | classified by the scalar rules below |
+| `SequenceStartEvent`, `MappingStartEvent` | classified by the collection rules below |
+| `SequenceEndEvent`, `MappingEndEvent` | close the open collection |
+| `AliasEvent` | expanded under section 5.3.1; rejected in key position by section 5.2.2 |
+
+Dispatch ends in a **terminal `else` that returns a `Result` failure**, never
+an exception and never a silent skip, so an event kind added by a future PyYAML
+release fails closed. A test asserts the handled class set equals the concrete
+subclasses reachable from `yaml.events.Event`, so such an addition fails loudly
+rather than degrading.
+
+The classifier is the only place a YAML type is decided. It never consults
+`yaml/resolver.py`, no mutable global implicit resolver is read or written, and
+`yaml.compose`, `yaml.compose_all`, `yaml.load`, `yaml.safe_load`, and the
+Constructor are never called.
+
+**Collection events**
+
+- `MappingStartEvent` with `event.tag is None` is a map.
+- `SequenceStartEvent` with `event.tag is None` is a sequence.
+- An explicit collection tag must exactly match the event kind:
+  `tag:yaml.org,2002:map` is accepted only on a `MappingStartEvent`, and
+  `tag:yaml.org,2002:seq` only on a `SequenceStartEvent`.
+- Any other tag on a collection event is rejected with
+  `STRATEGY.YAML_FORBIDDEN_TAG`. That includes the non-specific tag `!`, a
+  mismatched collection tag, a scalar tag on a collection,
+  `tag:yaml.org,2002:omap`, `:set`, `:pairs`, `:binary`, every `!!python/...`
+  form, and every unknown custom tag.
+
+**Scalar events with an explicit tag** (`event.tag is not None`)
+
+| Tag | Classification |
+|---|---|
+| `tag:yaml.org,2002:str` | string, verbatim text |
+| `tag:yaml.org,2002:int` | integer, accepted only when the text matches `^(0\|-?[1-9][0-9]*)$` **and** the value is within the section 5.3 integer bounds |
+| `tag:yaml.org,2002:bool` | boolean, accepted only for exactly lowercase `true` or `false` |
+| `tag:yaml.org,2002:null` | rejected for `strategy/v1` |
+| `!` (non-specific) | rejected |
+| every other tag | rejected |
+
+A rejected tag yields `STRATEGY.YAML_FORBIDDEN_TAG`. An accepted tag whose text
+fails its canonical form yields `STRATEGY.YAML_NONCANONICAL_SCALAR`, and one
+whose value falls outside the integer bounds yields
+`STRATEGY.YAML_INTEGER_OUT_OF_RANGE`.
+
+`!!str` with empty text classifies as the empty string. This is deliberate and
+asymmetric with the plain empty scalar, which rule 5 rejects: an explicit
+`!!str` is an unambiguous authored intent, whereas a bare empty plain scalar is
+YAML 1.1 null. The asymmetry is hash material, so a test pins both halves.
+
+**Scalar events without an explicit tag** (`event.tag is None`)
+
+1. Quoted, literal, and folded scalars are strings. A scalar is non-plain
+   exactly when `event.style` is one of `'`, `"`, `|`, `>`.
+2. A plain scalar is one whose `event.style` is `None` or empty. For defence in
+   depth the classifier also reads `event.implicit`: a plain style must present
+   `implicit[0] is True`, and a non-plain untagged style must present
+   `implicit == (False, True)`. A disagreement is **rejected** with
+   `STRATEGY.YAML_NONCANONICAL_SCALAR`, never resolved. Note that for untagged
+   scalars PyYAML cannot produce a disagreement — `token.plain` determines both
+   — so this check is unreachable by any authored document and exists only to
+   fail closed if that invariant ever changes. Its test therefore constructs a
+   synthetic `yaml.ScalarEvent(...)` directly and feeds it to the classifier;
+   it is not authored as YAML.
+3. A plain scalar whose text is exactly lowercase `true` or `false` is a
+   boolean.
+4. A plain scalar whose text matches `^(0|-?[1-9][0-9]*)$` **and** whose value
+   lies within the section 5.3 integer bounds is an integer. The pattern
+   excludes `-0`, because `int("-0") == 0` would let two source texts produce
+   one canonical value, and the repository already forbids negative zero in
+   `format_decimal`. A matching text whose value is out of range is rejected
+   with `STRATEGY.YAML_INTEGER_OUT_OF_RANGE`; see section 5.3 for why a digit
+   cap alone is insufficient.
+5. **The rejection rule, stated by construction rather than by example.**
+   Rules 3 and 4 are evaluated **first and win**: a text they accept is never
+   consulted against this table. That ordering is load-bearing, because
+   `^\+[0-9][0-9_]*$` and the underscore pattern deliberately overlap the
+   integer shape, and without it an implementation that ran the table first
+   would reject every negative integer while still passing every other required
+   test. Required test 2 therefore includes plain `-5` and `0` alongside `20`.
+   A plain scalar not accepted by rule 3 or rule 4 is rejected with
+   `STRATEGY.YAML_NONCANONICAL_SCALAR` when it matches any project-owned
+   rejection pattern below. Outside key position these patterns are
+   deliberately **at least as broad as** PyYAML's own resolver regexes, with
+   exactly one documented exception — the merge token `<<`, which section 5.2.2
+   handles more strictly in key position and which is an ordinary string
+   elsewhere. Subject to that exception the contract holds even against a
+   reader that implements YAML 1.1 more completely than PyYAML does. Every remaining valid plain scalar is a string.
+
+   | Family | Project-owned rejection pattern |
+   |---|---|
+   | boolean aliases | `^(?:y\|Y\|yes\|Yes\|YES\|n\|N\|no\|No\|NO\|on\|On\|ON\|off\|Off\|OFF\|True\|TRUE\|False\|FALSE)$` |
+   | alternate integers | `^[-+]?0b[01_]+$`, `^[-+]?0o?[0-7_]+$`, `^[-+]?0x[0-9a-fA-F_]+$`, `^\+[0-9][0-9_]*$`, `^-?0[0-9_]+$`, `^-0$`, underscore-bearing `^[-+]?[0-9][0-9_]*_[0-9_]*$`, and sexagesimal `^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+$` |
+   | floats | `^[-+]?(?:\.[0-9_]+\|[0-9][0-9_]*\.[0-9_]*)(?:[eE][-+]?[0-9]+)?$`, `^[-+]?[0-9][0-9_]*[eE][-+]?[0-9]+$`, sexagesimal `^[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*$`, and `^[-+]?\.(?:inf\|Inf\|INF)$`, `^\.(?:nan\|NaN\|NAN)$` |
+   | timestamps | `^[0-9]{4}-[0-9]{2}-[0-9]{2}$` and `^[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:[Tt]\|[ \t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]*)?(?:[ \t]*(?:Z\|[-+][0-9]{1,2}(?::[0-9]{2})?))?$` |
+   | nulls | `^(?:~\|null\|Null\|NULL\|)$` — the empty alternative covers the empty plain scalar, matching PyYAML's own null resolver form |
+   | value | `^=$`, the `tag:yaml.org,2002:value` token |
+
+   Every entry is a complete regular expression. No entry is a pattern plus a
+   prose condition: the underscore case is `^[-+]?[0-9][0-9_]*_[0-9_]*$`, which
+   requires a literal `_`, because the unconditional `^[-+]?[0-9][0-9_]*$`
+   would also reject plain `1000` that rule 4 must accept; the boolean row
+   simply omits lowercase `true` and `false` rather than subtracting them in
+   prose; and `^-0$` is listed explicitly, because rule 4's pattern excludes
+   `-0` and every other integer entry requires a further digit, so without it
+   `-0` would fall through to the string case and required test 21 would be
+   unsatisfiable. `^-0$` is deliberately narrow: widening to
+   `^[-+]?0[0-9_]*$` would also match plain `0`, which rule 4 must accept, and
+   would put this row back into dependence on precedence prose. The second timestamp
+   entry is PyYAML's own second alternative written out — note the `[Tt]` or
+   `[ \t]+` separator, single-digit month, day and hour, optional fractional
+   seconds, and optional `[ \t]*` before the zone — so required test 13's
+   `2026-08-15T00:00:00Z` is matched by a stated pattern rather than by prose.
+
+   The float family covers **sexagesimal floats** such as `190:20:30.15`
+   explicitly, which PyYAML resolves to `685230.15`. `1e3` and single-letter
+   `y`/`n` are rejected even though PyYAML itself types them as strings; that
+   is intentional cross-implementation safety, not a claim about PyYAML.
+   Note that the merge token `<<` is **not** in this list: section 5.2.2
+   rejects it in key position with `STRATEGY.YAML_MERGE_KEY_FORBIDDEN`, and
+   outside key position it is an ordinary string.
+
+   These patterns must not reject a legitimate instrument identifier. Every
+   sexagesimal pattern requires digit groups, so `BINANCE:BTC/USDT:SPOT`,
+   `bar.close`, `indicator.sma/v1`, and `1h` all remain strings. A test pins
+   each of those four explicitly, because an over-broad colon rejection would
+   break every fixture in section 6.5.
+
+**Authoring consequence.** Because floats are rejected and `strategy/v1`
+declares no nullable field, every decimal-valued field must be a quoted string
+in exact `CANONICAL_DECIMAL_PATTERN` form, and an absent value is expressed by
+omitting the key rather than by writing a null. `"1"` is valid; `"1.50"`,
+`"+1"`, `"1e3"`, and unquoted `1.0` are not.
+
+**Exact required tests.** One test each:
+
+1. an implicit scalar event's `tag` is `None`, asserted directly against a
+   `yaml.parse` event, so the contract's premise is executable rather than
+   assumed;
+2. canonical integers `20`, `-5`, and `0` classify as integers, pinning that
+   rules 3 and 4 precede the rejection table;
+3. canonical boolean `true` and `false` classify as booleans;
+4. a quoted ambiguous string `"yes"` classifies as the string `yes`, and
+   `"1"` as the string `1`;
+5. an explicit `!!str yes` classifies as the string `yes`, and `!!str` with
+   empty text as the empty string;
+6. an explicit `!!int 20` classifies as the integer `20`;
+7. an invalid explicit `!!int 0x20` is rejected with
+   `STRATEGY.YAML_NONCANONICAL_SCALAR`;
+8. plain `yes`, `no`, `on`, `off`, `y`, `n`, and their case variants are
+   rejected;
+9. octal `010` and `0o17`, leading-plus `+1` and `+0`, and underscore-bearing
+   `1_000` are rejected. The last three pin the two table rows that
+   deliberately overlap the integer shape; without them both rows could be
+   deleted with all other tests still green, and `+1`, `+0`, and `1_000` —
+   which PyYAML types as `1`, `0`, and `1000` — would fall through to strings;
+10. hexadecimal `0x20` is rejected;
+11. sexagesimal integer `12:30` **and sexagesimal float `190:20:30.15`** are
+    rejected;
+12. floats `1.0`, `.5`, `1.`, `1e3`, `.inf`, `+.INF`, `.nan` are rejected;
+13. timestamps `2026-08-15` and `2026-08-15T00:00:00Z` are rejected;
+14. nulls `~`, `null`, `Null`, `NULL` are rejected;
+15. the empty plain scalar is rejected;
+16. an unknown explicit tag `!!binary` and a custom `!Thing` are rejected with
+    `STRATEGY.YAML_FORBIDDEN_TAG`;
+17. a mismatched collection tag — `!!seq` on a mapping and `!!map` on a
+    sequence — is rejected with `STRATEGY.YAML_FORBIDDEN_TAG`;
+18. a style/`implicit` disagreement, constructed as a synthetic
+    `yaml.ScalarEvent`, is rejected rather than resolved;
+19. **the non-specific tag `!`**: `! abc`, `! "yes"`, and `! {a: 1}` are each
+    rejected with `STRATEGY.YAML_FORBIDDEN_TAG`, proving the explicit-tag
+    predicate is `event.tag is not None` and not `implicit[0] is False`;
+20. **the value token** `=` is rejected;
+21. **integer bounds and negative zero**: `9223372036854775807` is accepted;
+    `9223372036854775808` and a 4301-digit literal are rejected with
+    `STRATEGY.YAML_INTEGER_OUT_OF_RANGE`; and `-0` is rejected with
+    `STRATEGY.YAML_NONCANONICAL_SCALAR`, **not** the bounds code — it fails
+    rule 4's canonical pattern and is caught by the rejection table, so
+    asserting the code matters here;
+22. **event-kind exhaustiveness**: the classifier's handled class set equals the
+    **leaf** classes reachable from `yaml.events.Event` — those with
+    `not cls.__subclasses__()` — which is the ten concrete classes, not the
+    thirteen a naive recursive walk returns, since `NodeEvent`,
+    `CollectionStartEvent`, and `CollectionEndEvent` are intermediate. An
+    unhandled kind returns a `Result` failure rather than raising;
+23. **identifiers survive**: `BINANCE:BTC/USDT:SPOT`, `bar.close`,
+    `indicator.sma/v1`, and `1h` all classify as strings;
+24. **directives are rejected**: a document carrying `%YAML 1.2` or a `%TAG`
+    directive is rejected with `STRATEGY.YAML_DIRECTIVE_FORBIDDEN`, asserted
+    through `DocumentStartEvent.version` and `.tags`.
+
+#### 5.2.2 Mapping-key contract
+
+Inside a mapping, the event in key position obeys this exact contract:
+
+- **Every mapping key is a direct scalar.** The key event must be a
+  `ScalarEvent`.
+- **It must classify as a string** under section 5.2.1.
+- **Aliases are not permitted as mapping keys.** An `AliasEvent` in key
+  position is rejected even when its anchor resolves to a string.
+- **Sequence and mapping keys are rejected.** A `SequenceStartEvent` or
+  `MappingStartEvent` in key position — a complex key — is rejected.
+- **Integer, boolean, and null keys are rejected**, whether implicitly typed or
+  explicitly tagged.
+- **Duplicate detection operates on the classified string.** Quoted and
+  unquoted keys with equal text are duplicates, so `a: 1` followed by
+  `"a": 2` is a duplicate.
+
+**Error-code assignment, in this exact precedence order**, so no two rules can
+claim the same document:
+
+0. A key event that is not a `ScalarEvent` — an `AliasEvent`,
+   `SequenceStartEvent`, or `MappingStartEvent` — yields
+   `STRATEGY.YAML_MAPPING_KEY_INVALID` immediately. This step runs **first**
+   because `AliasEvent` carries no `.tag` attribute at all, so evaluating the
+   tag rule below against one would raise `AttributeError` out of the `Result`
+   contract. A key scalar longer than `MAX_SCALAR_CHARACTERS` is rejected here
+   too, with `STRATEGY.YAML_SCALAR_TOO_LONG`, since the length bound applies to
+   every scalar and precedes classification.
+1. A key whose event carries a rejected tag — including the non-specific `!`
+   and `tag:yaml.org,2002:merge` — yields `STRATEGY.YAML_FORBIDDEN_TAG` from
+   section 5.2.1.
+2. A key that **classifies as the string `<<`** yields
+   `STRATEGY.YAML_MERGE_KEY_FORBIDDEN`. The check is on the classified string,
+   so quoted `"<<": x` is rejected exactly like plain `<<: x`. Section 5.2.1
+   deliberately does **not** list `<<` among its rejected plain scalars: outside
+   key position `<<` is an ordinary string, and putting it in both places would
+   make the two rule sets claim the same document with different codes.
+3. A key that section 5.2.1 itself rejects keeps **that** section's code, so
+   the two rule sets never claim one document: `=` in key position is already
+   rejected by 5.2.1's value row with `STRATEGY.YAML_NONCANONICAL_SCALAR`,
+   exactly as it would be in value position. Only a key that classifies
+   successfully and is then unacceptable **as a key** — an integer, boolean, or
+   null classification — yields the new
+   `STRATEGY.YAML_MAPPING_KEY_INVALID`. `<<` is the single deliberate
+   exception, carved out in step 2, because 5.2.1 does not reject it at all.
+4. A duplicate yields the existing `STRATEGY.YAML_DUPLICATE_KEY`, reported for
+   the **first** duplicate in document order, with the integer line and column
+   of its second occurrence.
+
+**Exact required tests**, one per rejected shape: an alias key; a sequence key
+`? [a, b]`; a mapping key `? {a: b}`; an implicit integer key `1:`; an implicit
+boolean key `true:`; an implicit null key `~:`; the empty key `:`; an explicit
+`!!int 1:` key; an explicit `!!bool true:` key; an explicit `!!null ~:` key; an
+unknown-tag key; a non-specific `! k:` key; a `=` key; the merge key `<<:`; the
+quoted merge key `"<<":`; a key longer than `MAX_SCALAR_CHARACTERS`; the
+quoted-versus-unquoted duplicate pair; and a **three-duplicate ordering test**
+asserting that a document with two distinct duplicated keys reports the first in
+document order, with the exact line and column of the second occurrence, so a
+last-wins or unordered implementation cannot pass.
+
+#### 5.2.3 `SourceName`
+
+`SourceName` is a bounded non-path label, never a filesystem path. It matters
+because `StrategySourceProvenance` retains `source_name` for audit, and
+specification section 24.3 requires diagnostics and audit details to be
+redacted; a raw path would leak a local username.
+
+Its runtime pattern is exactly:
+
+```text
+^(?!.*\.\.)[a-z0-9][a-z0-9._-]{0,127}$
+```
+
+The existing length bound is kept: 1 to 128 characters.
+
+**Declaration mechanism, and why the pattern is not in
+`StringConstraints`.** Pydantic v2 compiles a `StringConstraints` pattern with
+its default `rust-regex` engine, which has no look-around. The observed failure
+under Pydantic 2.13.4 is exact:
+
+```text
+SchemaError: regex parse error:
+    ^(?!.*\.\.)[a-z0-9][a-z0-9._-]{0,127}$
+     ^^^
+error: look-around, including look-ahead and look-behind, is not supported
+```
+
+`SourceName` is therefore declared in `src/crypto_lab/strategy/yaml_source.py`
+as:
+
+- `StringConstraints(strict=True, min_length=1, max_length=128)` — no
+  `pattern`;
+- an `AfterValidator` that rejects a value when a module-level
+  `re.compile(...)` of the pattern above returns `None` from `fullmatch`;
+  `fullmatch` rather than `match`, because Python's `$` also matches before a
+  trailing newline;
+- `WithJsonSchema(exact_string_schema(...))`, which converts the
+  `$`-terminated runtime pattern into the ECMA-safe
+  `(?![\s\S])`-terminated JSON Schema form. Negative look-ahead is valid
+  ECMA-262, so the generated schema keeps the full constraint, and the existing
+  `test_every_schema_pattern_uses_absolute_end_semantics` guard still passes.
+
+Do not move the pattern into `StringConstraints(pattern=...)`; it will not
+build. `re` is already in `_ALLOWED_IMPORT_ROOTS`.
+
+**Exact required tests.** Reject `strategy..yaml`; `.hidden`; path separators
+`a/b.yaml` and `a\b.yaml`; drive syntax `c:\x\y.yaml` and `C:\x\y.yaml`; UNC
+syntax `\\host\share\x.yaml` and `//host/share/x.yaml`; a leading tilde
+`~x.yaml` and `~/x.yaml`; uppercase `Strategy.yaml`; a leading `-`; and an
+embedded space. Accept `strategy.yaml`, `sma_cross_long.valid.yaml`, and a
+128-character name; reject a 129-character name.
+
+Two further tests are mandatory, because the type alias alone enforces nothing:
+
+- **`load_yaml_document` itself rejects a bad name.** Call the entry point with
+  `C:\x\y.yaml` and with `strategy..yaml` and assert a `Result` failure
+  carrying `STRATEGY.SOURCE_NAME_INVALID`, per section 5.2 step 0. A test that
+  only exercises `TypeAdapter(SourceName)` would pass while the entry point
+  accepted anything.
+- **The generated JSON Schema agrees with the runtime pattern.** Validate the
+  same value list through `jsonschema` against the emitted schema and assert
+  identical accept/reject outcomes, so the two constraints cannot drift.
 
 ### 5.3 Project-owned single-pass bounds
 
@@ -543,6 +1000,35 @@ depth bound implementable at all.
 | Anchor definitions | `MAX_ANCHORS` | `64` |
 | Alias references | `MAX_ALIAS_REFERENCES` | `256` |
 | Expanded node budget | `MAX_EXPANDED_NODES` | `50_000` |
+| Minimum integer value | `MIN_INTEGER_VALUE` | `-(2**63)` |
+| Maximum integer value | `MAX_INTEGER_VALUE` | `2**63 - 1` |
+| Expression nesting depth (post-parse, **not** a builder bound) | `MAX_EXPRESSION_DEPTH` | `24` |
+
+`MAX_EXPRESSION_DEPTH` is listed here only so every Stage 4 ceiling has one
+home. It is **not** enforced during the event pass: it bounds the validated
+`Expression` tree after `StrategySpec` is constructed, and YAML nesting is
+already bounded by `MAX_EVENT_DEPTH`. Task 2's "one test per bound in section
+5.3" therefore excludes it, and
+`tests/unit/strategy/test_strategy_yaml_bounds.py` carries no expression-depth
+case; that bound is tested in
+`tests/unit/strategy/test_strategy_expressions.py` at the model level and again
+by the Task 3 checker.
+
+**Integer magnitude is bounded by value, not by digit count.** CPython 3.12
+enforces `sys.get_int_max_str_digits() == 4300`, so `int(text)` raises
+`ValueError: Exceeds the limit (4300 digits) for integer string conversion` for
+a longer literal — and `canonical_json_bytes` raises the same way through
+`json.dumps`. A 4301-to-8192-digit plain integer sits inside
+`MAX_SCALAR_CHARACTERS` and would therefore either escape as an uncaught
+exception, violating section 5.3.2's "no exception escapes" contract and the
+`Result`-only contract of section 5.2, or be swallowed with no code in the
+closed section 5.9 table. A digit cap alone would not be enough either: it
+would still admit an absurd integer into a permanent `content_hash` and into
+`model_validate_json`. The bounds therefore follow the existing repository
+precedent `BoundedDetailInteger` in `crypto_lab/domain/diagnostics.py`, which
+is signed 64-bit. The classifier checks the bound **before** calling `int()`,
+by digit-length pre-check then value comparison, so the CPython limit is never
+reached. Out-of-range yields `STRATEGY.YAML_INTEGER_OUT_OF_RANGE`.
 
 #### 5.3.1 Transitive alias-expansion accounting
 
@@ -553,8 +1039,13 @@ definitions, and depth 2 — inside every raw ceiling — yet denotes about
 `9**9` values. Accounting must therefore be **transitive**:
 
 - maintain a stack of open anchor frames, each with a `cost` counter;
-- on every non-alias event, add `1` to `expanded` and to every open frame's
-  `cost`;
+- on every **node-producing** event — `ScalarEvent`, `SequenceStartEvent`, and
+  `MappingStartEvent` — add `1` to `expanded` and to every open frame's `cost`.
+  Framing events charge **nothing**: `StreamStartEvent`, `StreamEndEvent`,
+  `DocumentStartEvent`, `DocumentEndEvent`, `SequenceEndEvent`, and
+  `MappingEndEvent` produce no node. Charging them would contradict the
+  statement below that `expanded` is an exact count of materialised nodes, and
+  would make two conforming implementations disagree on the same document;
 - on an alias event, look up `expanded_size[name]`; reject with
   `STRATEGY.YAML_RECURSIVE_ALIAS` if the name is unknown or its frame is still
   open; otherwise add that recorded **expanded** cost to `expanded` and to
@@ -564,10 +1055,48 @@ definitions, and depth 2 — inside every raw ceiling — yet denotes about
 - when an anchor's node closes, record `expanded_size[name] = frame.cost`, and
   reject if that cost alone exceeds `MAX_EXPANDED_NODES`.
 
+**The expansion mechanism is fixed here, and Appendix H must agree with it.**
+An alias is materialised by **deep-copying the already-built value** recorded
+for its anchor. There is no event replay. Consequently:
+
+- a replayed or copied node is **never charged again**, because the alias site
+  already charged the whole `expanded_size[name]`. Charging both would make
+  `expanded` a fiction and move the point at which `MAX_EXPANDED_NODES` fires,
+  which is exactly what `invalid/billion_laughs.yaml` is authored to pin;
+- an anchored **scalar** records `cost = 1`;
+- a collection's own start event is charged to its own frame, so a frame's
+  recorded cost is the complete node it denotes;
+- `MAX_EXPANDED_DEPTH` is incremented while an alias's copied value is spliced
+  in; `MAX_EVENT_DEPTH` is not, because no event is re-emitted.
+
+A test pins the accounting numerically against this exact fixture, because
+describing the accounting is not enough — an off-by-one here stays invisible
+until the bomb fixture silently stops failing:
+
+```text
+a: &x [1, 2]
+b: *x
+```
+
+Hand-computed under the rules above: the root mapping start charges `1`; key
+`a` charges `1`; the anchored sequence charges `1` for its start plus `1` for
+each of the two scalars, so `expanded_size["x"] == 3`; key `b` charges `1`; and
+the alias charges the recorded `3`. **`expanded == 9`**, and the six framing
+events charge nothing. The test asserts exactly `9` and exactly
+`expanded_size == {"x": 3}`.
+
 Because the value is built in the same pass, `expanded` is an exact count of
 the nodes the builder will materialise, and the expanded-depth counter bounds
 the builder's own recursion. `MAX_EXPANDED_NODES` at 50,000 keeps the builder
-far below Python's recursion and memory limits.
+far below Python's recursion and memory limits. The retained per-anchor value
+store is bounded by the same budget, since no anchor's recorded cost may exceed
+`MAX_EXPANDED_NODES` and at most `MAX_ANCHORS` of them exist.
+
+`MAX_EVENT_DEPTH` and `MAX_EXPANDED_DEPTH` are both `32`, and expanded depth is
+greater than or equal to event depth at every point, so the expanded bound
+alone would reject everything the event bound would. Keeping both is defence in
+depth against a future change to either constant, not a claim that each catches
+cases the other misses.
 
 Rejecting an alias whose anchor is still open makes a recursive or cyclic
 structure structurally impossible rather than test-enforced, so the accepted
@@ -586,9 +1115,16 @@ levels, not a flat one; a flat fixture would pass a non-transitive
 implementation and hide the defect. Tests must assert:
 
 1. the nested bomb is rejected with `STRATEGY.YAML_EXPANSION_EXCEEDED`;
-2. rejection occurs during the single pass, proven by asserting that
-   `yaml.compose`, `yaml.compose_all`, `yaml.load`, and `yaml.safe_load` are
-   never called — the Task 1 source guard already forbids naming them;
+2. rejection occurs **mid-stream**, proven by instrumentation rather than by
+   absence. Asserting that `yaml.compose`, `yaml.compose_all`, `yaml.load`, and
+   `yaml.safe_load` are never called proves nothing here: they are never called
+   for any input, so the assertion holds equally for an implementation that
+   collects every event into a list and only then checks its bounds. Instead,
+   wrap `yaml.parse(...)` in a counting generator, run the nested bomb, and
+   assert both that the number of events consumed is strictly less than the
+   document's total event count, and that the generator was closed while
+   unexhausted — a sentinel appended after the final event must never be
+   reached, and `gen.gi_frame is None` after the `contextlib.closing` block;
 3. expanded depth beyond `MAX_EXPANDED_DEPTH` is rejected even when event-stream
    depth stays under `MAX_EVENT_DEPTH`, using an alias-composed fixture;
 4. `&a [*a]` is rejected with `STRATEGY.YAML_RECURSIVE_ALIAS`;
@@ -613,9 +1149,19 @@ unsatisfiable. Stage 4 resolves this as follows:
 
 1. **Identity is derived, never drawn.** `diagnostic_id` is
    `"diag_" + _uuid4_shaped(profile_hash(HashingProfile.DIAGNOSTIC_IDENTITY_V1,
-   payload))`, where `payload` is the diagnostic's material content
-   (`error_code`, `category`, `severity`, `source_component`, `message`,
-   `details`, and any correlation IDs). `_uuid4_shaped` takes the first 32 hex
+   payload))`, where `payload` is the diagnostic's **complete** material
+   content: `schema_version`, `error_code`, `category`, `severity`,
+   `source_component`, `message`, `retriable`, `details`, and any correlation
+   IDs. `retriable` and `schema_version` are included deliberately — omitting
+   `retriable` would collide two genuinely different diagnostics onto one
+   `diagnostic_id`. `timestamp_utc` and `causal_diagnostic_ids` are excluded
+   deliberately: the first is not material identity, and the second would make
+   the payload self-referential. This payload **is** the deduplication key
+   required by section 5.4, so identical identity implies identical diagnostic
+   and deduplication cannot drop a distinct one. That matters beyond tidiness:
+   `Diagnostic.validate_causes` rejects a diagnostic that directly causes
+   itself, so an identity collision between a diagnostic and one of its causes
+   would raise a `ValidationError` out of a failure path. `_uuid4_shaped` takes the first 32 hex
    digits of the digest, forces the version nibble to `4` and the variant
    nibble into `[89ab]`, and formats the canonical `8-4-4-4-12` grouping, so
    `validate_prefixed_uuid4` accepts it. Identical diagnostic content therefore
@@ -735,7 +1281,23 @@ Stage 4 therefore relocates the shared canonical contract types into
    exposes descriptor contracts) while the relocation preserves its *Allowed
    inward dependencies* column. Relocation satisfies both columns; a new edge
    satisfies neither.
-6. `crypto_lab.capabilities` imports **nothing** from `crypto_lab.adapters`.
+6. **`CapabilityRequirement` and its `ApproximationPolicy` move to
+   `crypto_lab/domain/capability_requirements.py`, and Task 2 owns them.**
+   Specification section 12.2 makes `required_capabilities` a `StrategySpec`
+   field and section 12.4 renders it as `{capability, required}` entries, which
+   section 11.3 defines as exactly `CapabilityRequirement`. Leaving that type in
+   `capabilities/models.py` would force `strategy` to import from
+   `capabilities`, violating the same normative 27.1 row this section exists to
+   protect and failing the Task 6 architecture test in item 11 below. It would
+   also invert task order, since `StrategySpec` is Task 2 and `capabilities` is
+   Task 6. Section 11.3 already classifies `CapabilityRequirement` as a
+   canonical domain record, so relocation is authorized by exactly the argument
+   used above for `AdapterDescriptor`. `capabilities/models.py` re-exports it,
+   keeping its public surface intact. For the same reason **Task 2**, not Task
+   6, creates `domain/capability_names.py` and `domain/comparison_levels.py`:
+   `StrategySpec.required_capabilities`, `supported_approximation_policy`, and
+   `comparison_requirements` all need those types.
+7. `crypto_lab.capabilities` imports **nothing** from `crypto_lab.adapters`.
    Task 6 adds an architecture test asserting exactly that, plus that
    `capabilities` imports nothing from `experiments`, `datasets`, `artifacts`,
    `persistence`, `process_supervision`, `configuration`, `audit`, or `cli`.
@@ -753,7 +1315,7 @@ This is recorded as an escalated architecture conflict resolved under section
 2's authority order, in favour of the specification over the earlier plan
 reading — not as a reinterpretation of a normative table.
 
-### 5.8 Stage 4 / Stage 5 comparison boundary
+### 5.8 Stage 4 / Stage 9 comparison-service boundary
 
 Specification section 25.4 places `ComparisonEligibilityService` in
 `experiments/comparison.py`, and roadmap Stage 5 also lists section 25.4.
@@ -782,6 +1344,7 @@ amendment.
 ```text
 STRATEGY.SOURCE_TOO_LARGE            STRATEGY.SOURCE_NOT_UTF8
 STRATEGY.SOURCE_BOM_PRESENT          STRATEGY.SOURCE_NOT_IN_MEMORY
+STRATEGY.SOURCE_NAME_INVALID
 STRATEGY.YAML_SYNTAX                 STRATEGY.YAML_MULTIPLE_DOCUMENTS
 STRATEGY.YAML_EMPTY_DOCUMENT         STRATEGY.YAML_FORBIDDEN_TAG
 STRATEGY.YAML_DUPLICATE_KEY          STRATEGY.YAML_MERGE_KEY_FORBIDDEN
@@ -790,6 +1353,8 @@ STRATEGY.YAML_DEPTH_EXCEEDED         STRATEGY.YAML_EVENT_BUDGET_EXCEEDED
 STRATEGY.YAML_ANCHOR_BUDGET_EXCEEDED STRATEGY.YAML_ALIAS_BUDGET_EXCEEDED
 STRATEGY.YAML_EXPANSION_EXCEEDED     STRATEGY.YAML_RECURSIVE_ALIAS
 STRATEGY.YAML_NONCANONICAL_SCALAR    STRATEGY.YAML_ANCHOR_REDEFINED
+STRATEGY.YAML_MAPPING_KEY_INVALID    STRATEGY.YAML_INTEGER_OUT_OF_RANGE
+STRATEGY.YAML_DIRECTIVE_FORBIDDEN
 STRATEGY.SCHEMA_INVALID              STRATEGY.UNKNOWN_FIELD
 STRATEGY.EXPRESSION_UNKNOWN_OP       STRATEGY.EXPRESSION_TYPE_MISMATCH
 STRATEGY.EXPRESSION_ARITY            STRATEGY.EXPRESSION_DEPTH_EXCEEDED
@@ -819,19 +1384,20 @@ COMPARISON.SCHEMA_VERSION_MISMATCH   COMPARISON.METHODOLOGY_MISMATCH
 | Path | Responsibility |
 |---|---|
 | `src/crypto_lab/domain/results.py` | `Result[T]` discriminated success-or-diagnostics value, `Success`, `Failure`, helpers |
-| `src/crypto_lab/domain/capability_names.py` | `CapabilityName`, `VocabularyVersion` relocated from `adapters/descriptors.py` |
-| `src/crypto_lab/domain/descriptors.py` | `EngineDescriptor`, `AdapterDescriptor`, `SupportedSchemaVersion`, `OperatingSystem` relocated from `adapters/descriptors.py`; new `RuntimeAvailabilityObservation` |
-| `src/crypto_lab/domain/comparison_levels.py` | `ComparisonLevel`, kept in `domain` so Stage 6's `EngineRunRequest` never needs an `adapters -> capabilities` edge |
+| `src/crypto_lab/domain/capability_names.py` | `CapabilityName`, `VocabularyVersion` relocated from `adapters/descriptors.py`. **Task 2**, because `StrategySpec` needs them |
+| `src/crypto_lab/domain/capability_requirements.py` | `CapabilityRequirement` and `ApproximationPolicy`, per section 5.7 item 6. **Task 2**, because `StrategySpec.required_capabilities` needs them; `capabilities/models.py` re-exports |
+| `src/crypto_lab/domain/descriptors.py` | `EngineDescriptor`, `AdapterDescriptor`, `SupportedSchemaVersion`, `OperatingSystem` relocated from `adapters/descriptors.py`, plus a locally defined `BoundedText` and the two `json_schema_extra` hooks per Appendix E; new `RuntimeAvailabilityObservation` |
+| `src/crypto_lab/domain/comparison_levels.py` | `ComparisonLevel`, kept in `domain` so Stage 6's `EngineRunRequest` never needs an `adapters -> capabilities` edge. **Task 2**, because `StrategySpec.comparison_requirements` needs it |
 | `src/crypto_lab/strategy/yaml_source.py` | Safe YAML loading and the single-pass bounded event-to-value builder of sections 5.2 and 5.3; no node graph is ever composed |
-| `src/crypto_lab/strategy/expressions.py` | Closed discriminated expression AST |
+| `src/crypto_lab/strategy/expressions.py` | Closed discriminated expression AST. **Task 2**, because `StrategySpec.entry_rules` and `exit_rules` need it; Task 3 consumes it and must not change a node's field shape |
 | `src/crypto_lab/strategy/models.py` | `StrategySpec` and every sub-model |
 | `src/crypto_lab/strategy/feature_graph.py` | DAG validation, cycle diagnostics, stable topological order |
 | `src/crypto_lab/strategy/validation.py` | Static expression type checking and reference validation |
 | `src/crypto_lab/strategy/evaluation.py` | Deterministic Level 1 reference evaluator |
-| `src/crypto_lab/strategy/versioning.py` | `StrategyVersion`, provenance, extension declarations, hashing |
+| `src/crypto_lab/strategy/versioning.py` | `StrategyVersion`, `StrategySourceProvenance`, and strategy hashing. `EngineExtensionDeclaration` lives in `strategy/models.py`, because `StrategySpec.engine_extensions` needs it in Task 2 |
 | `src/crypto_lab/strategy/loader.py` | `StrategyLoader` facade returning `Result[StrategyVersion]` |
 | `src/crypto_lab/capabilities/vocabulary.py` | `capabilities/v1` closed vocabulary |
-| `src/crypto_lab/capabilities/models.py` | Requirement, declaration, approximation, availability, result models |
+| `src/crypto_lab/capabilities/models.py` | `CapabilityDeclaration`, `ApproximationDeclaration`, `CompatibilityResult`, and an explicit `__all__` re-exporting `CapabilityRequirement` and `ApproximationPolicy` from `domain`. The `__all__` is mandatory, not cosmetic: mypy `--strict` implies `--no-implicit-reexport`, so Appendix F's `from crypto_lab.capabilities.models import CapabilityRequirement` fails `mypy-all` without it, exactly as Appendix E requires for `adapters/descriptors.py`. `RuntimeAvailabilityObservation` lives in `domain/descriptors.py` |
 | `src/crypto_lab/capabilities/policy.py` | `CompatibilityPolicy` and core safety policy |
 | `src/crypto_lab/capabilities/resolver.py` | Pure deterministic compatibility resolver |
 | `src/crypto_lab/capabilities/comparison.py` | Comparison levels, eligibility contracts, difference classification |
@@ -844,6 +1410,20 @@ COMPARISON.SCHEMA_VERSION_MISMATCH   COMPARISON.METHODOLOGY_MISMATCH
 | `src/crypto_lab/domain/identifiers.py` | Add `ApproximationId` (`appx_`) and `AvailabilityObservationId` (`avail_`) |
 | `src/crypto_lab/adapters/descriptors.py` | Delete the relocated definitions; import every relocated name from `crypto_lab.domain` and re-export it, so the module's public surface and all existing import sites are unchanged |
 | `src/crypto_lab/schema_registry.py` | Add nine `SchemaDefinition` entries |
+| `src/crypto_lab/domain/__init__.py` | Re-export the new domain names, in the task that defines each |
+
+`src/crypto_lab/domain/__init__.py` is **not** an empty namespace marker: it
+imports from all nine existing domain modules and declares an explicit
+41-name `__all__`. Every domain module is re-exported through it, so the five
+new ones follow the same convention or the package surface becomes
+inconsistent. Add, each in the task that defines it: `Result`, `Success`,
+`Failure` (Task 2); `CapabilityName`, `VocabularyVersion`,
+`CapabilityRequirement`, `ApproximationPolicy`, `ComparisonLevel` (Task 2); and
+`EngineDescriptor`, `AdapterDescriptor`, `SupportedSchemaVersion`,
+`OperatingSystem`, `RuntimeAvailabilityObservation`, `BoundedText` (Task 6).
+Keep `__all__` sorted, as it is today. `domain/__init__.py` is already in
+`_ALLOWED_SOURCE_FILES`, so this changes no count. Tasks 2 and 6 therefore add
+it to their Files lists.
 
 ### 6.3 New schema files
 
@@ -859,6 +1439,15 @@ COMPARISON.SCHEMA_VERSION_MISMATCH   COMPARISON.METHODOLOGY_MISMATCH
 | `schemas/capabilities/runtime-availability-observation-v1.schema.json` | `urn:crypto-lab:schema:capabilities:runtime-availability-observation:1.0.0` |
 | `schemas/capabilities/comparison-eligibility-result-v1.schema.json` | `urn:crypto-lab:schema:capabilities:comparison-eligibility-result:1.0.0` |
 
+`RuntimeAvailabilityObservation` sits under `schemas/capabilities/` even though
+its model lives in `crypto_lab/domain/descriptors.py` beside
+`AdapterDescriptor`, whose schema is under `schemas/protocol/`. That is
+deliberate: the schema directory reflects the **owning stage's permission**,
+and Stage 4 holds the capability-schema permission while `schemas/protocol/` is
+frozen Stage 3 output that Stage 4 must leave byte-identical. Stage 6 must not
+relocate it, because moving a generated file would break the byte-identity
+proof of section 10.
+
 `RuntimeAvailabilityObservation` is included deliberately. Specification
 section 11.3 lists it as a required record and section 33.2 requires every
 section 11 record to have a generated versioned JSON Schema. Stage 4 defines
@@ -871,9 +1460,9 @@ Nine schemas are added in total.
 
 | Path | Coverage |
 |---|---|
-| `tests/unit/strategy/test_strategy_yaml_source.py` | Loader contract, tags, duplicate keys, merge keys, documents, encoding |
-| `tests/unit/strategy/test_strategy_yaml_bounds.py` | Every bound in section 5.3, including alias expansion |
-| `tests/unit/strategy/test_strategy_expressions.py` | Every AST node, arity, discriminator closure |
+| `tests/unit/strategy/test_strategy_yaml_source.py` | Loader contract, the section 5.2.1 event classifier including the `event.tag is None` premise, the section 5.2.2 mapping-key contract, the section 5.2.3 `SourceName` pattern, tags, duplicate keys, merge keys, documents, encoding |
+| `tests/unit/strategy/test_strategy_yaml_bounds.py` | Every builder bound in section 5.3, including alias expansion, and excluding `MAX_EXPRESSION_DEPTH`, which section 5.3 marks post-parse |
+| `tests/unit/strategy/test_strategy_expressions.py` | Every AST node, arity, discriminator closure, model-level `bars_ago` and depth bounds; owned by Task 2 |
 | `tests/unit/strategy/test_strategy_models.py` | `StrategySpec` fields, unknown-field rejection, policy limits |
 | `tests/unit/strategy/test_strategy_validation.py` | Static type checking and reference validation |
 | `tests/unit/strategy/test_strategy_feature_graph.py` | DAG validation, cycle diagnostics, topological order |
@@ -886,11 +1475,13 @@ Nine schemas are added in total.
 | `tests/unit/capabilities/test_capability_resolver.py` | All four outcomes, ordered complete reasons |
 | `tests/unit/capabilities/test_capability_comparison.py` | Levels, eligibility, difference classification |
 | `tests/unit/domain/test_domain_results.py` | `Result` discrimination |
-| `tests/unit/domain/test_domain_descriptors.py` | Relocated descriptors and `RuntimeAvailabilityObservation` |
+| `tests/unit/domain/test_domain_capability_contracts.py` | `CapabilityName`, `VocabularyVersion`, `CapabilityRequirement`, `ApproximationPolicy`, `ComparisonLevel` — the Task 2 domain contracts `StrategySpec` depends on |
+| `tests/unit/domain/test_domain_descriptors.py` | Relocated descriptors and `RuntimeAvailabilityObservation`; owned by Task 6 |
 | `tests/property/test_strategy_hashing.py` | Formatting independence, material sensitivity |
 | `tests/property/test_compatibility_resolution.py` | Order-independence, reason stability |
 | `tests/property/test_expression_evaluation.py` | Decimal and missing-value invariants |
-| `tests/safety/test_stage4_boundaries.py` | Forbidden YAML API names, import closure, no global mutation |
+| `tests/safety/test_stage4_boundaries.py` | Forbidden YAML API names by qualified, bare, and import-form matching; typing integrity; the guard's own negative and positive fixtures. **Must not import `yaml`** |
+| `tests/safety/test_stage4_yaml_runtime.py` | The absolute `yaml.SafeLoader.yaml_constructors` pin, the `StrictStrategySafeLoader.__dict__` and `__mro__` assertions, and the yaml-import-closure check. Imports `yaml` |
 | `tests/architecture/test_package_import_boundaries.py` | `strategy` and `capabilities` dependency direction |
 
 **Every test module basename must be globally unique.** `tests/` contains no
@@ -931,11 +1522,19 @@ invalid/unknown_operation.yaml            invalid/type_mismatch.yaml
 `sma_cross_long.commented.yaml` differ only in comments, whitespace, and
 mapping key order, and must produce an identical `content_hash`.
 
+The single-line classifier cases of section 5.2.1, the key-shape cases of
+section 5.2.2, and the `SourceName` cases of section 5.2.3 are authored as
+inline `bytes` literals in the test module, not as fixture files. Each is one
+or two lines, the expected error code is the whole assertion, and forty
+near-identical files would obscure rather than document the contract. Only
+multi-line adversarial documents — the nested alias bomb, deep nesting,
+recursive alias, feature cycle, and the valid golden inputs — are fixture files.
+
 ### 6.6 Modified test and documentation files
 
 | Path | Change |
 |---|---|
-| `tests/safety/test_stage3_boundaries.py` | `_ALLOWED_SOURCE_FILES`, `_ALLOWED_IMPORT_ROOTS`, `_DEFERRED_DEFINITIONS`, schema count `11` to `20` |
+| `tests/safety/test_stage3_boundaries.py` | **Tasks 2 through 8**, each applying only the subset matching the files and deferred names it creates: `_ALLOWED_SOURCE_FILES`, `_ALLOWED_IMPORT_ROOTS`, `_DEFERRED_DEFINITIONS`, schema count `11` to `20`. Task 9: the Stage 4 completion status guard only |
 | `tests/safety/test_project_dependencies.py` | `_EXPECTED_RUNTIME_REQUIREMENTS`, `_EXPECTED_DEVELOPMENT_NAMES`, pinned mypy table keys |
 | `tests/unit/test_schema_registry.py` | Closed 11-entry `_EXPECTED` path-to-`$id` map, `len(SCHEMA_DEFINITIONS) == 11`, and the test name (Appendix I) |
 | `tests/unit/test_package_layout.py` | Closed `PACKAGE_MODULES` list, which drives the fresh-import probe |
@@ -943,11 +1542,16 @@ mapping key order, and must produce an identical `content_hash`.
 | `uv.lock` | Regenerated by the launcher; never hand-edited |
 | `docs/development/verification.md` | Stage 4 focused checks and schema count |
 | `README.md` | Status line and strategy-loading summary |
-| `docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md` | Stage 4 implementation status at completion |
+| `docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md` | **Task 9 only.** Stage 4 implementation complete at the Task 8 commit, Task 9 status finalization distinguished from the implementation hash, Stage 5 still not started |
 
-Stage 4 must not modify `scripts/invoke-uv.ps1`, `scripts/verify.ps1`,
-`scripts/generate_schemas.py`, `scripts/verify_schema_distribution.py`, or
-`tests/safety/test_uv_launcher.py`.
+Stage 4 implementation must not modify the corrected launcher
+`scripts/invoke-uv.ps1` at `350fac49ff5b1db4ec62b60c7ade76580f9894dd`, nor
+`scripts/verify.ps1`, `scripts/generate_schemas.py`,
+`scripts/verify_schema_distribution.py`, or
+`tests/safety/test_uv_launcher.py`. This prohibition is anchored to the
+corrected launcher, not to the pre-correction behaviour that section 3.8
+replaced: the bootstrap deadlock was repaired before Stage 4 began, and Stage 4
+neither needs nor is permitted to touch it again.
 
 ## 7. TDD policy
 
@@ -979,6 +1583,16 @@ without the override. Stage 4 must not lower `--cov-fail-under`, and the
 merged-main branch coverage must not fall below the Stage 3 baseline of
 93.64 percent by more than one percentage point; a larger drop requires added
 tests, not a lowered gate.
+
+**The gate applies at every task boundary, not only at the end of the stage.**
+`--cov-fail-under=90` and `--cov-branch` live in
+`[tool.pytest.ini_options].addopts`, so the `pytest-all` profile enforces them
+repository-wide, and every task from Task 2 onward runs `pytest-all` and must
+end clean. Each task therefore carries enough tests to cover the code it lands
+in the same commit. A task that adds a large module — the evaluator, the
+resolver, the bounded event scanner — cannot defer its coverage to a later
+task, and must not reach for the `-o addopts=` override outside a focused
+diagnostic run.
 
 Fixtures are data, not behaviour. A golden fixture is written **after** the
 evaluator produces a value that has been reviewed by hand against
@@ -1035,8 +1649,11 @@ test change.
 
 ## 9. Task decomposition
 
-Eight separately reviewable tasks. No task may be merged into another, and each
-ends in a clean committed worktree.
+Nine separately reviewable tasks. No task may be merged into another, and each
+ends in a clean committed worktree. Task 8 owns the complete implementation
+acceptance and the implementation commit; Task 9 owns only the Stage 4
+completion status and its executable guard, because a task cannot write its own
+commit hash into the roadmap.
 
 **Closed-world guard rule.** `tests/safety/test_stage3_boundaries.py` is in the
 Files list of **every** task from Task 2 onward, and each task applies only the
@@ -1047,52 +1664,260 @@ without extending `_ALLOWED_SOURCE_FILES` fails, and a task that adds the whole
 Appendix C list up front also fails, because the allowlist would then name
 files that do not yet exist. `_DEFERRED_DEFINITIONS` removals follow the same
 rule — remove a name in the task that defines it, never earlier.
-`_ALLOWED_IMPORT_ROOTS` is membership-only, so its three additions may be made
+`_ALLOWED_IMPORT_ROOTS` is membership-only, so its four additions may be made
 once in Task 2.
+
+### 9.0 Implementation preflight
+
+Run this preflight once, before Task 1. Every step must pass. Stop and report
+on the first failure; do not begin Task 1 with a failing baseline.
+
+1. **Verify clean local `main`, and prove the prerequisites by ancestry.**
+   From the main checkout:
+
+```powershell
+git -C "C:\Users\59557\Documents\Projects\Crypto_Trading" status --short
+git -C "C:\Users\59557\Documents\Projects\Crypto_Trading" branch --show-current
+git -C "C:\Users\59557\Documents\Projects\Crypto_Trading" merge-base `
+  --is-ancestor 350fac49ff5b1db4ec62b60c7ade76580f9894dd HEAD
+```
+
+   Status must be empty and the branch must be `main`.
+   `merge-base --is-ancestor` prints nothing on success **or** failure and
+   PowerShell does not surface a native non-zero exit, so read `$LASTEXITCODE`
+   explicitly — otherwise both outcomes look identical:
+
+```powershell
+if ($LASTEXITCODE -ne 0) { throw "launcher bootstrap prerequisite is absent" }
+```
+
+   Comparing `git rev-parse HEAD` to a hash proves nothing about containment,
+   which is why the ancestry test is the gate: it is the only check that
+   actually establishes the launcher bootstrap correction is present. Repeat
+   both the `merge-base --is-ancestor` call and the `$LASTEXITCODE` check for
+   the **corrected-plan approval commit**, which the separate
+   roadmap-and-guard commit recorded in the Stage 4 row of roadmap section 9
+   together with the executable plan-approval guard. That row also still names
+   the earlier pre-correction review commit `bf5e427a8fe0…`; the approval
+   commit is the one the row labels "corrected detailed plan approved at", and
+   the plan-approval guard pins it by name, so read the hash from the guard
+   constant rather than by eye. If either check is non-zero, stop: Stage 4 has
+   no approved base, and preflight step 5 would reproduce the fresh-worktree
+   deadlock.
+
+2. **Create the external branch and worktree.** Stage 4 is implemented outside
+   the main checkout:
+
+```powershell
+git -C "C:\Users\59557\Documents\Projects\Crypto_Trading" worktree add `
+  -b project-1-stage-4-implementation `
+  "C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-4-implementation" `
+  main
+```
+
+3. **Verify `HEAD`, `main`, and the merge base.** From the new worktree, these
+   three must be the same commit:
+
+```powershell
+git rev-parse HEAD
+git rev-parse main
+git merge-base HEAD main
+```
+
+   `git status --short` must be empty.
+
+4. **Initialize the ignored SDD ledger** at
+   `.superpowers/sdd/<date>-project-1-stage-4-implementation/`, following the
+   Stage 3 precedent. `.gitignore` already ignores `/.superpowers/sdd/`, so the
+   ledger never enters a commit. It records each task's expected RED, measured
+   GREEN, verification logs, review findings, and their resolutions.
+
+5. **Create the worktree environment with the launcher `sync` profile, before
+   any Python-bearing profile.** A new worktree has no `.venv`, and `sync` is
+   the operation that creates it:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\scripts\invoke-uv.ps1 sync
+```
+
+   This is the corrected bootstrap profile of section 3.8. It runs offline. No
+   direct `uv` command is authorized, and no Python-bearing profile —
+   including `pytest-focused`, `mypy-all`, `ruff-check-all`, and `build` — can
+   run before it succeeds.
+
+6. **Run the complete inherited verifier** and require a first-attempt pass:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
+```
+
+7. **Begin Task 1 only after that baseline passes.** Record the baseline result
+   in the ledger. A failing baseline is a blocked stage, not a Task 1 RED.
+
+### 9.1 Cross-task ownership notes
+
+These are section-9 ownership rules, not preflight steps. Tasks 3 and 5 cite
+them as "the reason given in section 9". Task 7 does not: it resolves
+`ComparisonLevel` through section 5.7 item 6 instead.
 
 **Task 2 additionally owns `strategy/expressions.py`.** `StrategySpec` declares
 `entry_rules` and `exit_rules` as expression trees, so the model cannot be
 defined without the AST, and the source-file guard forbids Task 2 from creating
-a file Task 3 owns. Task 2 therefore defines the closed AST node models; Task 3
-owns `validation.py`, the static type and reference checking, and the exhaustive
-per-node tests.
+a file Task 3 owns. Task 2 therefore defines the closed AST node models **and
+owns their per-node tests** in
+`tests/unit/strategy/test_strategy_expressions.py`, because a task must carry
+the tests covering the code it lands in the same commit. Task 3 owns
+`validation.py`, the static type and reference checking, and
+`tests/unit/strategy/test_strategy_validation.py` only.
+
+**Task 2 also owns `EngineExtensionDeclaration`, in `strategy/models.py`, with
+exactly these seven fields** from specification section 12.6: `adapter_name`,
+`extension_id`, `version`, `content_hash`, `purpose`, `lifecycle_effect`, and
+`economic_effect`. The first three are the section 5.5 item 5 sort key for
+`extension_hashes`, so a naming divergence here propagates straight into a
+permanent `content_hash`; they are fixed at Task 2 and Task 5 may not rename
+them. `engine_extensions` is one of the twenty-one
+`StrategySpec` fields, and specification section 12.6 fixes its seven
+sub-fields, so the model cannot be defined without the declaration type — the
+same forward-dependency shape as the AST above. Task 5 must not own it: Task 5
+owns `strategy/versioning.py`, which the source-file guard forbids Task 2 from
+creating. Task 5 therefore **consumes** `EngineExtensionDeclaration` and
+produces only `StrategySourceProvenance`, `StrategyVersion`,
+`strategy_version_hash`, and `StrategyLoader`. Section 5.5 item 5 hashes the
+declared extension `content_hash` values, which are fields of the Task 2 type.
 
 ### Task 1 — YAML dependency, lock gates, and security tests
 
 **Files:** `pyproject.toml`, `uv.lock`, `tests/safety/test_project_dependencies.py`,
-`tests/safety/test_stage4_boundaries.py` (new).
+`tests/safety/test_stage4_boundaries.py` (new, must not import `yaml`),
+`tests/safety/test_stage4_yaml_runtime.py` (new, imports `yaml`).
 
 **Consumes:** the Stage 3 launcher profiles and dependency guards.
 **Produces:** an installed, locked, typed `yaml` import root and the Stage 4
 source-level security guard.
 
+**RED classification.** A test file this task itself creates is never "missing"
+in a meaningful sense, and collection failure is not behavioural RED. Task 1's
+tests fall into two classes, and the ledger must record them separately.
+
+*Meaningful RED — three assertions that fail against real repository state and
+go green only when this task changes that state, in this order:*
+
+1. **Dependency-policy assertion fails before the `pyproject.toml` change.**
+   With `_EXPECTED_RUNTIME_REQUIREMENTS` and `_EXPECTED_DEVELOPMENT_NAMES`
+   updated to include `pyyaml>=6.0.3,<7` and `types-pyyaml`,
+   `test_project_runtime_dependencies_are_exact` and
+   `test_required_development_tools_are_declared` fail against the unmodified
+   `pyproject.toml`. Record the exact `AssertionError` comparing the current
+   one-element runtime tuple and the current seven-name development set.
+2. **Lock assertion fails before lock regeneration.** The new lock test — that
+   `uv.lock` contains a `types-pyyaml` package, and that the locked `pyyaml`
+   package has a `wheels` entry matching `cp312` and `win_amd64` — fails
+   against the unmodified `uv.lock`. Record the failure before running the
+   section 8 flow.
+3. **`yaml` import availability fails before synchronization.** The absolute
+   `SafeLoader` constructor-tag assertion of step 2 below requires
+   `import yaml`, which raises `ModuleNotFoundError` until the launcher `sync`
+   profile installs PyYAML. Record that as the third RED, and record its GREEN
+   only after an offline `sync` succeeds.
+
+*Preventive safety tests — expected to begin GREEN, and explicitly not
+fabricated behavioural RED:* the AST forbidden-name guard of step 1, the
+typing-integrity guard of step 3, and the mypy-configuration-key guard of step
+4. Stage 4 has written no `yaml` usage yet, so these pass the moment they
+exist. They are guardrails against a future regression, and the ledger records
+them as such. Do not manufacture a temporary violating file to force them red.
+
 **Test-first sequence**
 
-1. Add to `tests/safety/test_stage4_boundaries.py` an AST test asserting that
-   no file under `src/crypto_lab` references any of these **names**, whether as
-   a call, an attribute, or an assignment target:
-   `yaml.load`, `yaml.full_load`, `yaml.unsafe_load`, `yaml.safe_load`,
-   `yaml.compose`, `yaml.compose_all`, `Loader`, `FullLoader`, `UnsafeLoader`,
-   `CLoader`, `CFullLoader`, `CUnsafeLoader`, `CSafeLoader`, `CBaseLoader`,
-   `CParser`, `cyaml`, `_yaml`, `YAMLObject`, `add_constructor`,
-   `add_multi_constructor`, `add_implicit_resolver`, `yaml_constructors`,
-   `yaml_multi_constructors`, `yaml_implicit_resolvers`.
-   The three attribute names matter independently of the `add_*` methods,
-   because `StrictStrategySafeLoader.yaml_constructors[t] = f` mutates the
-   inherited `yaml.SafeLoader` dict. Matching is on exact `ast.Name.id`,
-   `ast.Attribute.attr`, and assignment targets — never on substrings, and
-   never on `ast.keyword.arg`, so the required
-   `Loader=StrictStrategySafeLoader` keyword does not self-collide with the
-   banned bare name `Loader`.
-   **Expected RED:** the test file does not exist, so collection fails.
+1. Add to `tests/safety/test_stage4_boundaries.py` an AST test over every file
+   under `src/crypto_lab`, using **two distinct matching modes**. Mixing them
+   is what makes the guard real:
+
+   **Qualified matching**, for names that are dangerous only as members of the
+   `yaml` module: `load`, `full_load`, `unsafe_load`, `safe_load`, `compose`,
+   `compose_all`. Match an `ast.Attribute` whose `.attr` is one of those **and**
+   whose `.value` resolves to the module's binding for `yaml`, reusing the
+   `_import_aliases(tree)` helper that `tests/safety/test_stage3_boundaries.py`
+   already provides. Bare-name matching is wrong for these two ways round: a
+   dotted string such as `"yaml.safe_load"` can never equal an
+   `ast.Attribute.attr`, which is `safe_load`, so a literal reading makes the
+   guard **vacuous for exactly the six most dangerous names**; and reducing
+   them to bare attrs would trip on the plan's own `StrategyLoader.load`
+   (section 6.1) and neighbours `tomllib.loads` in
+   `crypto_lab/configuration/loader.py`.
+
+   **Import-form matching**, which closes the hole that qualified matching
+   alone leaves. `from yaml import safe_load` followed by a bare `safe_load(x)`
+   produces no `ast.Attribute` at the call site, so qualified matching cannot
+   see it, and the six names are deliberately absent from bare matching. The
+   existing import-root test is no backstop: it takes
+   `module.partition(".")[0]` and only checks the root, which Appendix C makes
+   `yaml` allowed. Therefore also match any `ast.ImportFrom` whose module is
+   `yaml` or begins `yaml.` and whose imported names include **any** name from
+   either list, and add a fourth negative fixture using that form. Of the six
+   qualified names, `full_load`, `unsafe_load`, `safe_load`, `compose`, and
+   `compose_all` are additionally added to bare matching — none collides with
+   anything in `src/crypto_lab`. Only `load` stays qualified-only, because
+   `StrategyLoader.load` is a legitimate Stage 4 method.
+
+   **Bare-name matching**, for names that cannot collide with legitimate code,
+   against `ast.Name.id`, `ast.Attribute.attr`, and assignment targets:
+   `full_load`, `unsafe_load`, `safe_load`, `compose`, `compose_all`,
+   `Loader`, `FullLoader`, `UnsafeLoader`, `CLoader`, `CFullLoader`,
+   `CUnsafeLoader`, `CSafeLoader`, `CBaseLoader`, `CParser`, `cyaml`, `_yaml`,
+   `YAMLObject`, `add_constructor`, `add_multi_constructor`,
+   `add_implicit_resolver`, `yaml_constructors`, `yaml_multi_constructors`,
+   `yaml_implicit_resolvers`, plus the redaction attributes of section 5.2
+   item 14: `get_snippet`, `buffer`, `problem`, `context`, `note`.
+   The three `yaml_*` attribute names matter independently of the `add_*`
+   methods, because `StrictStrategySafeLoader.yaml_constructors[t] = f` mutates
+   the inherited `yaml.SafeLoader` dict. Never match substrings, and never
+   match `ast.keyword.arg`, so the required `Loader=StrictStrategySafeLoader`
+   keyword does not self-collide with the banned bare name `Loader`.
+
+   **The guard is itself tested.** A vacuous guard is indistinguishable from a
+   passing one, so add negative fixtures parsed from in-test source strings —
+   `yaml.safe_load(x)`; `import yaml as y` then `y.compose(x)`; `Loader = 1`;
+   and `from yaml import safe_load` then `safe_load(x)` — asserting each is
+   detected, plus a positive fixture asserting `obj.load()` and
+   `tomllib.loads(x)` are **not** flagged.
+
+   `_import_aliases` is reused from `tests/safety/test_stage3_boundaries.py`.
+   `tests/` has no `__init__.py`, so that is a cross-module import resolved
+   through pytest's default `prepend` `sys.path` insertion; both modules live
+   in `tests/safety/`, so the import is `from test_stage3_boundaries import
+   _import_aliases`. If that coupling is judged undesirable at implementation
+   time, copy the helper rather than weakening the matching.
+   **Preventive safety test; begins GREEN** against `src/crypto_lab`, while its
+   own negative fixtures exercise it immediately.
 2. Add the **absolute** part of the global-state test that does not depend on
    Stage 4 code: assert
-   `frozenset(yaml.SafeLoader.yaml_constructors) == _EXPECTED_SAFELOADER_TAGS`
-   against a tag set pinned literally in the test file. This holds at import
-   time and catches a third-party `yaml.YAMLObject` registration. A
-   before/after-load comparison is structurally incapable of detecting
-   class-body or import-time mutation, which is why the assertion is absolute.
-   **Expected RED:** module missing.
+   `frozenset(yaml.SafeLoader.yaml_constructors) == _EXPECTED_SAFELOADER_TAGS`.
+   This holds at import time and catches a third-party `yaml.YAMLObject`
+   registration. A before/after-load comparison is structurally incapable of
+   detecting class-body or import-time mutation, which is why the assertion is
+   absolute.
+
+   `_EXPECTED_SAFELOADER_TAGS` is **thirteen** entries: the twelve
+   `tag:yaml.org,2002:` tags `null`, `bool`, `int`, `float`, `binary`,
+   `timestamp`, `omap`, `pairs`, `set`, `str`, `seq`, `map`, **plus the `None`
+   key** that `SafeConstructor.add_constructor(None,
+   SafeConstructor.construct_undefined)` registers. Omitting the `None` key is
+   the likely first-attempt error, and the resulting failure looks like a
+   supply-chain alarm rather than a test bug.
+
+   **This assertion lives in its own module**, `tests/safety/test_stage4_yaml_runtime.py`,
+   with a module-level `import yaml`. Steps 1 and 3 stay in
+   `tests/safety/test_stage4_boundaries.py`, which must **not** import `yaml`.
+   Otherwise a module-level `import yaml` would make the whole file
+   uncollectable until synchronization, so the preventive tests declared to
+   begin green could not run at all — contradicting this task's own RED
+   classification.
+
+   **Meaningful RED 3:** `ModuleNotFoundError: No module named 'yaml'` until
+   the launcher `sync` profile installs PyYAML.
    The two assertions that name `StrictStrategySafeLoader` — that
    `"yaml_constructors" not in StrictStrategySafeLoader.__dict__` and that
    `yaml.SafeLoader in StrictStrategySafeLoader.__mro__` — and the
@@ -1105,27 +1930,36 @@ source-level security guard.
    or a bare `type: ignore` on an `import` line. Under offline pressure this is
    the shortest route to a green mypy with an untyped trust boundary, and
    `warn_unused_ignores` will not flag it while the stubs are genuinely absent.
+   **Preventive safety test; begins GREEN.**
 4. Extend `test_mypy_untyped_import_override_is_exact` to assert
    `set(mypy) == {"python_version", "strict", "files", "overrides"}`. The
    existing assertion pins only `overrides`, so a top-level
    `ignore_missing_imports = true` or `disable_error_code = [...]` would relax
    typing repository-wide while leaving the test green.
-5. Add a test asserting `_EXPECTED_RUNTIME_REQUIREMENTS == ("pydantic>=2.12,<3",
-   "pyyaml>=6.0.3,<7")` and that `_EXPECTED_DEVELOPMENT_NAMES` contains
-   `types-pyyaml`. **Expected RED:**
-   `AssertionError` comparing the current one-element tuple.
+   **Preventive safety test; begins GREEN** against the current
+   `pyproject.toml`.
+5. Update `_EXPECTED_RUNTIME_REQUIREMENTS` to `("pydantic>=2.12,<3",
+   "pyyaml>=6.0.3,<7")` and add `types-pyyaml` to
+   `_EXPECTED_DEVELOPMENT_NAMES`. **Meaningful RED 1:** `AssertionError`
+   comparing the current one-element runtime tuple and the current seven-name
+   development set, before `pyproject.toml` changes.
 6. Add a lock test asserting that `uv.lock` contains a `types-pyyaml` package —
    so a silent stub-less install is caught — and that the locked `pyyaml`
    package has a `wheels` entry matching `cp312` and `win_amd64`. The existing
    `test_lock_registry_artifacts_are_sha256_pinned` does not distinguish sdist
    from wheel, and `no-build-isolation = true` means an sdist path would run
    PyYAML's `setup.py` against the project environment.
+   **Meaningful RED 2:** the assertions fail against the unmodified `uv.lock`,
+   before lock regeneration.
 7. Update `pyproject.toml` to add `"pyyaml>=6.0.3,<7"` to
    `[project].dependencies` and `"types-pyyaml>=6.0.12,<7"` to
    `[dependency-groups].dev`.
-8. Run the section 8 dependency flow.
-9. Update `_EXPECTED_RUNTIME_REQUIREMENTS` and `_EXPECTED_DEVELOPMENT_NAMES`
-   to the new exact values.
+8. Run the section 8 dependency flow. This closes meaningful RED 1 at the
+   `pyproject.toml` edit, meaningful RED 2 at lock regeneration, and meaningful
+   RED 3 at offline synchronization, in that order.
+9. Record each of the three REDs and its matching GREEN in the ledger, with the
+   exact message, and record the three preventive safety tests separately as
+   having begun green.
 
 **Minimum GREEN:** every guard test above passes and the environment
 synchronizes offline.
@@ -1151,17 +1985,27 @@ prohibited dependency family entered.
 ### Task 2 — Safe YAML loader and strict strategy models
 
 **Files:** `src/crypto_lab/domain/results.py`,
+`src/crypto_lab/domain/__init__.py` (re-exports only),
 `src/crypto_lab/domain/hashing.py` (adds `DIAGNOSTIC_IDENTITY_V1` and
-`_uuid4_shaped` only), `src/crypto_lab/strategy/yaml_source.py`,
+`_uuid4_shaped` only), `src/crypto_lab/domain/capability_names.py`,
+`src/crypto_lab/domain/capability_requirements.py`,
+`src/crypto_lab/domain/comparison_levels.py`,
+`src/crypto_lab/strategy/yaml_source.py`,
 `src/crypto_lab/strategy/expressions.py`,
 `src/crypto_lab/strategy/models.py`,
 `tests/unit/domain/test_domain_results.py`,
-`tests/unit/domain/test_domain_descriptors.py`,
+`tests/unit/domain/test_domain_capability_contracts.py`,
 `tests/unit/strategy/test_strategy_yaml_source.py`,
 `tests/unit/strategy/test_strategy_yaml_bounds.py`,
+`tests/unit/strategy/test_strategy_expressions.py`,
 `tests/unit/strategy/test_strategy_models.py`,
 `tests/fixtures/strategy/**`, `tests/safety/test_stage3_boundaries.py`,
+`tests/safety/test_stage4_yaml_runtime.py`,
 `tests/unit/test_package_layout.py`.
+
+Task 1 creates `tests/safety/test_stage4_yaml_runtime.py`; Task 2 extends it
+with the two `StrictStrategySafeLoader` assertions and the yaml-import-closure
+test of step 9, which is why both tasks list it.
 
 Task 2 owns `DIAGNOSTIC_IDENTITY_V1` and the `_uuid4_shaped` helper in
 `crypto_lab/domain/hashing.py`, because Task 2 is the first task that emits a
@@ -1170,8 +2014,12 @@ adds `STRATEGY_VERSION_V1` to the same enum.
 
 **Consumes:** `CanonicalModel`, `Diagnostic`, `canonical_json_bytes`,
 `sha256_bytes`, identifier and financial primitives.
-**Produces:** `Result`, `YamlDocument`, `load_yaml_document`, `StrategySpec`
-and every sub-model.
+**Produces:** `Result`, `Success`, `Failure`, `YamlDocument`,
+`load_yaml_document`, `SourceName`, the closed discriminated `Expression`
+union and its node models, `EngineExtensionDeclaration`, `Direction`,
+`StrategySpec` and every other sub-model, and the relocated domain contracts
+`CapabilityName`, `VocabularyVersion`, `CapabilityRequirement`,
+`ApproximationPolicy`, and `ComparisonLevel`.
 
 **`StrategySpec` fields** — exactly the twenty-one names in specification
 section 12.2: `schema_version`, `strategy_id`, `display_name`, `description`,
@@ -1188,6 +2036,37 @@ section 12.2: `schema_version`, `strategy_id`, `display_name`, `description`,
 states "This example communicates shape only." The YAML source token is
 therefore `1.0.0`, and section 5.5's hashed `strategy_schema_version` carries
 that literal. No source-token translation layer exists.
+
+**Closed AST, owned here** — exactly the nodes in specification section
+12.3.1, each a `CanonicalModel` with a `Literal` `op` discriminator:
+
+```text
+literal(value_type: BOOLEAN|INTEGER|DECIMAL|STRING|IDENTIFIER, value)
+ref(id, bars_ago >= 0)
+not(operand)            negate(operand)          is_missing(operand)
+add, subtract, multiply, divide, minimum, maximum   (left, right)
+equal, not_equal, less_than, less_than_or_equal,
+  greater_than, greater_than_or_equal               (left, right)
+and(operands: tuple, min_length=1)   or(operands: tuple, min_length=1)
+crosses_above(left, right)           crosses_below(left, right)
+```
+
+`expression_semantics_version = "expressions/v1"`. Arithmetic returns
+`DECIMAL`; comparison returns `BOOLEAN`; boolean operators accept booleans
+only. There is no implicit string-to-number, float-to-Decimal,
+asset-to-string, scalar-to-series, or timezone conversion. Expression nesting
+is bounded by `MAX_EXPRESSION_DEPTH = 24`, which section 5.3 records alongside
+the other ceilings. These definitions are hash material — `entry_rules` and
+`exit_rules` sit inside `strategy_spec` in the section 5.5 payload — so they
+are fixed here and no later task may change a node's field shape.
+
+**`market_type` reuses the existing enum.** `MarketType` already exists in
+`crypto_lab/domain/records.py` with `SPOT`, `MARGIN`, `FUTURES`, and
+`EQUITIES`. `StrategySpec.market_type` imports it; Stage 4 does **not** define
+a second `MarketType`. This must be stated because `MarketType` is not in
+`_DEFERRED_DEFINITIONS`, so a duplicate landing in `strategy/models.py` would
+pass every guard, and the enum is hash material. `Direction` genuinely does not
+exist yet and is new in `strategy/models.py`.
 
 **Enum casing decision.** `market_type` and `direction` are `StrEnum`s with
 uppercase values, matching every merged enum in the repository
@@ -1224,13 +2103,60 @@ literal specification list, so no field set is invented.
 3. One test per forbidden tag, using `invalid/python_tag.yaml` and
    `invalid/unknown_tag.yaml`.
 4. Duplicate keys, merge keys, two documents, empty document, BOM, non-UTF-8.
-5. One test per bound in section 5.3, including `invalid/billion_laughs.yaml`
+5. **All twenty-four classifier tests of section 5.2.1**, beginning with the
+   premise test that an implicit scalar event's `tag` is `None`. That test is
+   what stops the contract from silently reverting to reading `event.tag`.
+   Tests 19 to 24 — the non-specific `!` tag, the `=` value token, the integer
+   bounds, event-kind exhaustiveness, identifier survival, and directive
+   rejection — are not optional extras; each closes a defect an earlier draft
+   of this plan actually contained.
+6. **All eighteen mapping-key shapes of section 5.2.2**, one test each,
+   including the quoted merge key, the `=` key, the over-long key, and the
+   duplicate-ordering test.
+7. **The `SourceName` tests of section 5.2.3**, including the generated-schema
+   agreement test.
+8. One test per bound in section 5.3, including `invalid/billion_laughs.yaml`
    and `invalid/recursive_alias.yaml`.
-6. Global-state test: `yaml.SafeLoader.yaml_constructors` unchanged after
-   success and after every failure path.
-7. Fresh-state test: invalid then valid yields the same result as valid alone.
-8. `StrategySpec` accepts `sma_cross_long.valid.yaml` and rejects an unknown
-   field.
+9. Global-state test: `yaml.SafeLoader.yaml_constructors` unchanged after
+   success and after every failure path, plus the two Task 2 assertions
+   deferred from Task 1 — `"yaml_constructors" not in
+   StrictStrategySafeLoader.__dict__` and `yaml.SafeLoader in
+   StrictStrategySafeLoader.__mro__` — and the import-closure test asserting the
+   yaml-importing file set is exactly `{"strategy/yaml_source.py"}`.
+10. Fresh-state test: invalid then valid yields the same result as valid alone.
+11. **Closed AST tests**, in `tests/unit/strategy/test_strategy_expressions.py`,
+    which Task 2 owns because it owns `strategy/expressions.py`. An unknown
+    `op` is rejected by the discriminated union — **Expected RED:**
+    `ModuleNotFoundError: crypto_lab.strategy.expressions` — plus one
+    acceptance and one arity-rejection test per node kind, discriminator
+    closure, `bars_ago = -1` rejected at the model level, and a tree deeper
+    than `MAX_EXPRESSION_DEPTH` rejected.
+
+    **This step must precede step 14.** Taking `StrategySpec` green requires
+    the AST, because `entry_rules` and `exit_rules` are expression trees, so
+    `strategy/expressions.py` exists from that moment on and the
+    `ModuleNotFoundError` RED above can never be observed afterwards. The
+    numbering in this section is temporal, not a grouping.
+12. **`EngineExtensionDeclaration`** accepts its seven specification section
+    12.6 fields and rejects an unknown one. **Expected RED:**
+    `ModuleNotFoundError: crypto_lab.strategy.models`, which is an
+    `ImportError` — at this position `models.py` itself does not exist yet.
+    This too precedes step 14, for the same reason.
+13. **Domain contract tests** in
+    `tests/unit/domain/test_domain_capability_contracts.py` for
+    `CapabilityName`, `VocabularyVersion`, `CapabilityRequirement`,
+    `ApproximationPolicy`, and `ComparisonLevel`, and a test that
+    `crypto_lab.domain.__all__` contains every name this task re-exports.
+    **Expected RED:** `ModuleNotFoundError:
+    crypto_lab.domain.capability_names`. This also precedes step 14: taking
+    `StrategySpec` green requires all three domain modules, because
+    `required_capabilities`, `supported_approximation_policy`, and
+    `comparison_requirements` depend on them, so their RED is unobservable
+    afterwards.
+14. `StrategySpec` accepts `sma_cross_long.valid.yaml` and rejects an unknown
+    field. This is deliberately **last** in the sequence: it is the step that
+    forces every preceding type into existence, so every module-missing RED in
+    this task must be recorded before it.
 
 **Minimum GREEN:** each listed test passes with the smallest implementation.
 
@@ -1252,60 +2178,61 @@ implementation; confirm `yaml` is imported in exactly one module.
 
 **Commit:** `feat: add safe yaml loading and strategy models`
 
-### Task 3 — Closed expression AST and static validation
+### Task 3 — Static expression validation
 
-**Files:** `src/crypto_lab/strategy/expressions.py`,
-`src/crypto_lab/strategy/validation.py`,
-`tests/unit/strategy/test_strategy_expressions.py`,
-`tests/unit/strategy/test_strategy_validation.py`.
+**Files:** `src/crypto_lab/strategy/validation.py`,
+`tests/unit/strategy/test_strategy_validation.py`,
+`tests/safety/test_stage3_boundaries.py`,
+`tests/unit/test_package_layout.py`.
 
-**Produces:** the closed discriminated `Expression` union and the static
-checker.
+**Consumes:** the closed discriminated `Expression` union from
+`strategy/expressions.py`, which **Task 2** owns for the reason given in
+section 9. Task 3 does not create or modify that file. Changing a node's field
+shape here would silently move every `content_hash`, because `entry_rules` and
+`exit_rules` sit inside `strategy_spec` in the section 5.5 hash payload and
+Task 2 has already landed hand-reviewed golden fixtures against the Task 2
+shape.
 
-**Closed AST** — exactly the nodes in specification section 12.3.1, each a
-`CanonicalModel` with a `Literal` `op` discriminator:
+**Produces:** the static type and reference checker only. The per-node AST
+tests belong to Task 2, which defined the union.
 
-```text
-literal(value_type: BOOLEAN|INTEGER|DECIMAL|STRING|IDENTIFIER, value)
-ref(id, bars_ago >= 0)
-not(operand)            negate(operand)          is_missing(operand)
-add, subtract, multiply, divide, minimum, maximum   (left, right)
-equal, not_equal, less_than, less_than_or_equal,
-  greater_than, greater_than_or_equal               (left, right)
-and(operands: tuple, min_length=1)   or(operands: tuple, min_length=1)
-crosses_above(left, right)           crosses_below(left, right)
-```
-
-`expression_semantics_version = "expressions/v1"`. Arithmetic returns
-`DECIMAL`; comparison returns `BOOLEAN`; boolean operators accept booleans
-only. There is no implicit string-to-number, float-to-Decimal,
-asset-to-string, scalar-to-series, or timezone conversion. Expression nesting is
-bounded by `MAX_EXPRESSION_DEPTH = 24`.
+The closed AST itself — its node list, arity, `op` discriminator,
+`expression_semantics_version`, and `MAX_EXPRESSION_DEPTH` — is specified in
+Task 2, which owns `strategy/expressions.py`. Task 3 validates trees built from
+it and changes none of those definitions.
 
 **Test-first sequence**
 
-1. An unknown `op` is rejected. **Expected RED:** module missing.
-2. One acceptance and one arity-rejection test per node kind.
-3. Type-mismatch tests: boolean operand to `add`; decimal operand to `and`;
+1. A tree whose declared operand types do not satisfy its operator signature is
+   rejected. **Expected RED:** `ModuleNotFoundError:
+   crypto_lab.strategy.validation`. Note that "an unknown `op` is rejected" is
+   **not** a Task 3 RED: the discriminated union Task 2 defined already rejects
+   an unknown `op` at model construction, so that assertion is green before
+   Task 3 begins and belongs to Task 2's suite.
+2. Type-mismatch tests: boolean operand to `add`; decimal operand to `and`;
    string compared to integer.
-4. `bars_ago = -1` rejected with `STRATEGY.REFERENCE_NEGATIVE_OFFSET`.
-5. A reference to an undeclared parameter, bar field, or feature is rejected
-   with `STRATEGY.REFERENCE_UNKNOWN`.
-6. `invalid/future_reference.yaml` is rejected with
+3. A reference to an undeclared parameter, bar field, or feature is rejected
+   with `STRATEGY.REFERENCE_UNKNOWN`. Note that `bars_ago = -1` is **not** a
+   Task 3 case: Task 2's `ref(id, bars_ago >= 0)` rejects it at model
+   construction and emits `STRATEGY.REFERENCE_NEGATIVE_OFFSET` there, so Task 3
+   could not build such a tree to test.
+4. `invalid/future_reference.yaml` is rejected with
    `STRATEGY.REFERENCE_FUTURE_BAR`.
-7. Depth beyond `MAX_EXPRESSION_DEPTH` is rejected.
-8. Diagnostics from a rule with several errors are complete, deduplicated, and
+5. Depth beyond `MAX_EXPRESSION_DEPTH` is rejected by the checker, complementing
+   Task 2's model-level bound.
+6. Diagnostics from a rule with several errors are complete, deduplicated, and
    sorted by `(rule_id, node_path, error_code)`.
 
 **Focused verification:** `pytest-focused -o addopts= tests\unit\strategy -q`.
 **Broader:** `pytest-all`. **Also:** Ruff, strict mypy.
 
-**Security review:** confirm the union is closed, no operator name is resolved
-from a string at runtime, and no callable is stored in a model field.
+**Security review:** confirm no operator name is resolved from a string at
+runtime and no callable is stored in a model field. The union's closure is
+Task 2's security review.
 
 **Independent review gate:** required.
 
-**Commit:** `feat: add closed strategy expression ast`
+**Commit:** `feat: add strategy expression validation`
 
 ### Task 4 — Feature DAG and deterministic Level 1 evaluator
 
@@ -1314,7 +2241,9 @@ from a string at runtime, and no callable is stored in a model field.
 `tests/unit/strategy/test_strategy_feature_graph.py`,
 `tests/unit/strategy/test_strategy_evaluation.py`,
 `tests/property/test_expression_evaluation.py`,
-`tests/fixtures/strategy/golden/**`.
+`tests/fixtures/strategy/golden/**`,
+`tests/safety/test_stage3_boundaries.py`,
+`tests/unit/test_package_layout.py`.
 
 **Produces:** `validate_feature_graph`, `topological_order`,
 `evaluate_level_one`.
@@ -1373,10 +2302,15 @@ portfolio value.
 `src/crypto_lab/strategy/versioning.py`, `src/crypto_lab/strategy/loader.py`,
 `tests/unit/strategy/test_strategy_versioning.py`,
 `tests/unit/strategy/test_strategy_loader.py`,
-`tests/property/test_strategy_hashing.py`.
+`tests/property/test_strategy_hashing.py`,
+`tests/safety/test_stage3_boundaries.py`,
+`tests/unit/test_package_layout.py`.
 
-**Produces:** `EngineExtensionDeclaration`, `StrategySourceProvenance`,
-`StrategyVersion`, `strategy_version_hash`, `StrategyLoader`.
+**Consumes:** `EngineExtensionDeclaration` from `strategy/models.py`, which
+Task 2 owns for the reason given in section 9.
+
+**Produces:** `StrategySourceProvenance`, `StrategyVersion`,
+`strategy_version_hash`, `StrategyLoader`.
 
 `StrategyLoader.load(source: bytes, source_name: SourceName, observed_at_utc:
 datetime) -> Result[StrategyVersion]`. This matches specification section 8.2's
@@ -1384,10 +2318,9 @@ operation contract; `SourceName` is the constrained non-path label of section
 5.2, which narrows section 8.2's `str` without changing parameters, ownership,
 sync behaviour, or result semantics.
 
-`EngineExtensionDeclaration` carries `adapter_name`, `extension_id`,
-`version`, `content_hash`, `purpose`, `lifecycle_effect`, and
-`economic_effect`. The core stores declarations and hashes and never imports or
-executes extension code. An extension whose declared economic effect prevents
+`EngineExtensionDeclaration`, defined by Task 2, carries the seven fields fixed
+there. Task 5 consumes them unchanged. The core stores declarations and hashes
+and never imports or executes extension code. An extension whose declared economic effect prevents
 parity makes Level 1 or Level 2 comparison ineligible.
 
 **Test-first sequence**
@@ -1441,18 +2374,34 @@ identity, or ambient value enters the hashed payload.
 
 ### Task 6 — Capability vocabulary and deterministic compatibility resolver
 
-**Files:** `src/crypto_lab/domain/capability_names.py`,
-`src/crypto_lab/domain/descriptors.py`,
-`src/crypto_lab/domain/comparison_levels.py`,
+**Files:** `src/crypto_lab/domain/descriptors.py`,
+`src/crypto_lab/domain/__init__.py` (re-exports only),
 `src/crypto_lab/domain/identifiers.py`,
 `src/crypto_lab/adapters/descriptors.py`,
 `src/crypto_lab/capabilities/vocabulary.py`,
 `src/crypto_lab/capabilities/models.py`,
 `src/crypto_lab/capabilities/policy.py`,
 `src/crypto_lab/capabilities/resolver.py`,
-`tests/unit/capabilities/**`,
+`tests/unit/capabilities/test_capability_vocabulary.py`,
+`tests/unit/capabilities/test_capability_models.py`,
+`tests/unit/capabilities/test_capability_policy.py`,
+`tests/unit/capabilities/test_capability_resolver.py`,
+`tests/unit/domain/test_domain_descriptors.py`,
 `tests/property/test_compatibility_resolution.py`,
-`tests/architecture/test_package_import_boundaries.py`.
+`tests/architecture/test_package_import_boundaries.py`,
+`tests/safety/test_stage3_boundaries.py`,
+`tests/unit/test_package_layout.py`.
+
+The four capability test modules are named individually rather than as a glob,
+because `tests/unit/capabilities/test_capability_comparison.py` belongs to
+Task 7.
+
+`domain/capability_names.py`, `domain/capability_requirements.py`, and
+`domain/comparison_levels.py` are **Task 2** files, per section 5.7 item 6.
+Task 6 imports and re-exports from them and does not create them.
+`tests/unit/domain/test_domain_descriptors.py` is a Task 6 file because its
+whole subject — `domain/descriptors.py` and `RuntimeAvailabilityObservation` —
+is created here, four tasks after Task 2.
 
 **Vocabulary `capabilities/v1`** — exactly the 26 names in specification
 section 13.1 (4 market, 2 direction, 4 data, 6 execution, 3 portfolio,
@@ -1517,11 +2466,14 @@ the section 5.7 dependency-direction decision.
 ### Task 7 — Approximation records, comparison levels, and eligibility
 
 **Files:** `src/crypto_lab/capabilities/comparison.py`,
-`tests/unit/capabilities/test_capability_comparison.py`.
+`tests/unit/capabilities/test_capability_comparison.py`,
+`tests/safety/test_stage3_boundaries.py`,
+`tests/unit/test_package_layout.py`.
 
-**Consumes:** `ComparisonLevel` from `crypto_lab.domain.comparison_levels` and
-`ApproximationDeclaration` from `crypto_lab.capabilities.models`. Both are
-produced by Task 6, not by this task.
+**Consumes:** `ComparisonLevel` from `crypto_lab.domain.comparison_levels`,
+produced by **Task 2** per section 5.7 item 6, and `ApproximationDeclaration`
+from `crypto_lab.capabilities.models`, produced by **Task 6**. Task 7 produces
+neither and lists neither file.
 
 **Produces:** `ComparisonEligibilityOutcome` (`ELIGIBLE`, `INELIGIBLE`,
 `ELIGIBLE_WITH_DECLARED_DIFFERENCES`), `ComparisonEligibilityResult`,
@@ -1566,12 +2518,22 @@ strategy execution.
 
 **Commit:** `feat: add comparison levels and eligibility`
 
-### Task 8 — Generated schemas, documentation, acceptance, and status
+### Task 8 — Generated schemas, distribution, documentation, and acceptance
 
 **Files:** `src/crypto_lab/schema_registry.py`, `schemas/strategy/**`,
 `schemas/capabilities/**`, `tests/safety/test_stage3_boundaries.py`,
 `tests/unit/test_schema_registry.py`, `docs/development/verification.md`,
-`README.md`, `docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md`.
+`README.md`.
+
+**Task 8 owns:** the nine generated schemas; schema distribution; verification
+documentation; `README.md`; the complete implementation acceptance of section
+11; and the Stage 4 implementation commit.
+
+**Task 8 must not write its own hash into the roadmap**, and does not modify
+`docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md` at all. A task
+cannot record the hash of the commit that contains it, and a placeholder
+corrected afterwards would leave the roadmap disagreeing with history. Task 9
+records Stage 4 completion against Task 8's committed hash.
 
 **Test-first sequence**
 
@@ -1593,24 +2555,118 @@ git diff --stat main..HEAD -- schemas/domain schemas/configuration `
 
    This must report **no changes**. Any change requires an independently
    approved architecture correction that owns it.
-6. Update `_ALLOWED_SOURCE_FILES`, `_ALLOWED_IMPORT_ROOTS`, and
-   `_DEFERRED_DEFINITIONS` per section 9.8.
+6. Confirm `_ALLOWED_SOURCE_FILES`, `_ALLOWED_IMPORT_ROOTS`, and
+   `_DEFERRED_DEFINITIONS` are already complete. Task 8 creates no source file,
+   defines none of the fourteen deferred names, and the four import roots were
+   added once in Task 2, so all three lists finished at Task 7. Task 8's only
+   legitimate edits to that module are the `11` to `20` schema count in step 1
+   and the README status-line assertion in step 7. If any of the three lists is
+   still incomplete here, an earlier task ended dirty — stop and repair that
+   task rather than patching it in Task 8.
 7. Update `docs/development/verification.md` with Stage 4 focused checks and
-   the 20-file registry, and `README.md` with the status line.
-8. Update the Stage 4 row of roadmap section 9 to record implementation
-   completion at the final Stage 4 commit.
+   the 20-file registry, and `README.md` with the status line and a
+   strategy-loading summary.
+
+   **README placement is constrained.**
+   `test_readme_uses_only_closed_stage3_launcher_setup` partitions on
+   `"## Local setup\n"` and `"\n## Explicit configuration and schemas"` and
+   then compares the trailing prose block with `==`. Any sentence or heading
+   inserted between those two markers fails it. New Stage 4 content therefore
+   goes **after** `## Explicit configuration and schemas`. Also update
+   README's "exactly those 11 schemas" sentence to 20 — it sits outside the
+   pinned block and is otherwise left false. The status line is the one
+   assertion Task 8 may update in the guard, per the section 3.9
+   status-authority rule. Its exact replacement text is
+   `**Status:** Project 1 Stages 1-4 complete`, and the guard assertion becomes
+   that string verbatim. Task 8 lands one commit before Task 9 records Stage 4
+   in the roadmap; that ordering is intended, because Task 8 *is* the
+   implementation commit and Task 9 only records its hash.
+
+   Three further assertions in that test are scoped to the **whole file**, not
+   the partitioned block: `"\nuv sync "`, `"\nuv run "`, and
+   `"Task 2 bootstrap"` must each remain absent. A correctly placed Stage 4
+   summary can still fail on the first two, so write launcher profiles, never
+   bare `uv sync` or `uv run`, anywhere in `README.md`.
+
+   Leave README's Stage 3 acquisition prose at lines 65 to 66 unchanged. It
+   names the Stage 3 Task 1 `sync-acquire` profile and becomes stale once Stage
+   4 Task 1 exercises the section 8 flow, but it is pinned verbatim by the
+   partitioned-block comparison and no Stage 4 task is authorised to correct
+   it. Record the staleness in the ledger for a later documentation change.
+8. Confirm every acceptance gate in section 11 has fresh offline evidence. The
+   roadmap is deliberately untouched; Task 9 owns it.
 
 **Focused verification:** `pytest-focused -o addopts= tests\safety tests\unit -q`.
 **Broader:** the complete verifier `scripts/verify.ps1`, which must pass on the
 first attempt with no pass-on-rerun.
 
-**Security review:** whole-stage review against section 5 and against the
-Stage 4 exclusion list.
+**Security review:** implementation-scope review against section 5 and against
+the Stage 4 exclusion list.
 
-**Independent review gate:** whole-stage architecture, security, and diff
-review.
+**Independent review gate:** required before commit, covering schema ownership,
+documentation accuracy, and implementation acceptance.
 
-**Commit:** `docs: complete project 1 stage 4`
+**Commit:** `feat: complete project 1 stage 4 implementation`
+
+### Task 9 — Stage 4 completion status and executable status guard
+
+**Runs only after Task 8 is committed**, because it records that commit's exact
+hash.
+
+**Files, exactly two:**
+`docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md` and
+`tests/safety/test_stage3_boundaries.py`, or whichever module then holds the
+exact roadmap-status guard.
+
+**Consumes:** the committed Task 8 hash.
+**Produces:** the recorded Stage 4 completion status and its executable guard.
+
+**Test-first sequence**
+
+1. Read the Task 8 commit hash with `git rev-parse HEAD` immediately after that
+   commit, and record it in the ledger before editing anything.
+2. Add a Stage 4 completion guard alongside the existing
+   `test_stage3_completion_status_is_exact`, **and replace the not-started
+   assertions in the plan-approval guard** that the separate roadmap-and-guard
+   commit introduced, so the two do not contradict each other. Pin the exact
+   roadmap text as module constants: the Task 8 implementation hash, the
+   corrected-plan approval hash, and the launcher bootstrap prerequisite
+   `350fac49ff5b1db4ec62b60c7ade76580f9894dd`.
+   **Expected RED:** `AssertionError`, because the roadmap still records Stage 4
+   implementation as not started.
+3. Update the Stage 4 row of roadmap section 9, and the roadmap status line,
+   to record:
+   - **Stage 4 implementation complete at the Task 8 commit** — the
+     implementation hash is Task 8's, never Task 9's;
+   - that **Stage 4 status finalization at Task 9 is not represented as the
+     implementation hash**. Task 9's own commit is a status-recording commit and
+     must be described as such, exactly as the Stage 3 row distinguishes its
+     implementation commit from its later stability correction;
+   - that **Stage 5 remains not started**, with its plan still deferred and its
+     exit gate not evaluated.
+4. Keep the executable roadmap guard exact: every pinned string must be a
+   verbatim substring of the roadmap, and the guard must fail if the roadmap
+   text drifts. Do not relax any existing Stage 3 assertion.
+5. Confirm no source, schema, dependency, or lockfile change is present in this
+   commit.
+
+**Focused verification:**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File `
+  .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\safety -q
+```
+
+**Broader:** the complete verifier `scripts/verify.ps1`, first-attempt pass.
+
+**Security review:** confirm the commit changes exactly the roadmap and the
+status guard, and that no implementation file is touched.
+
+**Independent review gate:** required before commit.
+
+**Commit:** `test: record project 1 stage 4 completion`
+
+The whole-stage review follows Task 9.
 
 ### 9.8 Exact `_DEFERRED_DEFINITIONS` changes
 
@@ -1705,6 +2761,20 @@ Stage 4 is complete only when every item below has fresh offline evidence.
     one-time acquisition, and no acquisition is cited as verification evidence.
 18. The complete base-to-HEAD diff is reviewed and the worktree is clean and
     committed.
+19. Nine tasks are committed in order, each with its own independent review.
+    Task 8 carries the implementation acceptance and the implementation commit
+    and writes nothing into the roadmap; Task 9 records Stage 4 completion
+    against Task 8's committed hash, does not present its own hash as the
+    implementation hash, and confirms Stage 5 remains not started.
+20. Both execution prerequisites are ancestors of `main` — the launcher
+    bootstrap correction `350fac49ff5b1db4ec62b60c7ade76580f9894dd` and the
+    separate roadmap-and-guard commit carrying this plan's approval — the
+    section 9.0 preflight passed with both `$LASTEXITCODE` checks clean, and
+    the corrected launcher is unchanged by Stage 4.
+21. The classifier of section 5.2.1 obtains no implicit type information from
+    `event.tag`, the mapping-key contract of section 5.2.2 holds for every
+    rejected shape, and `SourceName` rejects every path-shaped value in section
+    5.2.3.
 
 ### 11.1 Flake regression gates
 
@@ -1732,10 +2802,12 @@ eleven-line justification at lines 196 to 206.
 
 1. Execute tasks in order. Each task ends with its own independent review and a
    clean committed worktree.
-2. After Task 8, run a fresh whole-stage independent review covering
+2. After **Task 9**, run a fresh whole-stage independent review covering
    architecture compliance, interface consistency, stage scope, schema
    ownership, YAML security, supply-chain safety, determinism, property-test
-   quality, flake resistance, and privacy and network boundaries.
+   quality, flake resistance, and privacy and network boundaries. The
+   whole-stage review follows the status commit, not the implementation commit,
+   so it reviews the final recorded state of the stage.
 3. Every finding records severity, exact file and section, evidence,
    consequence, and required correction. Resolve every Critical and Important
    finding and rerun the scoped review. The implementing context must not
@@ -1803,7 +2875,7 @@ No other `pyproject.toml` change is authorized. In particular
  }
 ```
 
-### Appendix C — `tests/safety/test_stage3_boundaries.py` patches (Tasks 2, 6, 8)
+### Appendix C — `tests/safety/test_stage3_boundaries.py` patches (Tasks 2 through 8; status guard in Task 9)
 
 Add to `_ALLOWED_SOURCE_FILES`, preserving alphabetical order:
 
@@ -1814,6 +2886,7 @@ Add to `_ALLOWED_SOURCE_FILES`, preserving alphabetical order:
 "capabilities/resolver.py",
 "capabilities/vocabulary.py",
 "domain/capability_names.py",
+"domain/capability_requirements.py",
 "domain/comparison_levels.py",
 "domain/descriptors.py",
 "domain/results.py",
@@ -1828,17 +2901,23 @@ Add to `_ALLOWED_SOURCE_FILES`, preserving alphabetical order:
 ```
 
 Add to `_ALLOWED_IMPORT_ROOTS`. The merged set has exactly 17 roots. Section
-5.2's bytes-only contract removes any need for `io`, but items 3 and 12 of that
-section do require two roots the merged set lacks, so **three** are added:
+5.2's bytes-only contract removes any need for `io`, so **four** are added,
+taking the set to 21:
 
 ```text
 "codecs",
 "contextlib",
+"copy",
 "yaml",
 ```
 
-`codecs` is needed for the BOM literals in section 5.2 item 3, and
-`contextlib` for the explicit `contextlib.closing` of section 5.2 item 12.
+`codecs` is needed for the BOM literals in section 5.2 item 3, `contextlib`
+for the explicit `contextlib.closing` of section 5.2 item 12, and `copy` for
+the `copy.deepcopy` that section 5.3.1 fixes as the single alias-expansion
+mechanism. `copy` is not optional: the import guard walks function-local
+`Import` and `ImportFrom` nodes too, so a deferred import would not escape it,
+and no project-owned recursive copier is specified. `re` is **already** in the
+merged allowlist, so section 5.2.3's compiled pattern adds nothing.
 `test_source_imports_only_the_explicit_stage3_allowlist` walks every `Import`
 and `ImportFrom` node, including function-local ones, so a deferred import
 would not avoid this.
@@ -1853,7 +2932,13 @@ Change the registry-count assertion:
 +    assert len(paths) == 20
 ```
 
-`test_stage3_completion_status_is_exact` is **not** modified by Stage 4.
+No Stage 4 task modifies the **Stage 3** assertions inside
+`test_stage3_completion_status_is_exact`. Task 8 and Task 9 hold the narrow,
+enumerated authority defined by the status-authority rule in section 3.9 over
+the four Stage-4-dependent strings, and Task 9 additionally adds a Stage 4
+completion guard and updates the Stage 4 plan-approval guard that the separate
+roadmap-and-guard commit introduced. Neither touches the closed-world lists
+above.
 
 ### Appendix D — `crypto_lab/domain/hashing.py` patch (Tasks 2 and 5)
 
@@ -1893,6 +2978,7 @@ all names importable from this module so no existing import site changes:
 
 +__all__ = [
 +    "AdapterDescriptor",
++    "BoundedText",
 +    "CapabilityName",
 +    "EngineDescriptor",
 +    "OperatingSystem",
@@ -1902,14 +2988,26 @@ all names importable from this module so no existing import site changes:
 ```
 
 The private module helpers `_unique_sorted_text`, `_unique_sorted_versions`,
-and `_set_unique_items` move **with** the classes into
-`crypto_lab/domain/descriptors.py`. This is mandatory, not tidiness: if they
-stayed behind, `domain/descriptors.py` would have to import from
-`crypto_lab.adapters.descriptors`, and `crypto_lab.adapters` is in
-`_PROHIBITED_PROJECT_PACKAGES` for
-`test_repository_domain_package_has_no_prohibited_imports`. That would
-re-introduce the exact dependency-direction violation section 5.7 exists to
-remove, through the back door.
+`_set_unique_items`, **`_engine_schema_extra`, and `_descriptor_schema_extra`**
+move **with** the classes into `crypto_lab/domain/descriptors.py`. This is
+mandatory, not tidiness: if any stayed behind, `domain/descriptors.py` would
+have to import from `crypto_lab.adapters.descriptors`, and
+`crypto_lab.adapters` is in `_PROHIBITED_PROJECT_PACKAGES` for
+`test_repository_domain_package_has_no_prohibited_imports` in
+`tests/architecture/test_domain_import_boundary.py`. That would re-introduce
+the exact dependency-direction violation section 5.7 exists to remove, through
+the back door. The two `json_schema_extra` hooks are referenced from both
+relocating classes' `model_config` and are easy to overlook.
+
+**`BoundedText` is defined locally in `crypto_lab/domain/descriptors.py`**, not
+imported from `adapters`, for the same reason: `EngineDescriptor.planned_role`,
+`EngineDescriptor.known_limitations`, `AdapterDescriptor.runtime_requirements`,
+and `AdapterDescriptor.known_modeling_limitations` all use it. A local
+definition matches existing repository precedent — `configuration/models.py`
+and `datasets/models.py` already carry independent local `BoundedText`
+definitions — and nothing outside `adapters/descriptors.py` imports the
+adapters copy. Add `BoundedText` to the `__all__` re-export as well, otherwise
+the "public surface is unchanged" claim in sections 1.2 and 6.2 is false.
 
 Every relocated class, annotation, and helper must be moved **verbatim**,
 including `StringConstraints` bounds, validators, `json_schema_extra` hooks, and
@@ -2044,10 +3142,11 @@ def _build_document(text: str, source_name: SourceName) -> Result[YamlDocument]:
 
 `_Budget` carries `events`, `expanded`, `alias_references`,
 `anchor_definitions`, a `dict[str, int]` of completed anchor **expanded**
-sizes, a `dict[str, list[yaml.Event]]` of recorded anchor event subsequences for
-replay,
-and a stack of open anchor frames. Its `charge` method is the single place
-every ceiling is enforced:
+sizes, a `dict[str, object]` of completed anchor **values** for deep-copy
+expansion, and a stack of open anchor frames. There is **no** recorded event
+subsequence and no replay: section 5.3.1 fixes deep-copy of the built value as
+the single expansion mechanism, precisely so an alias cannot be charged twice.
+Its `charge` method is where the expanded-node ceiling is enforced:
 
 ```python
 def charge(self, cost: int, open_frames: list[_Frame]) -> str | None:
@@ -2061,10 +3160,18 @@ def charge(self, cost: int, open_frames: list[_Frame]) -> str | None:
 
 Required behaviour, all of which the Task 2 tests fix precisely:
 
-1. Every non-alias event charges `1`. Every alias event charges the target
+1. Every node-producing event — `ScalarEvent`, `SequenceStartEvent`,
+   `MappingStartEvent` — charges `1`; framing and collection-end events charge
+   nothing, per section 5.3.1. Every alias event charges the target
    anchor's recorded **expanded** size, so nested anchors compound and the
    nine-level bomb is rejected. Charging a raw subtree event count instead
-   would let that bomb pass every ceiling.
+   would let that bomb pass every ceiling. The deep-copied value spliced in at
+   the alias site is **not** charged again — the alias site already paid for
+   the whole node. `charge` is the single place `MAX_EXPANDED_NODES` is
+   enforced; the other ceilings — `MAX_EVENT_COUNT`, `MAX_ANCHORS`,
+   `MAX_ALIAS_REFERENCES`, `MAX_SCALAR_CHARACTERS`, `MAX_COLLECTION_ENTRIES`,
+   and both depth counters — are structurally not chargeable there and are
+   enforced at their own event sites.
 2. `charge` is called before the event is consumed, so rejection happens
    mid-stream.
 3. An alias whose anchor frame is still open, or whose name was never defined,
@@ -2110,15 +3217,53 @@ Required changes:
 `PACKAGE_MODULES` is a positive module list that drives the fresh-import probe
 named in section 11.1. Nothing compares it to the filesystem, so omitting a
 module weakens coverage rather than failing a test; each task nevertheless
-appends the modules it creates, starting with Task 2.
+appends the modules it creates, starting with Task 2. To make that instruction
+executable rather than aspirational, `tests/unit/test_package_layout.py` is in
+the Files list of **every task from Task 2 through Task 8** that creates a
+source module.
 
-The probe asserts that importing project modules performs no file read, so
-Task 2 must additionally prove that importing `crypto_lab.strategy.yaml_source`
-— and therefore `yaml` — survives it. PyYAML's package import is pure Python
-and reads no data file, but this must be demonstrated rather than assumed: if
-the probe fails, the correct fix is a deferred function-local `import yaml`
-inside `load_yaml_document`, **not** a weakened probe. Record the measured
-outcome in the ledger either way.
+**What the probe actually asserts.** `_IMPORT_PROBE` patches `builtins.open`,
+`os.putenv`/`unsetenv`/`system`/`spawn*`/`startfile`, `socket`, `subprocess`,
+`urllib`, `http.client`, `winreg`, and seventeen `pathlib.Path` methods
+(`home`, `expanduser`, `open`, `read_bytes`, `read_text`, `exists`, `is_dir`,
+`is_file`, `iterdir`, `glob`, `rglob`, `stat`, `lstat`, `mkdir`, `touch`,
+`write_bytes`, `write_text`). It does **not**
+patch `io.open_code`, `_io.FileIO`, `os.stat`, or `_imp.create_dynamic`, which
+is what the import machinery and extension loading actually use. So the probe
+asserts "no `builtins.open`, `pathlib`, socket, subprocess, or registry side
+effect during import" — **not** "no file read". It has zero observational power
+over the loading of `yaml._yaml.cp312-win_amd64.pyd`, and the plan must not
+claim otherwise.
+
+Task 2 must nevertheless prove that importing `crypto_lab.strategy.yaml_source`
+— and therefore `yaml` — survives the probe as it exists.
+
+**Importing `yaml` is not pure Python.** PyYAML's package initializer
+`yaml/__init__.py` attempts `from .cyaml import *` inside a `try` / `except
+ImportError`, setting `__with_libyaml__` accordingly, and `yaml/cyaml.py`
+imports `CParser` and `CEmitter` from the compiled extension `yaml._yaml`. The
+selected `pyyaml-6.0.3-cp312-cp312-win_amd64.whl` ships that extension, so
+importing `yaml` loads a compiled module. Therefore:
+
+- importing `yaml` may load its optional compiled extension, and on the
+  selected Windows wheel it does;
+- **Stage 4 never selects `CLoader`, `CSafeLoader`, `CParser`, `CBaseLoader`,
+  `CFullLoader`, `CUnsafeLoader`, or any other C parsing surface.** The Task 1
+  AST guard forbids all of those names, plus `cyaml` and `_yaml`, anywhere
+  under `src/crypto_lab`;
+- actual strategy parsing uses the reviewed Python `SafeLoader` subclass
+  `StrictStrategySafeLoader`, whose membership in `yaml.SafeLoader.__mro__` is
+  asserted by a Task 2 test, so the pure-Python Scanner and Parser that every
+  safety argument in section 5 reasons about are the ones that run;
+- the fresh-import probe remains authoritative for the import effects it can
+  observe, which are enumerated in Appendix J and do **not** include the
+  compiled extension's load. It is a measurement, not a claim: if it fails, the
+  correct fix is a deferred function-local `import yaml` inside
+  `load_yaml_document`, **not** a weakened probe. Record the measured outcome
+  in the ledger either way. The controls that actually bound the C surface are
+  the qualified AST name ban of Task 1 and the
+  `yaml.SafeLoader in StrictStrategySafeLoader.__mro__` pin of Task 2, not the
+  probe.
 
 ## 14. Plan self-review
 
@@ -2134,6 +3279,32 @@ outcome in the ledger either way.
 - Schema ownership names exact paths, identifiers, registry entries, the exact
   count change from 11 to 20, and the Stage 3 byte-identity proof.
 - Two decisions are explicitly escalated rather than assumed: the section 5.7
-  dependency direction and the section 5.8 Stage 4 / Stage 5 comparison
-  boundary.
+  dependency direction and the section 5.8 Stage 4 / Stage 9
+  comparison-service boundary.
 - No placeholder, no "as needed" instruction, and no unresolved choice remains.
+
+### 14.1 Corrections applied after the first independent review
+
+1. **Launcher bootstrap.** Section 3.8 replaced the claim that every profile
+   requires an existing project environment. Five uv bootstrap profiles now
+   reach uv without the project interpreter, `sync` is the supported
+   fresh-worktree bootstrap, and no direct `uv` command is needed. Recorded as
+   execution prerequisite `350fac49ff5b1db4ec62b60c7ade76580f9894dd`.
+2. **YAML event resolution.** Section 5.2 item 7 no longer claims parse events
+   carry resolved implicit tags. Section 5.2.1 records the PyYAML 6.0.3 parser,
+   composer, resolver, and scanner evidence and defines a project-owned
+   classifier that never reads an implicit type from `event.tag`.
+3. **Mapping keys.** Section 5.2.2 adds the string-only mapping-key contract and
+   the new error code `STRATEGY.YAML_MAPPING_KEY_INVALID`.
+4. **`SourceName`.** Section 5.2.3 corrects the pattern to
+   `^(?!.*\.\.)[a-z0-9][a-z0-9._-]{0,127}$`, keeps the length bound, and fixes
+   the declaration mechanism, because Pydantic's default `rust-regex` engine
+   cannot compile look-around.
+5. **Task 1 RED.** Three meaningful REDs replace the fabricated
+   "file does not exist" claims, and the source guardrails expected to begin
+   green are classified as preventive safety tests.
+6. **PyYAML import.** Appendix J replaces the pure-Python import claim with the
+   `yaml/__init__.py` compiled-extension evidence and its consequences.
+7. **Status task.** The stage is nine tasks. Task 8 owns implementation
+   acceptance and must not write its own hash into the roadmap; Task 9 owns the
+   completion status and its executable guard.
