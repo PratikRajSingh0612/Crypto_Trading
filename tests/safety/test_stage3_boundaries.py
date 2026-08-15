@@ -609,6 +609,12 @@ def test_gitnexus_remains_disabled_with_evidence(repository_root: Path) -> None:
 STAGE3_TASK8_COMMIT = "d50744547d121d1b5925a5d92d752345902f5e56"
 STAGE3_IMPLEMENTATION_COMMIT = "88711307ff377e645bb17c798e599b6bac1c2be4"
 STAGE3_STABILITY_CORRECTION_COMMIT = "e1c821453459f5eccf86a472e9204b6a90829d64"
+STAGE4_LAUNCHER_BOOTSTRAP_COMMIT = "350fac49ff5b1db4ec62b60c7ade76580f9894dd"
+STAGE4_PLAN_APPROVAL_COMMIT = "b6721b870c79db7b999b9eb70107e53992cbe1ab"
+STAGE4_PLAN = (
+    "docs/superpowers/plans/2026-08-10-project-1-portable-strategy-"
+    "capabilities-comparison-implementation-plan.md"
+)
 
 
 def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
@@ -666,3 +672,43 @@ def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
     assert "Eligible for just-in-time planning after Stage 3 completion" in roadmap
     assert "`DISABLED_WITH_EVIDENCE`" in roadmap
     assert "**Status:** Project 1 Stages 1-3 complete" in readme
+
+
+def test_stage4_plan_approval_status_is_exact(repository_root: Path) -> None:
+    for commit in (STAGE4_LAUNCHER_BOOTSTRAP_COMMIT, STAGE4_PLAN_APPROVAL_COMMIT):
+        assert re.fullmatch(r"[0-9a-f]{40}", commit) is not None
+    assert len({STAGE4_LAUNCHER_BOOTSTRAP_COMMIT, STAGE4_PLAN_APPROVAL_COMMIT}) == 2
+    roadmap = (
+        repository_root
+        / "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
+    ).read_text(encoding="utf-8")
+    plan = (repository_root / STAGE4_PLAN).read_text(encoding="utf-8")
+
+    assert "**Status:** Approved for Project 1 Stage 4 implementation" in plan
+    assert (
+        "**Execution prerequisites, both of which must be ancestors of local "
+        "`main`\nbefore Stage 4 implementation begins:** the launcher bootstrap "
+        f"correction at\n`{STAGE4_LAUNCHER_BOOTSTRAP_COMMIT}`"
+    ) in plan
+
+    approved_line = f"**Approved detailed implementation plan:** `{STAGE4_PLAN}`."
+    planned_line = f"**Planned detailed implementation plan:** `{STAGE4_PLAN}`."
+    assert approved_line in roadmap
+    assert planned_line not in roadmap
+    assert (
+        "| 4 — Portable Strategy, Capabilities, and Comparison | Eligible for "
+        "just-in-time planning after Stage 3 completion; corrected detailed "
+        f"plan approved at `{STAGE4_PLAN_APPROVAL_COMMIT}` after two "
+        "independent reviews, superseding the pre-correction review at "
+        "`bf5e427a8fe055be2b6cb803b69d4c2334aeee69`; launcher bootstrap "
+        f"prerequisite completed at `{STAGE4_LAUNCHER_BOOTSTRAP_COMMIT}` | "
+        "Not started | Not evaluated |"
+    ) in roadmap
+
+    # Stage 4 implementation has not started, and Stage 5 has not started.
+    assert "Stages 1 through 3 complete" in roadmap
+    assert (
+        "| 5 — Experiment, Run, Invocation, Retry, and Aggregation Logic | "
+        "Intentionally deferred until Stages 3\u20134 completion | Not started | "
+        "Not evaluated |"
+    ) in roadmap
