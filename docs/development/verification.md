@@ -17,26 +17,57 @@ The second command must resolve the already installed user-local uv-managed
 CPython 3.12 and must not download an interpreter. `--system` skips the project
 `.venv` during discovery, `--managed-python` still requires a uv-managed
 install, and `--no-python-downloads` prevents acquisition. Normal execution
-uses `.venv` through the repository `scripts/invoke-uv.ps1` child launcher.
+goes through the repository `scripts/invoke-uv.ps1` child launcher; every
+profile except the five bootstrap profiles runs against the project `.venv`.
 Stop without installing anything when either prerequisite is absent.
 
-The workflow relies on `.python-version` requesting `3.12`,
-`python-preference = "only-managed"` prohibiting system-Python fallback, and
-`python-downloads = "manual"` disabling automatic interpreter downloads.
+`.python-version` requesting `3.12`, `python-preference = "only-managed"`, and
+`python-downloads = "manual"` remain ordinary project metadata for uv commands
+issued outside the closed launcher. They are not the enforcement mechanism for
+launcher profiles: the launcher passes `--no-config` on every profile, so uv
+consults neither `.python-version` nor `[tool.uv]`. The launcher's own fixed
+`--managed-python` and `--no-python-downloads` arguments carry that policy
+instead.
 
-## Locked setup
+## Fresh-worktree bootstrap
 
-After `uv.lock` exists, synchronize only from local locked content:
+A new worktree carries tracked metadata but no `.venv`. After `uv.lock`
+exists, `sync` is the supported first launcher operation there: it creates and
+populates `.venv` from local locked content only, and must precede every
+Python-bearing profile.
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File `
   .\scripts\invoke-uv.ps1 sync
 ```
 
-If cached packages are insufficient, stop. Show and obtain one-time approval
-for the exact Task 1 `sync-acquire` launcher profile,
-then return to the launcher `sync` operation, which expands only to the fixed
-offline form. Acquisition is not verification
+Five bootstrap profiles (`lock-resolve-offline`, `lock-check`, `sync`,
+`lock-acquire`, and `sync-acquire`) dispatch before the launcher resolves
+`.venv\Scripts\python.exe`. They therefore require no existing project
+environment and pass no `--python` argument at all. They still validate that
+the project `pyproject.toml` is a regular file below the repository root, and
+that the root and any existing `.venv` prefix traverse no reparse point.
+
+Their interpreter is constrained by the launcher's fixed `--managed-python`
+and `--no-python-downloads` arguments together with the project
+`requires-python = ">=3.12,<3.13"`: uv selects a user-local uv-managed CPython
+satisfying that range and never falls back to an unreviewed system
+interpreter. `--managed-python` alone names no exact patch release. Because
+the launcher also passes `--no-config`, these profiles consult neither
+`.python-version` nor `[tool.uv]`.
+
+Once `sync` has created and populated `.venv`, every Python-bearing profile
+resolves and validates `.venv\Scripts\python.exe`, proves it remains inside
+the project environment, and runs its fixed Python or tool command against
+that interpreter. The launcher sets the fixed Pydantic plugin-discovery
+control in the child environment on every profile, bootstrap included.
+
+`lock-resolve-offline`, `lock-check`, and `sync` are explicitly offline;
+`lock-acquire` and `sync-acquire` are the two profiles that omit `--offline`,
+and both remain separately approval-gated. If cached packages are
+insufficient, stop. Show and obtain one-time approval for the exact Task 1
+`sync-acquire` launcher profile, then return to the launcher `sync` operation,
+which expands only to the fixed offline form. Acquisition is not verification
 and never permits a non-offline ordinary command.
 
 ## Complete verification
