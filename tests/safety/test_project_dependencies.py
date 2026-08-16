@@ -43,7 +43,10 @@ _PROHIBITED_FAMILIES: tuple[str, ...] = (
     "openai",
 )
 _REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
-_EXPECTED_RUNTIME_REQUIREMENTS = ("pydantic>=2.12,<3",)
+_EXPECTED_RUNTIME_REQUIREMENTS = (
+    "pydantic>=2.12,<3",
+    "pyyaml>=6.0.3,<7",
+)
 _EXPECTED_DEVELOPMENT_NAMES = {
     "hatchling",
     "hypothesis",
@@ -52,6 +55,7 @@ _EXPECTED_DEVELOPMENT_NAMES = {
     "pytest",
     "pytest-cov",
     "ruff",
+    "types-pyyaml",
 }
 
 
@@ -250,10 +254,43 @@ def test_lock_registry_artifacts_are_sha256_pinned(repository_root: Path) -> Non
             assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is not None
 
 
+def test_locked_yaml_packages_are_typed_and_ship_a_cp312_wheel(
+    repository_root: Path,
+) -> None:
+    """Reject a stub-less install and an sdist-only PyYAML.
+
+    ``test_lock_registry_artifacts_are_sha256_pinned`` does not distinguish an
+    sdist from a wheel, and ``no-build-isolation = true`` means an sdist path
+    would run PyYAML's ``setup.py`` against the project environment.
+    """
+    document = _load_pyproject(repository_root / "uv.lock")
+    packages = document.get("package")
+    assert isinstance(packages, list)
+    locked = {
+        str(_mapping(package, "package entry").get("name")): _mapping(
+            package,
+            "package entry",
+        )
+        for package in packages
+    }
+
+    assert "types-pyyaml" in locked
+
+    wheels = locked["pyyaml"].get("wheels")
+    assert isinstance(wheels, list)
+    urls = [str(_mapping(wheel, "locked wheel").get("url")) for wheel in wheels]
+
+    assert any("cp312" in url and "win_amd64" in url for url in urls)
+
+
 def test_mypy_untyped_import_override_is_exact(repository_root: Path) -> None:
     document = _load_pyproject(repository_root / "pyproject.toml")
     tool = _mapping(document.get("tool"), "[tool]")
     mypy = _mapping(tool.get("mypy"), "[tool.mypy]")
+    # Pinning only ``overrides`` would let a top-level
+    # ``ignore_missing_imports`` or ``disable_error_code`` relax typing
+    # repository-wide while leaving this test green.
+    assert set(mypy) == {"python_version", "strict", "files", "overrides"}
     assert mypy.get("overrides") == [
         {
             "module": ["jsonschema", "jsonschema.*"],
