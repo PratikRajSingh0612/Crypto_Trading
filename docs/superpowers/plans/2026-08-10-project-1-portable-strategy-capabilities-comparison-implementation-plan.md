@@ -2094,6 +2094,299 @@ deviation, and it is explicitly outside the hashed payload. The owning task adds
 test per model asserting `set(Model.model_fields) == {...}` against the
 literal specification list, so no field set is invented.
 
+#### Reviewed correction — the four hash-material field types
+
+**Scope of this correction.** Sections 12.2, 12.3.1, 12.6, and 11.3 name four
+hash-material fields exhaustively but leave their **concrete types** unstated:
+`literal.value`, `ApproximationPolicy`'s member list,
+`CapabilityRequirement.minimum_semantics`, and the two
+`EngineExtensionDeclaration` effect classifications. All four are frozen
+permanently at Task 2, because `entry_rules`, `exit_rules`,
+`required_capabilities`, `supported_approximation_policy`, and
+`engine_extensions` all sit inside `strategy_spec` in the section 5.5 hash
+payload. This correction resolves exactly those previously unstated types. It
+changes no architecture, no roadmap entry, no task count, no task ordering, no
+dependency decision, no unrelated file ownership, and no schema count, and it
+**does not authorize Task 3 or any later-task behaviour**.
+
+**A. Literal value contract.** The AST has exactly one `literal` node, not five
+same-`op` union variants, and its type vocabulary is a `StrEnum` with uppercase
+members `BOOLEAN`, `INTEGER`, `DECIMAL`, `STRING`, `IDENTIFIER`:
+
+```python
+class LiteralValueType(StrEnum):
+    BOOLEAN = "BOOLEAN"
+    INTEGER = "INTEGER"
+    DECIMAL = "DECIMAL"
+    STRING = "STRING"
+    IDENTIFIER = "IDENTIFIER"
+```
+
+Its fields are `op: Literal["literal"]`, then `value_type: LiteralValueType`,
+then `value: bool | int | Decimal | str`. **`value_type` must precede `value` in
+model field order**, and validation must dispatch on the `(value_type, value)`
+pair **before** ordinary union validation. Exact rules:
+
+- `BOOLEAN` accepts only an exact `bool`.
+- `INTEGER` accepts only an exact `int` and explicitly rejects `bool`.
+- `DECIMAL` accepts only the existing canonical-decimal string representation at
+  the YAML/JSON boundary — `crypto_lab.domain.financial`'s
+  `CANONICAL_DECIMAL_PATTERN` form, reached through `parse_decimal` — and stores
+  a `Decimal` in memory.
+- `STRING` accepts an exact `str` and is never parsed merely because its text
+  resembles a number, a boolean, or an identifier.
+- `IDENTIFIER` accepts an exact `str` validated by the existing
+  `NormalizedIdentifier` contract.
+- `float`, `None`, list, tuple, set, mapping, callable, and arbitrary object
+  values fail, and no implicit conversion occurs.
+- A defensive post-validation invariant confirms the stored runtime type still
+  agrees with `value_type`.
+- `Decimal` serialization uses the existing canonical `format_decimal`
+  serializer; an identifier serializes as its canonical string; and `value_type`
+  remains part of canonical serialization and hashing.
+
+Union ordering must not be used as validation, and `value` must not be typed
+`Any` or `object`. Both prohibitions are load-bearing rather than stylistic: a
+`STRING` literal whose text is `"1"` would validate as a canonical decimal under
+any union mode that tries decimal first, and a `DECIMAL` literal would validate
+as `str` under one that tries `str` first, so union ordering alone would put the
+wrong Python type into a permanent `content_hash`.
+
+**Field order is a validation-ordering requirement, not a hashing one.**
+`canonical_json_text` passes `sort_keys=True` and specification section 10.2
+mandates sorted keys, so declaration order cannot change a hashed byte. The
+requirement exists because Pydantic populates `ValidationInfo.data` with only
+the fields validated **so far, in declaration order**: `value_type` must
+validate first or the dispatcher cannot see it. Reordering the two fields would
+therefore silently disable the dispatch rather than change a hash.
+
+**The dispatch mechanism is fixed here, because the prohibitions above rule out
+every alternative.** Five same-`op` variants are forbidden by this item, union
+ordering is forbidden by the paragraph above, and `Any`/`object` is forbidden
+too. What remains is per-`value_type` dispatch that bypasses union routing
+entirely, and it is normative:
+
+- `value` is annotated `bool | int | Decimal | str` for typing and schema only.
+  A project-owned validator attached to that annotation — a `PlainValidator`, or
+  equivalently a wrap validator that ignores the supplied handler — reads
+  `info.data["value_type"]` and invokes exactly one of five pre-built branches.
+  No Pydantic union member is ever tried.
+- The `DECIMAL` branch delegates to `crypto_lab.domain.financial.parse_decimal`,
+  passing the same `ValidationInfo` so `info.mode` is honoured: a real `Decimal`
+  in Python mode, an exact `CANONICAL_DECIMAL_PATTERN` string in JSON mode. This
+  is the identical validator `CanonicalDecimal` itself uses, so the accepted
+  text and the emitted bytes are the same as every other decimal field in the
+  repository. `"1.50"` and `"1E+2"` are rejected at the JSON boundary, and a
+  Python-mode `Decimal("1.50")` serializes to canonical `"1.5"` through
+  `format_decimal`.
+- A missing or non-member `value_type` — which happens whenever `value_type`
+  itself failed validation, since the later validator still runs against a
+  partial `info.data` — raises rather than indexing, so the dispatcher never
+  raises `KeyError` out of the `Result` contract.
+- The post-validation invariant compares **exact** runtime types
+  (`type(value) is …`) and never `isinstance`, and tests `bool` before `int`.
+  This is mandatory: `isinstance(True, int)` is `True` in Python, so an
+  `isinstance` invariant would admit `True` as an `INTEGER` and put a JSON
+  `true` where an integer belongs in a permanent `content_hash`.
+
+**Each branch is bounded, not merely typed.** Section 5.3's
+`MAX_SCALAR_CHARACTERS` and `MIN`/`MAX_INTEGER_VALUE` are **loader** bounds
+applied during the event pass, so they do not constrain
+`Expression.model_validate_json` or an external consumer of the generated
+schema. Without per-branch bounds the model would admit values the loader
+rejects, and a Python-mode integer beyond CPython's 4300-digit conversion limit
+would raise an uncaught `ValueError` from inside `canonical_json_bytes` — the
+exact failure section 5.3 closed for the loader, reached through the model
+boundary instead. Therefore:
+
+- `INTEGER` is bounded to signed 64-bit, following the existing
+  `BoundedDetailInteger` precedent in `crypto_lab/domain/diagnostics.py` that
+  section 5.3 already cites, and matching the loader's
+  `MIN_INTEGER_VALUE`/`MAX_INTEGER_VALUE`.
+- `STRING` is bounded to `MAX_SCALAR_CHARACTERS`.
+- `IDENTIFIER` is bounded by `NormalizedIdentifier` itself, which carries its
+  own pattern and its 1-to-128 length bound.
+
+**The generated conditional schema is Task 2's, in `strategy/expressions.py`.**
+Pydantic emits an unconstrained `anyOf` over the four scalar types on its own,
+which this item forbids, and it will not emit a conditional unaided. The only
+mechanism that needs no generator change is a `json_schema_extra` hook on the
+literal node's `model_config`, exactly as `StrategyArtifactOwner` and
+`AdapterArtifactOwner` already emit `oneOf` and `dependentRequired` in
+`crypto_lab/artifacts/ownership.py`, and section 3.1 records that as the
+established convention. That hook lives in `strategy/expressions.py`, which is a
+**Task 2** file, and Task 8 creates no source file — so the obligation must land
+with the model, in the same commit. Task 8 only regenerates and verifies the
+emitted bytes.
+
+Two constraints on that hook. It must make the `value_type`/`value` relationship
+explicit with conditional or `oneOf` semantics covering **every** member of
+`LiteralValueType`, so no unconstrained generic scalar union is exposed. And its
+`DECIMAL` and `IDENTIFIER` branches must derive their sub-schemas from the
+existing types — through a `$ref`, or `exact_string_schema`, or the type's own
+emitted schema — and must never inline `CANONICAL_DECIMAL_PATTERN` or the
+`NormalizedIdentifier` pattern literally. Both module constants are
+`$`-terminated, and `test_every_schema_pattern_uses_absolute_end_semantics`
+requires every emitted pattern to carry the ECMA-safe `(?![\s\S])` ending, so an
+inlined pattern fails that guard and duplicates a hash-material pattern in a
+second place where it can drift.
+
+*Required focused tests, in `tests/unit/strategy/test_strategy_expressions.py`:*
+a valid value for every `value_type`; every mismatched type pair; `bool` rejected
+as `INTEGER`; an integer rejected as `DECIMAL`; a decimal-like string retained as
+`STRING`; the same text represented as `DECIMAL` versus `STRING` producing
+distinct canonical bytes; `IDENTIFIER` validating `NormalizedIdentifier`;
+JSON-mode and YAML-loaded round trips; unknown-`value_type` rejection; and no
+coercion.
+
+**B. Approximation policy contract.** `ApproximationPolicy` is exactly:
+
+```python
+class ApproximationPolicy(StrEnum):
+    REJECT = "REJECT"
+    ALLOW_DECLARED = "ALLOW_DECLARED"
+```
+
+No other value exists in `strategy/v1`. `ALLOW_ANY`, `PREFER`, `AUTO`,
+`BEST_EFFORT`, an implicit allow, and a wildcard policy are all prohibited. The
+top-level supported-approximation-policy model keeps the structure section 12.4
+shows, but its `strategy/v1` `default` is **required** and must be the literal
+`REJECT`. Every `CapabilityRequirement.approximation_policy` is required and
+explicit, with no injected default. `ALLOW_DECLARED` means only that a
+machine-readable `ApproximationDeclaration` exists, that it is for the same
+capability, and that its comparison-level exclusions are honored; it never
+permits an unnamed or inferred approximation, which is what makes section 13.3
+step 4 decidable.
+
+**Precedence between the two, stated so section 13.3 step 4 has one answer.**
+The per-requirement `CapabilityRequirement.approximation_policy` is
+**authoritative for its own capability**. The top-level `default` is the
+strategy-wide statement for capabilities the strategy does not individually
+enumerate. In `strategy/v1` the two can never disagree in effect, because the
+`default` is fixed to `REJECT` and no requirement may omit its own explicit
+policy, so the resolver of Task 6 reads only the per-requirement value and the
+`default` is never consulted during resolution. A requirement carrying
+`ALLOW_DECLARED` beside the fixed `REJECT` default is therefore **not** a
+contradiction and must not be rejected: the two govern disjoint sets. The
+`default` is retained because it is declared hash material inside
+`strategy_spec` and because it records, in the source, that approximation is not
+accepted by default. Without this rule an implementer could read the `REJECT`
+default as a ceiling and reject every `ALLOW_DECLARED` requirement, which would
+make `SUPPORTED_WITH_APPROXIMATION` — one of the four outcomes acceptance gate
+11 item 11 requires — unreachable.
+
+*Required tests:* exact enum membership; unknown-value rejection; the top-level
+default must be `REJECT`; a missing requirement policy fails; explicit `REJECT`
+and `ALLOW_DECLARED` round-trip; no implicit default is injected into
+`CapabilityRequirement`; and a spec carrying an `ALLOW_DECLARED` requirement
+beside the fixed `REJECT` default is **accepted**, pinning the precedence rule
+above.
+
+**C. Minimum semantics contract.** For `strategy/v1`,
+`CapabilityRequirement.minimum_semantics` is:
+
+```python
+minimum_semantics: Literal["capabilities/v1"]
+```
+
+It is required. It is not free-form text, not `SemanticVersion`, not optional,
+not nullable, not inferred from the capability, and not imported from
+`crypto_lab.adapters`. Only exact `capabilities/v1` is accepted; a future value
+requires a new reviewed schema and vocabulary migration. The Task 6 resolver
+compares this exact value with the descriptor's recognized
+capability-vocabulary version before support resolution, satisfying section 13.3
+step 1.
+
+*Required tests:* the exact value accepted; a missing value rejected; `1.0.0`,
+`v1`, `capability/v1`, `capabilities/v2`, the empty string, and `None` rejected;
+and no coercion.
+
+**D. Engine extension classifications.** The two effect fields of
+`EngineExtensionDeclaration` are exactly:
+
+```python
+class ExtensionLifecycleEffect(StrEnum):
+    LIFECYCLE_HOOKS_ONLY = "LIFECYCLE_HOOKS_ONLY"
+    ALTERS_EXECUTION_BEHAVIOR = "ALTERS_EXECUTION_BEHAVIOR"
+
+
+class ExtensionEconomicEffect(StrEnum):
+    NONE = "NONE"
+    PREVENTS_LEVEL_2 = "PREVENTS_LEVEL_2"
+    PREVENTS_LEVEL_1_AND_LEVEL_2 = "PREVENTS_LEVEL_1_AND_LEVEL_2"
+```
+
+Both `lifecycle_effect` and `economic_effect` are required and reject unknown
+values. `LIFECYCLE_HOOKS_ONLY` requires `economic_effect == NONE`, which is
+specification section 12.6's "only adapt lifecycle hooks" alternative stated
+executably. `ALTERS_EXECUTION_BEHAVIOR` may carry any economic-effect value.
+`PREVENTS_LEVEL_2` excludes Level 2 but not automatically Level 1;
+`PREVENTS_LEVEL_1_AND_LEVEL_2` excludes both. There is no bare
+`PREVENTS_LEVEL_1` member, because specification section 25.2 makes Level 2 a
+superset of Level 1, so preventing Level 1 necessarily prevents Level 2 and the
+two-member form is complete.
+
+**There is deliberately no `PREVENTS_LEVEL_3` member, and the reason is scope,
+not impossibility.** Specification section 12.6 bounds an extension's declared
+economic effect to exactly *"make a Level 1 or Level 2 comparison ineligible"*;
+Level 3 is absent from that sentence, and section 25.3 explains why it would be
+meaningless there, since Level 3 does not expect numerically identical results.
+**This says nothing about `ApproximationDeclaration.prevented_comparison_levels`,
+which is a different type owned by a later task and which specification sections
+13.4 and 11.3 require to be able to include Level 3.** Conflating the two would
+break the Task 7 eligibility test that rejects a requested level named in
+`prevented_comparison_levels`. `ExtensionEconomicEffect` is narrower than
+`ComparisonLevel` on purpose; it is not a claim that Level 3 can never be
+excluded.
+
+Both effect values are canonical hash material. The core stores declarations and
+never imports or executes extension code.
+
+**Module placement, because the source-file guard is exact set equality.**
+`LiteralValueType` lives in `src/crypto_lab/strategy/expressions.py`;
+`ExtensionLifecycleEffect` and `ExtensionEconomicEffect` live in
+`src/crypto_lab/strategy/models.py` beside `EngineExtensionDeclaration`. No new
+source file is created for any of the three, so Appendix C's
+`_ALLOWED_SOURCE_FILES` additions and section 9.8's `_DEFERRED_DEFINITIONS`
+removals are unchanged by this correction. None of the four new type names
+appears in `_DEFERRED_DEFINITIONS`.
+
+**Enum casing extends to the three enums this correction adds.** The casing
+decision above is written for `market_type` and `direction`; `ApproximationPolicy`,
+`ExtensionLifecycleEffect`, and `ExtensionEconomicEffect` follow it identically.
+`CanonicalModel` is `strict=True`, so every YAML source and every fixture must
+author `REJECT`, `LIFECYCLE_HOOKS_ONLY`, and `NONE` in uppercase. Specification
+section 12.4's lowercase `default: reject` is illustrative source shape only, on
+exactly the reading section 12.4 states of itself. A fixture copied verbatim from
+12.4 fails Task 2 step 14, so this is a build instruction and not a note.
+
+Task 2 lands only the immutable declaration and model surface that section 9.1
+already assigns it in `strategy/models.py`. It must **not** implement Task 5
+hashing or loader behaviour early: the section 5.5 item 5 `extension_hashes`
+sort and `HashingProfile.STRATEGY_VERSION_V1` remain Task 5's.
+
+**One ordering obligation is Task 2's, and it is distinct from that sort.**
+Section 5.5 item 1 hashes `spec.model_dump(mode="json")` with no exclusions, so
+the declared order of `StrategySpec.engine_extensions` is present in the hashed
+bytes. Task 5 test 5 nevertheless requires that reordering the declared
+extensions leave the `content_hash` unchanged. Those two are reconcilable only if
+`StrategySpec` **normalizes** `engine_extensions` into a canonical order —
+`(adapter_name, extension_id, version)`, the same key section 5.5 item 5 uses,
+with uniqueness on that key — so two source orderings validate to one model. That
+normalization belongs to `StrategySpec` in Task 2. Note that the merged
+`_unique_sorted_text` precedent **rejects** an unsorted collection rather than
+sorting it; that behaviour is correct for an adapter-produced descriptor but
+would make Task 5 test 5 unsatisfiable for a human-authored source, so
+`engine_extensions` normalizes instead of rejecting. Section 5.5 item 5's sort of
+the extension `content_hash` values remains Task 5's and is unaffected.
+
+*Required tests:* both exact enum memberships; unknown-value rejection for each;
+`LIFECYCLE_HOOKS_ONLY` with a non-`NONE` economic effect rejected;
+`ALTERS_EXECUTION_BEHAVIOR` accepted with every economic-effect value; the
+absence of any `PREVENTS_LEVEL_3` and any bare `PREVENTS_LEVEL_1` member; and, in
+step 14, two source orderings of `engine_extensions` validating to one identical
+`StrategySpec`.
+
 **Test-first sequence**
 
 1. `Result` discriminates success from failure and cannot carry both.
@@ -2130,7 +2423,8 @@ literal specification list, so no field set is invented.
     `ModuleNotFoundError: crypto_lab.strategy.expressions` — plus one
     acceptance and one arity-rejection test per node kind, discriminator
     closure, `bars_ago = -1` rejected at the model level, and a tree deeper
-    than `MAX_EXPRESSION_DEPTH` rejected.
+    than `MAX_EXPRESSION_DEPTH` rejected. This step also carries every literal
+    test required by item A of the reviewed correction above.
 
     **This step must precede step 14.** Taking `StrategySpec` green requires
     the AST, because `entry_rules` and `exit_rules` are expression trees, so
@@ -2141,7 +2435,13 @@ literal specification list, so no field set is invented.
     12.6 fields and rejects an unknown one. **Expected RED:**
     `ModuleNotFoundError: crypto_lab.strategy.models`, which is an
     `ImportError` — at this position `models.py` itself does not exist yet.
-    This too precedes step 14, for the same reason.
+    This too precedes step 14, for the same reason. This step also carries the
+    extension-classification tests required by item D of the reviewed
+    correction above, and at this position
+    `tests/unit/strategy/test_strategy_models.py` must contain **only**
+    `EngineExtensionDeclaration` coverage: a module-level import of
+    `StrategySpec` would fail collection and leave this step with no clean
+    GREEN. The `StrategySpec` tests are appended in step 14.
 13. **Domain contract tests** in
     `tests/unit/domain/test_domain_capability_contracts.py` for
     `CapabilityName`, `VocabularyVersion`, `CapabilityRequirement`,
@@ -2152,7 +2452,9 @@ literal specification list, so no field set is invented.
     `StrategySpec` green requires all three domain modules, because
     `required_capabilities`, `supported_approximation_policy`, and
     `comparison_requirements` depend on them, so their RED is unobservable
-    afterwards.
+    afterwards. This step also carries the approximation-policy and
+    minimum-semantics tests required by items B and C of the reviewed
+    correction above.
 14. `StrategySpec` accepts `sma_cross_long.valid.yaml` and rejects an unknown
     field. This is deliberately **last** in the sequence: it is the step that
     forces every preceding type into existence, so every module-missing RED in
