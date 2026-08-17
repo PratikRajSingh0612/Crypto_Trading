@@ -55,6 +55,7 @@ _ALLOWED_SOURCE_FILES = {
     "strategy/__init__.py",
     "strategy/expressions.py",
     "strategy/models.py",
+    "strategy/validation.py",
     "strategy/yaml_source.py",
 }
 _ALLOWED_IMPORT_ROOTS = {

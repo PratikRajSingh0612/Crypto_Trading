@@ -27,6 +27,7 @@ PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab.strategy",
     "crypto_lab.strategy.expressions",
     "crypto_lab.strategy.models",
+    "crypto_lab.strategy.validation",
     "crypto_lab.strategy.yaml_source",
     "crypto_lab.capabilities",
     "crypto_lab.adapters",
