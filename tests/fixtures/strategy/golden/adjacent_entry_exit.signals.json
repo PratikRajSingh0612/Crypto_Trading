@@ -1,0 +1,16 @@
+{
+  "bar_count": 5,
+  "entry_signals": [
+    {
+      "rule_id": "enter_cross",
+      "values": [false, false, true, false, false]
+    }
+  ],
+  "exit_signals": [
+    {
+      "rule_id": "exit_cross",
+      "values": [false, false, false, true, false]
+    }
+  ],
+  "skipped_bars": [false, false, false, false, false]
+}

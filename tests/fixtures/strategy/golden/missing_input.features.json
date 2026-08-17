@@ -1,0 +1,17 @@
+{
+  "bar_count": 6,
+  "features": [
+    {
+      "feature_id": "close_now",
+      "values": ["2", "4", "6", "8", "10", "12"]
+    },
+    {
+      "feature_id": "late_mean",
+      "values": [null, null, null, "5", "7", "9"]
+    },
+    {
+      "feature_id": "propagated",
+      "values": [null, null, null, "5", "7", "9"]
+    }
+  ]
+}

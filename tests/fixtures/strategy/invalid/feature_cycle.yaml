@@ -1,0 +1,122 @@
+schema_version: "1.0.0"
+strategy_id: strat_3f2504e0-4f89-41d3-9a0c-0305e82c3301
+display_name: SMA Cross Long
+description: Enters long when a fast average crosses above a slow average and exits on the reverse cross.
+strategy_family: trend_following
+market_type: SPOT
+direction: LONG
+timeframe: 1h
+universe:
+  kind: STATIC
+  instruments:
+    - BINANCE:BTC/USDT:SPOT
+required_capabilities:
+  - schema_version: "1.0.0"
+    capability: market.spot
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_1
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: direction.long
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_1
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: data.ohlcv
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_1
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: execution.bar_market
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: runtime.backtest
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels: []
+parameters:
+  fast_period:
+    value_type: INTEGER
+    value: 20
+    minimum: 2
+  slow_period:
+    value_type: INTEGER
+    value: 50
+    minimum: 3
+# The only difference from sma_cross_long.valid.yaml: each average declares the
+# other as its input, forming a two-member cycle. Both warm-up values are 50 so
+# that no dependency-warm-up defect can appear beside the cycle diagnostic, and
+# every other field is byte-identical to the valid fixture.
+features:
+  - id: fast_sma
+    operation: indicator.sma/v1
+    inputs:
+      - slow_sma
+    parameters:
+      period: fast_period
+    output_type: DECIMAL
+    warm_up_bars: 50
+    missing_value_policy: PROPAGATE_FALSE
+  - id: slow_sma
+    operation: indicator.sma/v1
+    inputs:
+      - fast_sma
+    parameters:
+      period: slow_period
+    output_type: DECIMAL
+    warm_up_bars: 50
+    missing_value_policy: PROPAGATE_FALSE
+entry_rules:
+  - id: enter_cross
+    expression:
+      op: crosses_above
+      left:
+        op: ref
+        id: fast_sma
+        bars_ago: 0
+      right:
+        op: ref
+        id: slow_sma
+        bars_ago: 0
+exit_rules:
+  - id: exit_cross
+    expression:
+      op: crosses_below
+      left:
+        op: ref
+        id: fast_sma
+        bars_ago: 0
+      right:
+        op: ref
+        id: slow_sma
+        bars_ago: 0
+sizing_intent:
+  method: FRACTION_OF_AVAILABLE_QUOTE
+  fraction: "1"
+risk_assumptions:
+  leverage: "1"
+  shorting_allowed: false
+warm_up_requirements:
+  minimum_bars: 50
+comparison_requirements:
+  maximum_level: LEVEL_2
+supported_approximation_policy:
+  default: REJECT
+engine_extensions: []
+authoring_metadata:
+  author: local_user
+  created_at_utc: "2026-08-10T00:00:00Z"

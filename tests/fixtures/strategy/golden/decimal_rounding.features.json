@@ -1,0 +1,23 @@
+{
+  "bar_count": 5,
+  "features": [
+    {
+      "feature_id": "close_now",
+      "values": ["1", "1", "0", "0", "0"]
+    },
+    {
+      "feature_id": "mean_three",
+      "values": [
+        null,
+        null,
+        "0.6666666666666666666666666666666667",
+        "0.3333333333333333333333333333333333",
+        "0"
+      ]
+    },
+    {
+      "feature_id": "sum_three",
+      "values": [null, null, "2", "1", "0"]
+    }
+  ]
+}

@@ -1,0 +1,145 @@
+schema_version: "1.0.0"
+strategy_id: strat_44444444-5555-4666-b777-888888888888
+display_name: Bar Offsets
+description: Isolates the current bar and permitted historical bar offsets through feature-level shifting.
+strategy_family: offset_probe
+market_type: SPOT
+direction: LONG
+timeframe: 1h
+universe:
+  kind: STATIC
+  instruments:
+    - BINANCE:BTC/USDT:SPOT
+required_capabilities:
+  - schema_version: "1.0.0"
+    capability: market.spot
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_1
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: direction.long
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_1
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: data.ohlcv
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_1
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: execution.bar_market
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: runtime.backtest
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels: []
+parameters:
+  shift_zero:
+    value_type: INTEGER
+    value: 0
+    minimum: 0
+  shift_one:
+    value_type: INTEGER
+    value: 1
+    minimum: 0
+  shift_two:
+    value_type: INTEGER
+    value: 2
+    minimum: 0
+# The offset mechanism under test is the feature-level `shift/v1` operation, not
+# `RefExpression.bars_ago`, because this scenario's golden is a features file.
+# A shift of zero bars is the current fully closed bar; a shift of one or two
+# bars names an earlier closed bar and is missing while that bar is pre-history.
+# No future reference is expressible here: a negative offset is rejected at
+# construction and `shift/v1` accepts none.
+features:
+  - id: close_now
+    operation: source.bar_field/v1
+    inputs:
+      - bar.close
+    parameters: {}
+    output_type: DECIMAL
+    warm_up_bars: 0
+    missing_value_policy: PROPAGATE_FALSE
+  - id: offset_zero
+    operation: shift/v1
+    inputs:
+      - close_now
+    parameters:
+      bars: shift_zero
+    output_type: DECIMAL
+    warm_up_bars: 0
+    missing_value_policy: PROPAGATE_FALSE
+  - id: offset_one
+    operation: shift/v1
+    inputs:
+      - close_now
+    parameters:
+      bars: shift_one
+    output_type: DECIMAL
+    warm_up_bars: 0
+    missing_value_policy: PROPAGATE_FALSE
+  - id: offset_two
+    operation: shift/v1
+    inputs:
+      - close_now
+    parameters:
+      bars: shift_two
+    output_type: DECIMAL
+    warm_up_bars: 0
+    missing_value_policy: PROPAGATE_FALSE
+entry_rules:
+  - id: enter_on_historical_offset
+    expression:
+      op: greater_than
+      left:
+        op: ref
+        id: bar.close
+        bars_ago: 2
+      right:
+        op: literal
+        value_type: DECIMAL
+        value: "15"
+exit_rules:
+  - id: exit_on_current_offset
+    expression:
+      op: greater_than
+      left:
+        op: ref
+        id: bar.close
+        bars_ago: 0
+      right:
+        op: literal
+        value_type: DECIMAL
+        value: "45"
+sizing_intent:
+  method: FRACTION_OF_AVAILABLE_QUOTE
+  fraction: "1"
+risk_assumptions:
+  leverage: "1"
+  shorting_allowed: false
+warm_up_requirements:
+  minimum_bars: 0
+comparison_requirements:
+  maximum_level: LEVEL_2
+supported_approximation_policy:
+  default: REJECT
+engine_extensions: []
+authoring_metadata:
+  author: local_user
+  created_at_utc: "2026-08-10T00:00:00Z"

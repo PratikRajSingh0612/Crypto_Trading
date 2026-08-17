@@ -1,0 +1,37 @@
+{
+  "bar_count": 54,
+  "entry_signals": [
+    {
+      "rule_id": "enter_cross",
+      "values": [
+        false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false,
+        false, false, false, true
+      ]
+    }
+  ],
+  "exit_signals": [
+    {
+      "rule_id": "exit_cross",
+      "values": [
+        false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false,
+        false, false, false, false, false, false, false, false, false, false,
+        false, true, false, false
+      ]
+    }
+  ],
+  "skipped_bars": [
+    false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false, false, false, false, false, false, false,
+    false, false, false, false
+  ]
+}

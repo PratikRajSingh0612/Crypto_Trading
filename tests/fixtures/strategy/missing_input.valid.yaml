@@ -1,0 +1,124 @@
+schema_version: "1.0.0"
+strategy_id: strat_33333333-4444-4555-a666-777777777777
+display_name: Missing Input
+description: Isolates the declared missing-value policy when a window reaches before the first bar.
+strategy_family: missing_probe
+market_type: SPOT
+direction: LONG
+timeframe: 1h
+universe:
+  kind: STATIC
+  instruments:
+    - BINANCE:BTC/USDT:SPOT
+required_capabilities:
+  - schema_version: "1.0.0"
+    capability: market.spot
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_1
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: direction.long
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_1
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: data.ohlcv
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_1
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: execution.bar_market
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels:
+      - LEVEL_2
+  - schema_version: "1.0.0"
+    capability: runtime.backtest
+    required: true
+    minimum_semantics: capabilities/v1
+    approximation_policy: REJECT
+    comparison_levels: []
+parameters:
+  window_four:
+    value_type: INTEGER
+    value: 4
+    minimum: 1
+# Every feature declares warm-up 0, so no cell is missing because of warm-up.
+# `late_mean` is missing on bars 0 to 2 purely because its four-bar window
+# reaches before the first bar, which is the missing-input condition itself, and
+# `propagated` shows that missing propagates through a dependent feature rather
+# than becoming a value. `PROPAGATE_FALSE` is deliberate: `REJECT_DATASET` would
+# return a failure with no series at all, so this scenario could not have a
+# feature golden.
+features:
+  - id: close_now
+    operation: source.bar_field/v1
+    inputs:
+      - bar.close
+    parameters: {}
+    output_type: DECIMAL
+    warm_up_bars: 0
+    missing_value_policy: PROPAGATE_FALSE
+  - id: late_mean
+    operation: rolling.mean/v1
+    inputs:
+      - bar.close
+    parameters:
+      window: window_four
+    output_type: DECIMAL
+    warm_up_bars: 0
+    missing_value_policy: PROPAGATE_FALSE
+  - id: propagated
+    operation: expression.project/v1
+    inputs:
+      - late_mean
+    parameters: {}
+    output_type: DECIMAL
+    warm_up_bars: 0
+    missing_value_policy: PROPAGATE_FALSE
+entry_rules:
+  - id: enter_when_late_mean_is_positive
+    expression:
+      op: greater_than
+      left:
+        op: ref
+        id: late_mean
+        bars_ago: 0
+      right:
+        op: literal
+        value_type: DECIMAL
+        value: "0"
+exit_rules:
+  - id: exit_when_propagated_is_missing
+    expression:
+      op: is_missing
+      operand:
+        op: ref
+        id: propagated
+        bars_ago: 0
+sizing_intent:
+  method: FRACTION_OF_AVAILABLE_QUOTE
+  fraction: "1"
+risk_assumptions:
+  leverage: "1"
+  shorting_allowed: false
+warm_up_requirements:
+  minimum_bars: 0
+comparison_requirements:
+  maximum_level: LEVEL_2
+supported_approximation_policy:
+  default: REJECT
+engine_extensions: []
+authoring_metadata:
+  author: local_user
+  created_at_utc: "2026-08-10T00:00:00Z"

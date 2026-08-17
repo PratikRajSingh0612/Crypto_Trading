@@ -1,0 +1,21 @@
+{
+  "bar_count": 5,
+  "features": [
+    {
+      "feature_id": "close_now",
+      "values": ["10", "20", "30", "40", "50"]
+    },
+    {
+      "feature_id": "offset_one",
+      "values": [null, "10", "20", "30", "40"]
+    },
+    {
+      "feature_id": "offset_two",
+      "values": [null, null, "10", "20", "30"]
+    },
+    {
+      "feature_id": "offset_zero",
+      "values": ["10", "20", "30", "40", "50"]
+    }
+  ]
+}
