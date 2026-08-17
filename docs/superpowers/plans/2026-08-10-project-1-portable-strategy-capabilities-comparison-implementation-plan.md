@@ -1195,6 +1195,133 @@ unsatisfiable. Stage 4 resolves this as follows:
 - No wall-clock, filesystem, network, environment, hash-seed, or random source
   is read anywhere in Stage 4 code.
 
+#### 5.4.1 Bounded diagnostic output — reviewed correction
+
+`Failure.diagnostics` is `min_length=1, max_length=256` in
+`crypto_lab/domain/results.py`, and `MAX_RESULT_DIAGNOSTICS = 256`. **Both are
+preserved unchanged.** No Stage 4 task widens, narrows, or removes that bound,
+and no Stage 4 task modifies `domain/results.py` for this policy: `Failure`
+itself is **not** changed. The problem this subsection closes is that a validator
+can legitimately find more than 256 distinct defects, and the three obvious
+responses are all forbidden — raising violates the `Result`-only contract,
+returning 257 items violates `Failure`, and slicing to 256 silently is
+indistinguishable to a consumer from "there were exactly 256".
+
+**The contract.**
+
+0. **Two entry conditions make identity well behaved.** Every diagnostic entering
+   a bounded Stage 4 combiner carries **no correlation ID** — `experiment_id`,
+   `run_id`, `invocation_id`, and `engine` are all absent — and an **empty**
+   `causal_diagnostic_ids`. Both constraints are load-bearing rather than
+   incidental, because section 5.3.3 *includes* "any correlation IDs" in the
+   identity payload while deliberately *excluding* `causal_diagnostic_ids` from
+   it. Without the first, two diagnostics agreeing on error code and details but
+   differing in a correlation ID would receive different identities, survive
+   deduplication, and then tie on any content key. Without the second, two
+   diagnostics differing **only** in `causal_diagnostic_ids` would share one
+   identity, so which payload survived deduplication would depend on arrival
+   order. Neither hazard is reachable once both constraints hold, and Stage 4
+   emits no correlated or causally linked diagnostic anywhere, so nothing is
+   given up.
+1. **Deduplicate first, bound second.** Deduplication happens **before** the
+   output bound is applied, so the bound is counted in *unique* diagnostics.
+   Under item 0 the section 5.3.3 identity payload reduces to a function of
+   `(error_code, source_component, details)`, so equal identity means a
+   byte-identical diagnostic and deduplication can never drop a distinct one.
+2. **Order is a documented total order.** Substantive diagnostics are emitted in
+   the producing entry point's own documented stable ordering, declared in that
+   entry point's task section. The key must be a **total** order over material
+   content, so no tie can be resolved by generation order and no source
+   permutation can change the retained set or its sequence. A key that leaves a
+   genuine tie is not acceptable, because a permutation test over a tying key
+   passes vacuously.
+3. **0 unique diagnostics** → `Success`. `Failure` requires at least one
+   diagnostic, so an empty finding set is never a `Failure`.
+4. **1 through 256 unique diagnostics** → a `Failure` carrying **every** unique
+   diagnostic, in canonical order, with **no** marker. Diagnostics are complete
+   in this range.
+5. **257 or more unique diagnostics** → a `Failure` carrying exactly **256**
+   entries: the **first 255** substantive diagnostics in canonical order,
+   followed by **one** terminal diagnostic-limit marker.
+6. **The marker is always last.** Its position is the signal, so it is appended
+   after ordering and is never itself sorted into the substantive run.
+7. **Silent truncation is forbidden.** A consumer must be able to distinguish
+   "exactly 256 defects" from "at least 257 defects" by inspecting the returned
+   tuple alone, with no out-of-band information.
+8. **Expected validation overflow never raises.** Crossing the bound is an
+   ordinary, expected outcome of an adversarial or badly authored strategy. It
+   produces a `Result` failure, never a `ValidationError`, `IndexError`, or any
+   other exception escaping the entry point.
+
+**The marker contract**, fixed exactly:
+
+| Field | Value |
+|---|---|
+| `error_code` | `STRATEGY.DIAGNOSTIC_LIMIT_REACHED` |
+| `severity` | `ERROR` |
+| `category` | `SCHEMA_VALIDATION` — chosen deliberately. `Diagnostic.validate_causes` requires an `invocation_id` for `ENGINE_RUNTIME`, `PROTOCOL`, `TIMEOUT`, and `CANCELLATION`, and item 0 forbids correlation IDs, so those four are unavailable. `INTERNAL_INVARIANT` would misdescribe an expected outcome, and `SECURITY` is reserved for adversarial nesting bounds. The marker reports that a schema-validation pass exceeded its own output contract, so it stays with the pass that produced it |
+| `message` | one fixed bounded literal, never interpolated from input |
+| `retriable` | `false` |
+| `timestamp_utc` | the entry point's explicit `observed_at_utc`, per section 5.3.3 item 2 |
+| `source_component` | the producing module's own fixed literal component name |
+| `details` | deterministic, equivalent to `diagnostic_limit = 256` and `retained_diagnostics = 255`, and nothing else |
+| `diagnostic_id` | derived from that complete payload exactly as section 5.3.3 requires |
+| `causal_diagnostic_ids` | empty |
+
+**No omitted count.** `details` carries no "omitted" or "total" figure. The
+combiner is permitted to **stop generating** once it holds the 257th unique
+diagnostic, which is what makes the bound a work bound and not merely an output
+bound; a combiner that stops there provably does not know the true total, so
+publishing one would be a fabricated number. An omitted count may be added only
+if it is separately calculated through a proven bounded process, and no Stage 4
+task is authorized to add one.
+
+**The boundary is intentionally discontinuous.** At 256 unique diagnostics the
+result carries 256 substantive entries; at 257 it carries 255 substantive entries
+plus the marker, so crossing the boundary drops one more substantive diagnostic
+than arithmetic alone requires. That is deliberate: `retained_diagnostics` is
+fixed at 255 by the marker contract above, which keeps the marker's payload — and
+therefore its derived `diagnostic_id` — constant for every overflow size instead
+of varying with a count the combiner may not know. This is recorded so it is not
+read as an off-by-one.
+
+**Diagnostic completeness, stated exactly.** Wherever this plan describes a
+bounded entry point's diagnostics, the governing statement is:
+
+> Diagnostics are complete when the unique diagnostic count is at most 256.
+> Beyond that bound, the result returns the first 255 substantive diagnostics in
+> canonical order plus the explicit terminal diagnostic-limit marker.
+
+That sentence supersedes any absolute claim of unconditional completeness for a
+bounded entry point. For the record, Task 4's own section contained no such
+absolute claim before this correction — the "complete feature and signal series"
+language in section 5.6 and Task 4 is about **series**, not diagnostics, and is
+unaffected — so nothing was silently rewritten and the sentence above is stated
+rather than substituted.
+
+**This subsection also amends section 5.4 bullet 3 on sortedness, and the
+amendment is stated rather than left implicit.** Bullet 3 requires every
+diagnostic collection to be "deduplicated and sorted by a fixed key before
+return". Item 6 above appends the marker **after** ordering, and
+`STRATEGY.DIAGNOSTIC_LIMIT_REACHED` would sort **first** among the `STRATEGY.*`
+codes on any error-code-leading key, so a wholly sorted tuple is incompatible
+with a terminal marker. The amended rule is therefore: the returned tuple is the
+deduplicated, canonically sorted substantive run, followed — when and only when
+the bound is exceeded — by the single terminal marker. Determinism is unaffected,
+because the marker's presence and position are both fixed functions of the unique
+diagnostic count.
+
+**Scope, and Task 3 is not reopened.** This policy is introduced by the present
+correction and binds the **Task 4 diagnostic combiner** and every later Stage 4
+entry point whose unique diagnostic count can exceed the bound. Task 3's
+committed `validate_strategy_expressions` predates it: that function truncates
+its sorted, deduplicated prefix at exactly `MAX_RESULT_DIAGNOSTICS`, so it
+returns at most 256 diagnostics and **does not violate `Failure`'s bound**. It is
+explicitly **not** reopened by this correction, and Task 4 must not modify it
+unless a focused regression proves that its own implementation independently
+violates the 256-diagnostic contract. Aligning it with the marker policy is a
+separate scope ruling, not Task 4 work.
+
 ### 5.5 Strategy identity
 
 `StrategyVersion.content_hash` is
@@ -1365,7 +1492,7 @@ STRATEGY.FEATURE_WARM_UP_TOO_SMALL   STRATEGY.PARAMETER_OUT_OF_BOUNDS
 STRATEGY.EXTENSION_DECLARATION       STRATEGY.POLICY_FORBIDDEN_MARKET
 STRATEGY.POLICY_FORBIDDEN_DIRECTION  STRATEGY.EVALUATION_DIVIDE_BY_ZERO
 STRATEGY.EVALUATION_NON_FINITE       STRATEGY.EVALUATION_SERIES_TOO_LONG
-STRATEGY.EVALUATION_MISSING_INPUT
+STRATEGY.EVALUATION_MISSING_INPUT    STRATEGY.DIAGNOSTIC_LIMIT_REACHED
 CAPABILITY.UNKNOWN_NAME              CAPABILITY.VOCABULARY_VERSION
 CAPABILITY.DECLARATION_OVERLAP       CAPABILITY.REQUIREMENT_UNMET
 CAPABILITY.APPROXIMATION_DISALLOWED  CAPABILITY.APPROXIMATION_MISSING
@@ -1376,6 +1503,14 @@ COMPARISON.DATASET_HASH_MISMATCH     COMPARISON.ASSUMPTION_MISMATCH
 COMPARISON.APPROXIMATION_EXCLUDES_LEVEL
 COMPARISON.SCHEMA_VERSION_MISMATCH   COMPARISON.METHODOLOGY_MISMATCH
 ```
+
+**Reviewed correction — exactly one code added.**
+`STRATEGY.DIAGNOSTIC_LIMIT_REACHED` is the sole addition to this closed table
+since the plan was approved. It is the terminal diagnostic-limit marker defined
+in section 5.4.1, and it is the only code that correction introduces. No other
+code is added, and none is removed — `STRATEGY.REFERENCE_FUTURE_BAR` in
+particular remains reserved per section 6.5.2. Any further addition still
+requires a plan amendment.
 
 ## 6. Exact Stage 4 file map
 
@@ -1510,13 +1645,210 @@ missing_input.valid.yaml                  golden/bar_offsets.features.json
 bar_offsets.valid.yaml                    golden/decimal_rounding.features.json
 decimal_rounding.valid.yaml               golden/adjacent_entry_exit.signals.json
 adjacent_entry_exit.valid.yaml
-invalid/future_reference.yaml             invalid/python_tag.yaml
-invalid/unknown_tag.yaml                  invalid/duplicate_key.yaml
-invalid/merge_key.yaml                    invalid/two_documents.yaml
-invalid/billion_laughs.yaml               invalid/deep_nesting.yaml
-invalid/recursive_alias.yaml              invalid/feature_cycle.yaml
-invalid/unknown_operation.yaml            invalid/type_mismatch.yaml
+invalid/python_tag.yaml                   invalid/unknown_tag.yaml
+invalid/duplicate_key.yaml                invalid/merge_key.yaml
+invalid/two_documents.yaml                invalid/billion_laughs.yaml
+invalid/deep_nesting.yaml                 invalid/recursive_alias.yaml
+invalid/feature_cycle.yaml
 ```
+
+This inventory is the **exact** set of expected-created fixture files. It is the
+list a reviewer compares against the filesystem, so it names no file that no
+task creates. Three `invalid/` names an earlier draft listed here have been
+removed from it and carry recorded non-created dispositions in the table below.
+
+#### 6.5.1 `invalid/` fixture disposition table — reviewed correction
+
+The eight `invalid/` files Task 2 shipped at `9a2c73f` need no entry: they exist
+and their tests pass. This table closes the four names that had **no** creating
+task, which was a plan defect rather than an implementation defect. Removing a
+name from the inventory removes **only the file**; every behavioural test the
+plan requires for that condition is preserved and named below.
+
+| # | Fixture path | Disposition | Behaviour that remains mandatory |
+|---|---|---|---|
+| 1 | `invalid/feature_cycle.yaml` | **`CREATED_BY_TASK_4`** | Task 4 step 2. Added to Task 4's Files list by this correction; the only new fixture path authorized |
+| 2 | `invalid/future_reference.yaml` | **`NOT_CREATED_UNREACHABLE_IN_EXPRESSIONS_V1`** | `STRATEGY.REFERENCE_FUTURE_BAR` remains reserved in the section 5.9 closed table. No dead branch and no misleading fixture is added. See section 6.5.2 |
+| 3 | `invalid/unknown_operation.yaml` | **`NOT_CREATED_DIRECT_TASK2_TASK3_TEST_COVERAGE`** | **Expression-level** closed-union rejection of an unknown `op` remains **mandatory**, covered directly by Task 2's `tests/unit/strategy/test_strategy_expressions.py` discriminator-closure tests and by Task 3's dispatch-table closure test. A YAML fixture cannot test it better: the discriminated union rejects an unknown `op` at model construction, which is upstream of any fixture. The **feature-level** case is a separate obligation — see the note below |
+| 4 | `invalid/type_mismatch.yaml` | **`NOT_CREATED_DIRECT_TASK3_TEST_COVERAGE`** | **Expression-level** static type rejection remains **mandatory**, covered directly by Task 3 step 2's three named cases — boolean operand to `add`, decimal operand to `and`, string compared to integer — as in-module trees rather than a file. The **feature-level** case is a separate obligation — see the note below |
+
+Entries 3 and 4 follow section 6.5.4's own existing rule: a case whose expected
+error code *is* the whole assertion is authored in the test module, and only
+multi-line adversarial documents and the valid golden inputs are fixture files.
+Neither disposition weakens a validation rule, and neither removes a test.
+
+**Both fixture names were ambiguous between two levels, and the feature level is
+discharged separately, not dropped.** `unknown_operation` matches both
+`STRATEGY.EXPRESSION_UNKNOWN_OP` and `STRATEGY.FEATURE_UNKNOWN_OPERATION`;
+`type_mismatch` matches both `STRATEGY.EXPRESSION_TYPE_MISMATCH` on an expression
+operand and the same code on a feature **input**. Rows 3 and 4 discharge the
+expression level only. The feature level is a **rank-1 normative requirement** —
+specification section 12.3.1 line 701 states that "A feature graph must be
+acyclic, every input must exist and type-check, and declared warm-up must be at
+least the maximum dependency warm-up", and the feature-operation allowlist is
+Task 4's — so it is discharged by three **named Task 4 tests**, added to Task 4's
+test requirements by this correction rather than left to a removed fixture:
+
+1. a `FeatureDefinition.operation` outside Task 4's closed feature-operation
+   allowlist yields `STRATEGY.FEATURE_UNKNOWN_OPERATION`;
+2. a feature `input` naming neither a permitted bar field nor a declared feature
+   yields `STRATEGY.REFERENCE_UNKNOWN`;
+3. a feature `input` or `parameter` whose declared type does not satisfy its
+   operation's typed signature yields `STRATEGY.EXPRESSION_TYPE_MISMATCH`.
+
+No new error code is required for any of the three: all are already in the
+section 5.9 closed table. This closes what would otherwise have been a real
+coverage hole — before this correction, `STRATEGY.FEATURE_UNKNOWN_OPERATION`
+appeared nowhere in `src/` or `tests/`, and `FeatureDefinition.operation` is
+pattern-validated only, so an operation such as `bogus.thing/v1` constructs
+cleanly today.
+
+#### 6.5.2 `future_reference` — the recorded `strategy/v1` disposition
+
+Task 3's test-first step 4 (this document, Task 3 step 4) reads
+"`invalid/future_reference.yaml` is rejected with
+`STRATEGY.REFERENCE_FUTURE_BAR`". That step is **resolved, not outstanding**, by
+a recorded execution ruling, and this subsection is its authoritative home so
+the two statements cannot be read as a live contradiction:
+
+1. `RefExpression.bars_ago` is non-negative by model contract, and
+   specification line 699 makes `bars_ago = 0` the current **fully closed** bar
+   and `bars_ago > 0` an earlier closed bar. A non-negative offset therefore
+   names a current or historical closed bar only.
+2. A negative `bars_ago` is rejected at `StrategySpec` construction with
+   `STRATEGY.REFERENCE_NEGATIVE_OFFSET`, before static validation and before any
+   evaluation.
+3. Within `expressions/v1` there is consequently **no representable expression
+   that names a future or still-open bar**. The condition is unrepresentable, not
+   merely untested.
+4. Task 4 therefore adds no `future_reference` fixture, no
+   `STRATEGY.REFERENCE_FUTURE_BAR` evaluator branch, and no negative-offset
+   workaround. Task 4's own evaluator API takes an explicit bounded in-memory bar
+   series and cannot observe an attempted future read either, so Task 4 records
+   this finding rather than adding dead code.
+5. `STRATEGY.REFERENCE_FUTURE_BAR` **remains reserved** in the section 5.9 closed
+   table for a future expression-semantics version whose grammar can represent
+   the condition. It is not removed, and removing it is not authorized.
+6. **The rank-1 coverage requirement is cited and discharged, not dissolved.**
+   Specification section **12.3.3 line 713** states: "Golden examples cover
+   first-valid warm-up bar, crossover equality boundaries, missing inputs,
+   explicit bar offsets, Decimal rounding, entry and exit on adjacent bars, and
+   invalid future references." That sentence is the normative origin of all seven
+   golden scenarios: six became the root `*.valid.yaml` inputs of section 6.5.3,
+   and the seventh is this one. Until this correction the plan had never cited
+   section 12.3.3 at all, and citing only line 699 — which is the **prohibition**,
+   not the **coverage requirement** — would let a rank-6 document quietly close a
+   rank-1 item. It is therefore discharged explicitly, in-module rather than by a
+   fixture file, by these **committed** tests:
+   - `tests/unit/strategy/test_strategy_expressions.py::test_a_negative_offset_is_rejected_with_the_negative_offset_code`
+   - `tests/unit/strategy/test_strategy_validation.py::test_a_negative_offset_is_rejected_by_its_own_exact_diagnostic`
+   - `tests/unit/strategy/test_strategy_validation.py::test_no_accepted_reference_model_can_carry_a_negative_offset`
+   - `tests/unit/strategy/test_strategy_validation.py::test_every_accepted_reference_in_a_validated_specification_is_historical`
+   - `tests/unit/strategy/test_strategy_validation.py::test_the_module_emits_exactly_its_own_three_error_codes`
+
+   The emitted code is `STRATEGY.REFERENCE_NEGATIVE_OFFSET`, because that is the
+   only way `expressions/v1` can express the invalid-future-reference condition at
+   all. No fixture file is added, because a fixture would have to encode an
+   expression the grammar cannot represent. This is a "covered elsewhere, and
+   better" discharge — the same class of argument section 6.5.1 rows 3 and 4 use —
+   not a claim that no coverage is owed. Should a controller prefer a fixture
+   instead, that requires a fresh human ruling; a plan amendment alone cannot
+   grant it.
+
+#### 6.5.3 Fixture roles, ownership, and golden pairings — reviewed correction
+
+**Two roles, never mixed.** Root-level `*.valid.yaml` files are complete
+`StrategySpec` **input** documents. `tests/fixtures/strategy/golden/**` holds
+expected evaluator **output** JSON and nothing else. `golden/**` is output-only;
+no input document may be placed beneath it.
+
+**Ownership.**
+
+| Fixture set | Owning task |
+|---|---|
+| `sma_cross_long.{valid,reordered_keys,commented}.yaml` | Task 2 (committed at `9a2c73f`); Task 4 **consumes** them |
+| the eight `invalid/` files Task 2 shipped | Task 2 (committed at `9a2c73f`) |
+| `invalid/feature_cycle.yaml` | **Task 4** |
+| the six root `*.valid.yaml` golden inputs below | **Task 4** |
+| `golden/**` expected-output JSON | **Task 4** |
+
+**Exact input-to-golden pairings.** Each input has exactly one defined pairing:
+
+```text
+warm_up_boundary.valid.yaml      -> golden/warm_up_boundary.features.json
+crossover_equality.valid.yaml    -> golden/crossover_equality.signals.json
+missing_input.valid.yaml         -> golden/missing_input.features.json
+bar_offsets.valid.yaml           -> golden/bar_offsets.features.json
+decimal_rounding.valid.yaml      -> golden/decimal_rounding.features.json
+adjacent_entry_exit.valid.yaml   -> golden/adjacent_entry_exit.signals.json
+sma_cross_long.valid.yaml        -> golden/sma_cross_long.features.json
+                                 -> golden/sma_cross_long.signals.json
+```
+
+**Construction rules.** Every new YAML input must: be a complete valid
+`StrategySpec` document; pass the safe YAML loader; pass strict `StrategySpec`
+construction; pass Task 3 static expression validation; pass feature-reference
+validation apart from the behaviour intentionally under test; use only existing
+Stage 4 operations and types; remain spot-only, long-only, no-leverage, and
+non-live; be UTF-8 without BOM; use LF line endings; contain no path, credential,
+network, environment, or engine-specific material; supply its own basename as the
+non-path `SourceName` given to the loader; and isolate its named behaviour with
+the smallest reviewable strategy.
+
+**Scenario intent must stay distinct** — these are not aliases of one strategy:
+
+| Fixture | Isolates |
+|---|---|
+| `warm_up_boundary` | the exact first bar on which a feature becomes available after warm-up |
+| `crossover_equality` | the **equality edge** of the approved crossover definition, not merely another ordinary crossing |
+| `missing_input` | the approved missing-value behaviour, with no unrelated type, reference, or cycle failure |
+| `bar_offsets` | current-bar and permitted historical offsets. Its golden is a **features** file, so the offset mechanism under test is the feature-level `shift/v1` operation, not `RefExpression.bars_ago`. It must **not** attempt to encode an unrepresentable future reference (section 6.5.2) |
+| `decimal_rounding` | exact `Decimal` semantics; a Python `float` is never the expected-value authority |
+| `adjacent_entry_exit` | the approved behaviour when entry and exit signals occur on **adjacent** bars |
+
+No economic semantics beyond the approved plan may be invented.
+
+**Two committed constraints an author will otherwise trip.** Both are recorded
+here because they are invisible from the fixture's own text:
+
+1. **Negative zero is forbidden at the canonical boundary.** `format_decimal` in
+   `crypto_lab/domain/financial.py` raises `ValueError("negative zero is
+   forbidden")`, so a `Decimal("-0")` intermediate — which `negate` of zero and
+   `multiply` by zero both produce — would raise out of canonical serialization
+   and out of the `Result`-only contract. The evaluator must normalize a zero
+   result to unsigned zero before it reaches serialization, and
+   `decimal_rounding` must cover that case.
+2. **Timestamps cannot be ordered.** Task 3 types `bar.timestamp_utc` as `STRING`
+   and narrows `ORDERING` to numeric operands, so only `equal` and `not_equal`
+   accept a timestamp. A fixture that compares timestamps with a relational
+   operator earns `STRATEGY.EXPRESSION_TYPE_MISMATCH` and fails its own
+   construction rule that it must pass Task 3 static validation.
+
+**Golden outputs are review oracles, not evaluator transcripts.** This restates
+and sharpens section 7's existing rule. An expected JSON file must **not** be
+created by running the production evaluator and copying its output. Each expected
+complete series is derived independently from the input bars, the feature
+definitions, declared warm-up, the missing-value policy, exact `Decimal`
+arithmetic, the crossover rules, and the entry and exit expressions. Tests may
+compare evaluator output against the reviewed JSON, but the implementation under
+test must never be the source used to author it. Each expected series is reviewed
+by hand, or by a separate test-only calculation whose logic does not call the
+production evaluator, **before** implementation.
+
+**TDD disposition.** Fixture files and expected JSON are test data, so they may be
+authored together with their focused tests before production implementation.
+"Fixture missing" is **not** an acceptable meaningful RED. The required RED must
+demonstrate missing or incorrect feature-graph or evaluation behaviour **after**
+the input YAML loads successfully, `StrategySpec` validates, and Task 3 static
+validation succeeds — so each scenario must be shown to reach the Task 4
+evaluator boundary.
+
+#### 6.5.4 Hash-equivalent triple and inline-literal cases
+
+These two paragraphs are pre-existing section 6.5 body text. Subsections 6.5.1 to
+6.5.3 were inserted above them and they were given this heading, so that the
+`future_reference` disposition does not appear to own them. Their wording is
+**unchanged** — the diff shows no deletion in this region, which is the proof.
 
 `sma_cross_long.valid.yaml`, `sma_cross_long.reordered_keys.yaml`, and
 `sma_cross_long.commented.yaml` differ only in comments, whitespace, and
@@ -1999,9 +2331,32 @@ prohibited dependency family entered.
 `tests/unit/strategy/test_strategy_yaml_bounds.py`,
 `tests/unit/strategy/test_strategy_expressions.py`,
 `tests/unit/strategy/test_strategy_models.py`,
-`tests/fixtures/strategy/**`, `tests/safety/test_stage3_boundaries.py`,
+`tests/fixtures/strategy/**` (see the ownership narrowing below),
+`tests/safety/test_stage3_boundaries.py`,
 `tests/safety/test_stage4_yaml_runtime.py`,
 `tests/unit/test_package_layout.py`.
+
+**Reviewed correction — Task 2's fixture glob is narrowed for the future, and
+Task 2's commit is not reopened.** As written, `tests/fixtures/strategy/**` also
+covers the paths section 6.5.3 assigns to Task 4, which would leave those paths
+dually owned and would make Task 4's own pre-staging prohibition on "Task 2 test"
+files contradict its enumerated fixture list. The glob is therefore read as:
+
+```text
+tests/fixtures/strategy/**  excluding
+    invalid/feature_cycle.yaml
+    warm_up_boundary.valid.yaml      crossover_equality.valid.yaml
+    missing_input.valid.yaml         bar_offsets.valid.yaml
+    decimal_rounding.valid.yaml      adjacent_entry_exit.valid.yaml
+    golden/**
+```
+
+Task 2 authored the eleven fixtures it actually shipped at `9a2c73f` —
+`sma_cross_long.{valid,reordered_keys,commented}.yaml` and eight `invalid/`
+files — and none of the excluded paths. This narrowing is a **forward bookkeeping
+correction to the plan text only**: it changes no committed file, requires no
+Task 2 re-execution, and is not retroactive Task 2 work. Task 4 owns the excluded
+paths outright per section 6.5.3.
 
 Task 1 creates `tests/safety/test_stage4_yaml_runtime.py`; Task 2 extends it
 with the two `StrictStrategySafeLoader` assertions and the yaml-import-closure
@@ -2519,7 +2874,13 @@ it and changes none of those definitions.
    construction and emits `STRATEGY.REFERENCE_NEGATIVE_OFFSET` there, so Task 3
    could not build such a tree to test.
 4. `invalid/future_reference.yaml` is rejected with
-   `STRATEGY.REFERENCE_FUTURE_BAR`.
+   `STRATEGY.REFERENCE_FUTURE_BAR`. **Resolved, not outstanding — see section
+   6.5.2.** The condition is unrepresentable in `expressions/v1`, the fixture is
+   `NOT_CREATED_UNREACHABLE_IN_EXPRESSIONS_V1`, the specification section 12.3.3
+   line 713 coverage requirement is discharged by named committed tests emitting
+   `STRATEGY.REFERENCE_NEGATIVE_OFFSET`, and `STRATEGY.REFERENCE_FUTURE_BAR`
+   remains reserved. This pointer is a plan-text cross-reference only; Task 3's
+   committed implementation and tests are unchanged and not reopened.
 5. Depth beyond `MAX_EXPRESSION_DEPTH` is rejected by the checker, complementing
    Task 2's model-level bound.
 6. Diagnostics from a rule with several errors are complete, deduplicated, and
@@ -2544,8 +2905,57 @@ Task 2's security review.
 `tests/unit/strategy/test_strategy_evaluation.py`,
 `tests/property/test_expression_evaluation.py`,
 `tests/fixtures/strategy/golden/**`,
+`tests/fixtures/strategy/invalid/feature_cycle.yaml`,
+`tests/fixtures/strategy/warm_up_boundary.valid.yaml`,
+`tests/fixtures/strategy/crossover_equality.valid.yaml`,
+`tests/fixtures/strategy/missing_input.valid.yaml`,
+`tests/fixtures/strategy/bar_offsets.valid.yaml`,
+`tests/fixtures/strategy/decimal_rounding.valid.yaml`,
+`tests/fixtures/strategy/adjacent_entry_exit.valid.yaml`,
 `tests/safety/test_stage3_boundaries.py`,
 `tests/unit/test_package_layout.py`.
+
+**Reviewed correction — Task 4 fixture ownership is exactly these eight
+entries**, and no other fixture path is authorized:
+
+```text
+tests/fixtures/strategy/golden/**                       (expected output only)
+tests/fixtures/strategy/invalid/feature_cycle.yaml
+tests/fixtures/strategy/warm_up_boundary.valid.yaml
+tests/fixtures/strategy/crossover_equality.valid.yaml
+tests/fixtures/strategy/missing_input.valid.yaml
+tests/fixtures/strategy/bar_offsets.valid.yaml
+tests/fixtures/strategy/decimal_rounding.valid.yaml
+tests/fixtures/strategy/adjacent_entry_exit.valid.yaml
+```
+
+Task 4 **consumes but does not own or recreate**
+`tests/fixtures/strategy/sma_cross_long.valid.yaml`, which Task 2 committed at
+`9a2c73f`.
+
+Two distinct plan file-map omissions are corrected here, both of them omissions
+rather than new behaviour, new features, Task 2 corrections, dependency changes,
+schema changes, Task 5 work, or Stage 5 work:
+
+1. **`invalid/feature_cycle.yaml`.** Task 4 step 2 has always required it, and
+   Task 2 — which owned `tests/fixtures/strategy/**` — deliberately did not author
+   it because its content depends on the feature-reference semantics Task 4 owns.
+   Without this entry the step demands a path outside Task 4's file map.
+2. **The six root `*.valid.yaml` golden inputs.** Section 6.5 defines two separate
+   fixture roles: root-level `*.valid.yaml` files are complete `StrategySpec`
+   **input** documents, and `tests/fixtures/strategy/golden/**` holds expected
+   evaluator **output** JSON. Task 4's original Files list assigned only the
+   output directory, yet steps 5 and 6 require the six named input strategies,
+   which Task 2 never created. Task 4 therefore could not execute its own
+   required golden tests. `golden/**` remains **exclusively** for expected
+   evaluator outputs: the six inputs must **not** be relocated beneath it, must
+   not be renamed, must not be merged into one general-purpose fixture, and
+   `sma_cross_long.valid.yaml` must not be substituted for a scenario whose
+   semantics it does not isolate.
+
+Section 6.5.1 records the non-created disposition of every remaining orphaned
+`invalid/` name. No further fixture path may be added to Task 4 without a new
+human scope ruling.
 
 **Produces:** `validate_feature_graph`, `topological_order`,
 `evaluate_level_one`.
@@ -2576,9 +2986,17 @@ Declared warm-up must be at least the maximum dependency warm-up.
    diagnostic.
 3. Topological order is stable and total: ties break by feature ID.
 4. Declared warm-up below the dependency maximum is rejected.
-5. Golden feature series for `warm_up_boundary`, `crossover_equality`,
-   `missing_input`, `bar_offsets`, and `decimal_rounding`.
-6. Golden signal series for `sma_cross_long` and `adjacent_entry_exit`.
+5. Golden **feature** series for `warm_up_boundary`, `missing_input`,
+   `bar_offsets`, and `decimal_rounding`, each against its section 6.5.3 pairing.
+   **Reviewed correction:** `crossover_equality` moves to step 6. The approved
+   step 5 listed it here, but section 6.5's inventory pairs it with
+   `golden/crossover_equality.signals.json` and not a `.features.json` file, and
+   the crossover equality edge is a **signal** boundary. The pairing table in
+   section 6.5.3 is authoritative; no `crossover_equality.features.json` exists
+   or is authorized.
+6. Golden **signal** series for `sma_cross_long`, `crossover_equality`, and
+   `adjacent_entry_exit`, each against its section 6.5.3 pairing. `sma_cross_long`
+   additionally has a feature-series golden, per that same table.
 7. Division by zero yields `STRATEGY.EVALUATION_DIVIDE_BY_ZERO`, not an
    exception or infinity.
 8. A non-finite intermediate yields `STRATEGY.EVALUATION_NON_FINITE`.
@@ -2586,6 +3004,224 @@ Declared warm-up must be at least the maximum dependency warm-up.
 10. Property test: evaluation is a pure function of `(spec, bars)`; two calls
     with equal inputs return equal outputs; the global Decimal context is
     unchanged after evaluation.
+
+**Reviewed correction — the Task 4 diagnostic combiner**
+
+Task 4 is the first task that combines diagnostics from more than one producer,
+so section 5.4.1's bounded-diagnostic contract binds it. The combiner must, in
+this exact order:
+
+1. **Combine** the relevant expression, graph, warm-up, duplicate-ID, and cycle
+   diagnostics into one collection.
+2. **Deduplicate** by `diagnostic_id`, which section 5.3.3 derives from the
+   complete material payload.
+3. **Apply the documented stable ordering** below.
+4. **Return all** unique diagnostics when the count is at most 256.
+5. **Return the first 255 plus the terminal marker** when the count exceeds 256,
+   with the marker last.
+
+**Task 4's documented total ordering key** is
+`(error_code, source_component, canonical_json_bytes(details))`, and the
+combiner's inputs satisfy section 5.4.1 item 0 — no correlation ID, empty
+`causal_diagnostic_ids`.
+
+**Why that key is total**, stated as a proof rather than asserted, because a
+permutation test over a key that admits a genuine tie passes vacuously:
+
+- `schema_version` is the fixed literal `"1.0.0"`.
+- `category`, `severity`, `message`, and `retriable` are fixed functions of
+  `(error_code, source_component)` through **each producer's** own closed per-code
+  table, and are never interpolated from input. The pair, not `error_code` alone,
+  is deliberate: `STRATEGY.EXPRESSION_TYPE_MISMATCH` and
+  `STRATEGY.REFERENCE_UNKNOWN` are shared between `strategy.validation` and
+  `strategy.feature_graph`, and Task 3's committed message literals for both are
+  expression-worded, so a single per-code table would oblige the feature graph to
+  describe a feature-input defect as an expression-operand defect. Each producer
+  owns its own wording; the proof needs only this weaker premise, because
+  `source_component` is already in the key.
+- `source_component` is **in the key**, and is deliberately not claimed to be a
+  function of `error_code`: the combiner merges diagnostics from more than one
+  module, and `STRATEGY.EXPRESSION_TYPE_MISMATCH` and `STRATEGY.REFERENCE_UNKNOWN`
+  are reachable from both `strategy.validation` and `strategy.feature_graph`, so
+  that claim would be false.
+- Every correlation ID is absent and `causal_diagnostic_ids` is empty, by item 0.
+
+The section 5.3.3 identity payload is therefore a function of exactly
+`(error_code, source_component, details)` — the key. Two entries equal on the key
+have equal payloads and equal `diagnostic_id`s, so step 2 removed one of them
+already. No tie can reach the sort, and generation order can never influence
+either the retained set or its sequence.
+
+Task 4 **must not** modify `src/crypto_lab/domain/results.py`. `Failure` and
+`MAX_RESULT_DIAGNOSTICS` stay exactly as Task 2 committed them. If focused
+evidence later proves that modifying `domain/results.py` is unavoidable, stop and
+request a separate scope ruling rather than editing it.
+
+Task 4 **must not** modify Task 3's `validate_strategy_expressions` unless a
+focused regression proves that Task 3's own implementation independently violates
+the 256-diagnostic contract. See section 5.4.1's scope paragraph.
+
+**Reviewed correction — a detected cycle gates warm-up and topological order**
+
+This is a **fourth** reviewed change, recorded as such. It is not one of the three
+rulings above; it is the consequence that makes step 2 executable at all, and it
+is named in Task 9's plan-history entry alongside them.
+
+Warm-up sufficiency and topological order are **undefined** on a cyclic feature
+graph: there is no dependency maximum to compare against and no total order to
+produce. When `validate_feature_graph` detects a cycle it therefore returns the
+cycle diagnostic — together with any diagnostic that does not depend on acyclicity,
+namely duplicate-ID, unknown-operation, feature-input-existence, and typed-input
+findings — and attempts neither warm-up validation nor topological ordering.
+
+This rule is what makes step 2's own requirement checkable — that
+`invalid/feature_cycle.yaml` "yields `STRATEGY.FEATURE_CYCLE` whose details list
+the cycle members in a deterministic rotation-normalized order" and that "the same
+cycle declared in a different source order yields the identical diagnostic". A
+warm-up diagnostic computed from a cyclic dependency maximum would be
+nondeterministic in exactly the way step 2 forbids, so gating it is required, not
+merely tidy. It also lets the fixture assert `STRATEGY.FEATURE_CYCLE` without an
+unrelated warm-up diagnostic appearing beside it.
+
+**Reviewed correction — additional exact Task 4 tests**
+
+These are required in addition to the ten steps above, and each is a named test,
+not a note:
+
+1. **255 unique diagnostics** → 255 returned, **no** marker present.
+2. **256 unique diagnostics** → 256 returned, **no** marker present; this is the
+   exact boundary at which diagnostics are still complete.
+3. **257 unique diagnostics** → exactly 256 returned: 255 substantive plus the
+   marker, and the marker is the **last** element.
+4. **Deduplication precedes limiting** — a collection whose duplicates would push
+   it past the bound returns its unique diagnostics in full with no marker,
+   proving the bound counts unique diagnostics rather than raw findings.
+5. **Source-order permutation produces byte-identical bounded output** — the same
+   defects declared in a different source order yield the identical returned
+   tuple, compared as canonical bytes, at the 255, 256, and 257 sizes.
+6. **No expected-boundary exception escapes** — each of the three sizes is
+   asserted to return a `Result`, with the test failing on any raised exception
+   rather than tolerating one.
+7. **No silent slicing** — a 257-diagnostic case is asserted to be
+   distinguishable from a 256-diagnostic case by the returned tuple alone.
+8. **The existing `Failure` schema is unchanged** — `MAX_RESULT_DIAGNOSTICS`,
+   `Failure.model_fields`, and the `min_length`/`max_length` metadata on
+   `Failure.diagnostics` are pinned, so a later edit to `domain/results.py` fails
+   a test rather than passing silently.
+
+**Reviewed correction — additional exact feature-signature tests**
+
+Specification section 12.3.1 **line 701** is normative: "A feature graph must be
+acyclic, every input must exist and type-check, and declared warm-up must be at
+least the maximum dependency warm-up." Task 4's ten steps above cover acyclicity
+(step 2) and warm-up (step 4) but named no test for the operation allowlist or for
+input existence and type-checking, and section 6.5.1 rows 3 and 4 discharge only
+the **expression-level** reading of the two removed fixture names. These three
+named tests close that gap, all inside Task 4's existing scope and all using codes
+already present in the section 5.9 closed table:
+
+1. An `operation` outside Task 4's closed feature-operation allowlist yields
+   `STRATEGY.FEATURE_UNKNOWN_OPERATION`. This code appears nowhere in `src/` or
+   `tests/` before Task 4, and `FeatureDefinition.operation` is pattern-validated
+   only, so an operation such as `bogus.thing/v1` constructs cleanly at the model
+   level — the check is genuinely Task 4's to add.
+2. A feature `input` naming neither a permitted bar field nor a declared feature
+   yields `STRATEGY.REFERENCE_UNKNOWN`. `_reference_scope` in Task 3's
+   `validation.py` never inspects `feature.inputs`, so no committed check covers
+   this.
+3. A feature `input` or `parameter` whose declared type does not satisfy its
+   operation's typed signature yields `STRATEGY.EXPRESSION_TYPE_MISMATCH`. Task 4
+   authors those typed signatures itself — the plan fixes the eight operation names
+   and their bar-field vocabulary but no signature's arity, input types, parameter
+   types, or output type — so this test is asserted against the signatures Task 4
+   lands in the same commit, exactly as section 7 requires of any behaviour a task
+   introduces.
+
+All three are authored as **in-module `StrategySpec` trees, not fixture files**,
+per section 6.5.4's rule that a case whose expected error code is the whole
+assertion belongs in the test module. Test 1 in particular is **not** a licence to
+create `invalid/unknown_operation.yaml`, which section 6.5.1 row 3 declines; no
+further fixture path is authorized. The host module
+`tests/unit/strategy/test_strategy_feature_graph.py` is already in Task 4's Files
+list.
+
+**Reviewed correction — additional exact golden-fixture tests**
+
+Required alongside steps 5 and 6, each a named test:
+
+1. Every one of the six root input paths **exists**.
+2. Every input is UTF-8, **BOM-free**, and **LF-only**.
+3. Every input loads to a valid `StrategySpec` through the safe loader.
+4. Every input passes Task 3 static expression validation.
+5. Every expected golden JSON file **exists**, at its section 6.5.3 pairing.
+6. Expected and actual series lengths both equal the bounded input-bar count.
+7. The **complete** series matches, not merely selected bars.
+8. Numeric values are compared through exact `Decimal` or canonical-string
+   semantics — never through `float`.
+9. `MISSING` values are represented through the approved explicit contract.
+10. No test silently regenerates or rewrites a golden file.
+11. The six scenarios are **behaviourally distinct** rather than aliases of the
+    same strategy.
+12. The `sma_cross_long` golden tests — authored earlier in this same task, since
+    Task 4 owns `golden/**` and no strategy-golden test exists before Task 4 —
+    continue to pass unchanged as the other five scenarios are added. `sma_cross_long`
+    is the one scenario whose **input** Task 2 already committed, so it is the
+    regression anchor for the rest.
+
+**Reviewed correction — exact Task 4 path and scope check before staging**
+
+Before staging, `git diff --cached --name-only` must list exactly these **22**
+paths — the **fourteen** non-`golden/` paths and the **eight** `golden/**`
+members Task 4 owns — and nothing else:
+
+```text
+src/crypto_lab/strategy/feature_graph.py
+src/crypto_lab/strategy/evaluation.py
+tests/unit/strategy/test_strategy_feature_graph.py
+tests/unit/strategy/test_strategy_evaluation.py
+tests/property/test_expression_evaluation.py
+tests/fixtures/strategy/invalid/feature_cycle.yaml
+tests/fixtures/strategy/warm_up_boundary.valid.yaml
+tests/fixtures/strategy/crossover_equality.valid.yaml
+tests/fixtures/strategy/missing_input.valid.yaml
+tests/fixtures/strategy/bar_offsets.valid.yaml
+tests/fixtures/strategy/decimal_rounding.valid.yaml
+tests/fixtures/strategy/adjacent_entry_exit.valid.yaml
+tests/fixtures/strategy/golden/warm_up_boundary.features.json
+tests/fixtures/strategy/golden/missing_input.features.json
+tests/fixtures/strategy/golden/bar_offsets.features.json
+tests/fixtures/strategy/golden/decimal_rounding.features.json
+tests/fixtures/strategy/golden/sma_cross_long.features.json
+tests/fixtures/strategy/golden/sma_cross_long.signals.json
+tests/fixtures/strategy/golden/crossover_equality.signals.json
+tests/fixtures/strategy/golden/adjacent_entry_exit.signals.json
+tests/safety/test_stage3_boundaries.py
+tests/unit/test_package_layout.py
+```
+
+No `pyproject.toml`, `uv.lock`, `scripts/`, `schemas/`, schema-registry,
+`README.md`, `AGENTS.md`, `docs/`, `domain/results.py`, Task 2 source or test,
+Task 3 source or test, or Stage 4 boundary-guard path may be staged. "Task 2 test"
+here excludes the eight fixture entries section 6.5.3 transfers to Task 4, and
+includes every fixture Task 2 shipped at `9a2c73f` — in particular
+`sma_cross_long.{valid,reordered_keys,commented}.yaml` and the eight `invalid/`
+files other than `feature_cycle.yaml`, none of which Task 4 may modify. Appendix C's
+Task 4 subset is exactly `"strategy/evaluation.py"` and
+`"strategy/feature_graph.py"` added to `_ALLOWED_SOURCE_FILES`; Appendix J's is
+exactly `crypto_lab.strategy.evaluation` and `crypto_lab.strategy.feature_graph`
+appended to `PACKAGE_MODULES`. Task 4 removes no `_DEFERRED_DEFINITIONS` name and
+leaves the schema count at 11.
+
+**Reviewed correction — future-reference handoff, closed**
+
+Task 4 is the earliest possible owner of `STRATEGY.REFERENCE_FUTURE_BAR` and
+hereby records the final `strategy/v1` disposition, set out in full in section
+6.5.2: non-negative `bars_ago` names a current or historical **closed** bar only;
+negative `bars_ago` is rejected before evaluation; an attempted future or
+still-open bar is **unrepresentable** in `expressions/v1`; Task 4 therefore adds
+no `future_reference` fixture, no `REFERENCE_FUTURE_BAR` evaluator branch, and no
+negative-offset workaround; and the code remains **reserved** in the section 5.9
+closed table for a future version whose grammar can represent that condition.
 
 **Focused verification:** `pytest-focused -o addopts= tests\unit\strategy tests\property -q`.
 **Broader:** `pytest-all`. **Also:** Ruff, strict mypy.
@@ -2595,6 +3231,19 @@ network, engine, or random access, and that it produces no order, fill, or
 portfolio value.
 
 **Independent review gate:** required.
+
+**Reviewed correction — what the Task 4 implementation reviewer must do.** The
+reviewer inspects all six root input YAML documents and every expected JSON file
+**directly**, and independently challenges at least: warm-up off-by-one
+behaviour; crossover **equality** boundaries; missing-input propagation; positive
+bar offsets; `Decimal` rounding and negative-zero handling; adjacent entry/exit
+timing; complete-series length and alignment; whether each expected JSON was
+**independently authored** rather than copied from the evaluator; and whether
+mutating evaluator behaviour actually causes the corresponding golden test to
+fail. The reviewer must also mutation-test or otherwise independently challenge
+cycle-order invariance, feature-ID tie breaking, diagnostic deduplication, the
+256/257 boundary, the marker's terminal position, the absence of any escaping
+exception, and `Decimal`-context restoration.
 
 **Commit:** `feat: add feature graph and level 1 evaluator`
 
@@ -2951,6 +3600,41 @@ exact roadmap-status guard.
    text drifts. Do not relax any existing Stage 3 assertion.
 5. Confirm no source, schema, dependency, or lockfile change is present in this
    commit.
+6. **Record the complete Stage 4 plan history — reviewed correction.** The
+   approved plan was corrected twice during implementation, so recording only the
+   original approval hash would misstate which document the stage was built
+   against. Task 9 must record **all** relevant Stage 4 plan commits, in order:
+   - the **original approved plan commit**
+     `b6721b870c79db7b999b9eb70107e53992cbe1ab`;
+   - the **Task 2 hash-material correction**
+     `65eca5b17d45c0cf04f856dc6049e0c3ee7a2be9`
+     (`docs: define stage 4 hash-material model types`);
+   - **this Task 4 fixture-and-diagnostic correction commit**
+     (`docs: resolve stage 4 fixture and diagnostic bounds`), whose hash is read
+     from Git after it lands, recorded in the ledger, **and recorded in the
+     roadmap's Stage 4 row alongside the other two** — the ledger alone is not
+     sufficient, because section 9.0 step 4 makes it git-ignored, so a
+     ledger-only record would leave this correction in no committed artifact. The
+     Stage 3 row is the precedent for recording a post-approval correction hash in
+     the roadmap. It is deliberately named descriptively rather than by hash here,
+     because a document cannot contain its own commit hash. It carries **four**
+     reviewed changes:
+     1. Task 4 fixture ownership — `invalid/feature_cycle.yaml` plus the six root
+        golden inputs, with Task 2's glob narrowed for the future (sections 6.5.1
+        and 6.5.3);
+     2. the bounded-diagnostic contract and its single new error code
+        `STRATEGY.DIAGNOSTIC_LIMIT_REACHED` (sections 5.4.1 and 5.9);
+     3. the closed `future_reference` disposition, including the specification
+        section 12.3.3 line 713 discharge (section 6.5.2);
+     4. the rule that a detected feature cycle gates warm-up validation and
+        topological ordering, which is the consequence that makes Task 4 step 2
+        executable (Task 4, "a detected cycle gates warm-up and topological
+        order").
+   - any further reviewed plan-correction commit that lands before Task 9.
+
+   The plan-approval guard's pinned corrected-plan hash still identifies the
+   approval commit, not the corrections; Task 9 records the corrections alongside
+   it rather than replacing it.
 
 **Focused verification:**
 
