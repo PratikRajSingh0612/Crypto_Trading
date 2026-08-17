@@ -1,0 +1,20 @@
+# Nested alias bomb. Nine alias levels, each referencing the previous level
+# nine times, so the document denotes roughly 9**9 nodes while every raw
+# ceiling stays satisfied: about 116 events, 81 alias references, 10 anchor
+# definitions, and nesting depth 2.
+#
+# A flat bomb would pass a non-transitive implementation, which is why this
+# fixture is nested. Under the transitive accounting of plan section 5.3.1 the
+# recorded expanded sizes are 1, 10, 91, 820, and 7381, so the running total
+# crosses MAX_EXPANDED_NODES during level five and the stream is abandoned less
+# than half way through.
+l0: &l0 leaf
+l1: &l1 [*l0, *l0, *l0, *l0, *l0, *l0, *l0, *l0, *l0]
+l2: &l2 [*l1, *l1, *l1, *l1, *l1, *l1, *l1, *l1, *l1]
+l3: &l3 [*l2, *l2, *l2, *l2, *l2, *l2, *l2, *l2, *l2]
+l4: &l4 [*l3, *l3, *l3, *l3, *l3, *l3, *l3, *l3, *l3]
+l5: &l5 [*l4, *l4, *l4, *l4, *l4, *l4, *l4, *l4, *l4]
+l6: &l6 [*l5, *l5, *l5, *l5, *l5, *l5, *l5, *l5, *l5]
+l7: &l7 [*l6, *l6, *l6, *l6, *l6, *l6, *l6, *l6, *l6]
+l8: &l8 [*l7, *l7, *l7, *l7, *l7, *l7, *l7, *l7, *l7]
+l9: &l9 [*l8, *l8, *l8, *l8, *l8, *l8, *l8, *l8, *l8]

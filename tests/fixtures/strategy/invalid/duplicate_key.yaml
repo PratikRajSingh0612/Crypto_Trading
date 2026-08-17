@@ -1,0 +1,7 @@
+# The same mapping key twice. PyYAML's own behaviour is silent last-wins, so
+# this control is the only thing standing between a duplicated key and a
+# silently wrong permanent content hash.
+timeframe: 1h
+universe:
+  kind: static
+timeframe: 4h

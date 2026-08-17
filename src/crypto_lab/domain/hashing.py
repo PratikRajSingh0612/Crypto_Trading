@@ -20,6 +20,7 @@ class HashingProfile(StrEnum):
     CONFIGURATION_MATERIAL_BASE_V1 = "configuration-material-base/v1"
     DATASET_METADATA_V1 = "dataset-metadata/v1"
     ARTIFACT_OWNER_V1 = "artifact-owner/v1"
+    DIAGNOSTIC_IDENTITY_V1 = "diagnostic-identity/v1"
 
 
 class CanonicalHashEnvelope(CanonicalModel):
@@ -44,6 +45,24 @@ def profile_hash(
         payload=payload,
     )
     return sha256_bytes(canonical_json_bytes(envelope))
+
+
+def _uuid4_shaped(digest: Sha256) -> str:
+    """Render a digest as a canonical UUID4-shaped string.
+
+    Derived rather than drawn, because every random and wall-clock source is
+    forbidden. Takes the first 32 hex digits, forces the version nibble to
+    ``4`` and the variant nibble into ``[89ab]``, and applies the canonical
+    ``8-4-4-4-12`` grouping so ``validate_prefixed_uuid4`` accepts it.
+    """
+    digits = list(digest[:32])
+    digits[12] = "4"
+    digits[16] = "89ab"[int(digits[16], 16) % 4]
+    grouped = "".join(digits)
+    return (
+        f"{grouped[:8]}-{grouped[8:12]}-{grouped[12:16]}-"
+        f"{grouped[16:20]}-{grouped[20:]}"
+    )
 
 
 def attempt_token_hash(token: str) -> Sha256:

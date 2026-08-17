@@ -1,0 +1,4 @@
+# An unknown custom tag on a collection. Any tag other than an exactly matching
+# tag:yaml.org,2002:map or tag:yaml.org,2002:seq is forbidden.
+value: !UnknownThing
+  field: 1

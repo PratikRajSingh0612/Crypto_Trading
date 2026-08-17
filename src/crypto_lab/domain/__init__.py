@@ -2,6 +2,12 @@
 
 from crypto_lab.domain.base import SCHEMA_VERSION, CanonicalModel
 from crypto_lab.domain.canonical_json import canonical_json_bytes, canonical_json_text
+from crypto_lab.domain.capability_names import CapabilityName, VocabularyVersion
+from crypto_lab.domain.capability_requirements import (
+    ApproximationPolicy,
+    CapabilityRequirement,
+)
+from crypto_lab.domain.comparison_levels import ComparisonLevel
 from crypto_lab.domain.diagnostics import (
     Diagnostic,
     DiagnosticCategory,
@@ -45,11 +51,13 @@ from crypto_lab.domain.records import (
     Price,
     Quantity,
 )
+from crypto_lab.domain.results import Failure, Result, Success
 from crypto_lab.domain.time import UtcDateTime, format_utc
 from crypto_lab.domain.versioning import SemanticVersion, parse_semantic_version
 
 __all__ = (
     "SCHEMA_VERSION",
+    "ApproximationPolicy",
     "ArtifactId",
     "AssetCode",
     "AuditEventId",
@@ -57,6 +65,9 @@ __all__ = (
     "CanonicalDecimal",
     "CanonicalHashEnvelope",
     "CanonicalModel",
+    "CapabilityName",
+    "CapabilityRequirement",
+    "ComparisonLevel",
     "DatasetId",
     "DatasetPartitionId",
     "Diagnostic",
@@ -65,6 +76,7 @@ __all__ = (
     "DiagnosticSeverity",
     "EventId",
     "ExperimentId",
+    "Failure",
     "HashingProfile",
     "InstrumentId",
     "InstrumentRef",
@@ -76,12 +88,15 @@ __all__ = (
     "PositiveDecimal",
     "Price",
     "Quantity",
+    "Result",
     "RunId",
     "SemanticVersion",
     "Sha256",
     "StrategyId",
     "StrategyVersionId",
+    "Success",
     "UtcDateTime",
+    "VocabularyVersion",
     "attempt_token_hash",
     "canonical_json_bytes",
     "canonical_json_text",

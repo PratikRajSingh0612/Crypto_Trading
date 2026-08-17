@@ -1,0 +1,5 @@
+# The classic PyYAML object-construction vector. Stage 4 never enters the
+# Constructor, so this tag is never resolved to a callable; the project-owned
+# classifier rejects it outright because strategy/v1 accepts no tag it has not
+# named.
+command: !!python/object/apply:os.system ["echo unsafe"]

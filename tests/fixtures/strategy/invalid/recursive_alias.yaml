@@ -1,0 +1,5 @@
+# An alias referring to an anchor whose own node is still open. The builder
+# rejects it while the frame is open, so a cyclic or recursive value is
+# structurally impossible rather than merely untested.
+self_reference: &loop
+  - *loop

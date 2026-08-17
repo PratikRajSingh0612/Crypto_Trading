@@ -1,0 +1,7 @@
+# The YAML merge key. Merge semantics would make canonical content depend on
+# resolution order and are unnecessary for strategy/v1.
+defaults: &defaults
+  fast_period: 20
+strategy:
+  <<: *defaults
+  slow_period: 50

@@ -1,0 +1,5 @@
+# Two documents in one source. Exactly one document is accepted, and the second
+# document start is rejected during the single event pass.
+timeframe: 1h
+---
+timeframe: 4h

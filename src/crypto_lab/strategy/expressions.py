@@ -1,0 +1,435 @@
+"""Closed discriminated expression AST for ``expressions/v1``.
+
+Every node is a ``CanonicalModel`` carrying a ``Literal`` ``op`` discriminator,
+declared first so canonical serialization is discriminator-first. These shapes
+are hash material: ``entry_rules`` and ``exit_rules`` sit inside
+``strategy_spec`` in the strategy-version hash payload, so no later task may
+change a node's field shape.
+
+The ``literal`` node's ``(value_type, value)`` pair is dispatched explicitly
+rather than routed through union validation. A ``STRING`` literal whose text is
+``"1"`` would otherwise validate as a canonical decimal under any union mode
+that tries decimal first, and a ``DECIMAL`` literal would validate as ``str``
+under one that tries ``str`` first -- either way putting the wrong Python type
+into a permanent ``content_hash``.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+from enum import StrEnum
+from typing import Annotated, ClassVar, Final, Literal, Self
+
+from pydantic import (
+    AfterValidator,
+    ConfigDict,
+    Field,
+    PlainSerializer,
+    PlainValidator,
+    TypeAdapter,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
+from pydantic.json_schema import JsonSchemaValue
+
+from crypto_lab.domain.base import CanonicalModel
+from crypto_lab.domain.financial import (
+    CANONICAL_DECIMAL_PATTERN,
+    MAX_DECIMAL_TEXT_LENGTH,
+    format_decimal,
+    parse_decimal,
+)
+from crypto_lab.domain.identifiers import NormalizedIdentifier, exact_string_schema
+
+EXPRESSION_SEMANTICS_VERSION: Final = "expressions/v1"
+MAX_EXPRESSION_DEPTH: Final = 24
+MAX_EXPRESSION_OPERANDS: Final = 64
+MAX_BARS_AGO: Final = 4_096
+# Declared locally rather than imported from ``strategy.yaml_source``, so that
+# importing a model never pulls PyYAML in transitively. A test pins each against
+# its loader counterpart, which is what stops the two copies from drifting.
+MAX_LITERAL_STRING_CHARACTERS: Final = 8_192
+MIN_LITERAL_INTEGER: Final = -(2**63)
+MAX_LITERAL_INTEGER: Final = 2**63 - 1
+
+
+class LiteralValueType(StrEnum):
+    """The closed literal type vocabulary of ``strategy/v1``."""
+
+    BOOLEAN = "BOOLEAN"
+    INTEGER = "INTEGER"
+    DECIMAL = "DECIMAL"
+    STRING = "STRING"
+    IDENTIFIER = "IDENTIFIER"
+
+
+_IDENTIFIER_ADAPTER: Final[TypeAdapter[str]] = TypeAdapter(NormalizedIdentifier)
+
+
+def _validate_literal_value(
+    value: object,
+    info: ValidationInfo,
+) -> bool | int | Decimal | str:
+    """Dispatch on the declared ``value_type`` before any union is tried.
+
+    ``info.data`` holds only the fields validated so far, in declaration order,
+    which is why ``value_type`` must precede ``value``. When ``value_type``
+    itself failed validation this validator still runs against a partial
+    ``info.data``, so a missing key raises rather than escaping as ``KeyError``.
+    """
+    declared = info.data.get("value_type")
+    if not isinstance(declared, LiteralValueType):
+        raise ValueError("literal value_type must validate before value")
+
+    if declared is LiteralValueType.BOOLEAN:
+        # ``type(...) is`` throughout, never ``isinstance``: ``isinstance(True,
+        # int)`` is True, so an isinstance check would admit a bool as an
+        # integer and write a JSON ``true`` where an integer belongs.
+        if type(value) is not bool:
+            raise ValueError("BOOLEAN literal requires an exact bool")
+        return value
+
+    if declared is LiteralValueType.INTEGER:
+        if type(value) is not int:
+            raise ValueError("INTEGER literal requires an exact int")
+        if not MIN_LITERAL_INTEGER <= value <= MAX_LITERAL_INTEGER:
+            raise ValueError("INTEGER literal is outside the signed 64-bit range")
+        return value
+
+    if declared is LiteralValueType.DECIMAL:
+        # The same validator ``CanonicalDecimal`` uses, carrying ``info`` so
+        # ``info.mode`` is honoured: a real ``Decimal`` in Python mode, an exact
+        # canonical string at the JSON boundary.
+        return parse_decimal(value, info)
+
+    if declared is LiteralValueType.STRING:
+        if type(value) is not str:
+            raise ValueError("STRING literal requires an exact str")
+        if len(value) > MAX_LITERAL_STRING_CHARACTERS:
+            raise ValueError("STRING literal exceeds the maximum length")
+        return value
+
+    if type(value) is not str:
+        raise ValueError("IDENTIFIER literal requires an exact str")
+    return _IDENTIFIER_ADAPTER.validate_python(value)
+
+
+def _render_literal_value(value: bool | int | Decimal | str) -> bool | int | str:
+    """Render a Decimal through the canonical serializer; pass others through."""
+    if isinstance(value, Decimal):
+        return format_decimal(value)
+    return value
+
+
+type LiteralValue = Annotated[
+    bool | int | Decimal | str,
+    PlainValidator(_validate_literal_value, json_schema_input_type=bool | int | str),
+    # ``when_used="json"`` matches ``CanonicalDecimal``: Python-mode dumps keep
+    # the real ``Decimal`` so ``model_validate(model_dump(mode="python"))``
+    # round-trips, while JSON-mode dumps carry the canonical string.
+    PlainSerializer(
+        _render_literal_value,
+        return_type=bool | int | str,
+        when_used="json",
+    ),
+]
+
+EXACT_RUNTIME_TYPES: Final[dict[LiteralValueType, type]] = {
+    LiteralValueType.BOOLEAN: bool,
+    LiteralValueType.INTEGER: int,
+    LiteralValueType.DECIMAL: Decimal,
+    LiteralValueType.STRING: str,
+    LiteralValueType.IDENTIFIER: str,
+}
+
+
+# Derived from the type itself rather than restated, so the conditional branch
+# cannot drift from the runtime constraint and no hash-material pattern is
+# written down twice. ``NormalizedIdentifier`` emits an inline string schema at
+# an adapter root; if a future Pydantic emitted a ``$ref`` here instead, the
+# reference would be unresolvable inside the literal node's schema and the
+# schema-agreement tests would fail rather than silently weakening the contract.
+_IDENTIFIER_SCHEMA: Final[JsonSchemaValue] = dict(_IDENTIFIER_ADAPTER.json_schema())
+
+_LITERAL_VALUE_BRANCHES: Final[dict[LiteralValueType, JsonSchemaValue]] = {
+    LiteralValueType.BOOLEAN: {"type": "boolean"},
+    LiteralValueType.INTEGER: {
+        "type": "integer",
+        "minimum": MIN_LITERAL_INTEGER,
+        "maximum": MAX_LITERAL_INTEGER,
+    },
+    LiteralValueType.DECIMAL: exact_string_schema(
+        CANONICAL_DECIMAL_PATTERN,
+        max_length=MAX_DECIMAL_TEXT_LENGTH,
+    ),
+    LiteralValueType.STRING: {
+        "type": "string",
+        "maxLength": MAX_LITERAL_STRING_CHARACTERS,
+    },
+    LiteralValueType.IDENTIFIER: _IDENTIFIER_SCHEMA,
+}
+
+
+def _literal_schema_extra(schema: JsonSchemaValue) -> None:
+    """Bind each ``value_type`` to its exact ``value`` schema.
+
+    Pydantic emits an unconstrained scalar union on its own, and specification
+    section 12.4 makes the generated schema the normative union definition, so
+    without this the published contract would be weaker than the runtime one.
+    """
+    schema["allOf"] = [
+        {
+            "if": {
+                "properties": {"value_type": {"const": member.value}},
+                "required": ["value_type"],
+            },
+            "then": {"properties": {"value": branch}},
+        }
+        for member, branch in _LITERAL_VALUE_BRANCHES.items()
+    ]
+
+
+class LiteralExpression(CanonicalModel):
+    """A typed constant. ``value_type`` precedes ``value`` by contract."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        json_schema_extra=_literal_schema_extra
+    )
+
+    op: Literal["literal"]
+    value_type: LiteralValueType
+    value: LiteralValue
+
+    @model_validator(mode="after")
+    def validate_value_matches_its_declared_type(self) -> Self:
+        """Re-check the stored runtime type against ``value_type``.
+
+        Reachable, not decorative: ``parse_decimal`` admits any ``Decimal``
+        instance, so a ``Decimal`` subclass -- whose ``__str__`` or
+        ``__format__`` could differ -- passes the dispatcher and is stopped only
+        here. The comparison is exact identity, so no ordering between ``bool``
+        and ``int`` is required.
+        """
+        if type(self.value) is not EXACT_RUNTIME_TYPES[self.value_type]:
+            raise ValueError("literal value type disagrees with value_type")
+        return self
+
+
+class RefExpression(CanonicalModel):
+    """A declared parameter, source field, or feature ID at a bar offset."""
+
+    op: Literal["ref"]
+    id: NormalizedIdentifier
+    bars_ago: Annotated[int, Field(strict=True, le=MAX_BARS_AGO)]
+
+    @field_validator("bars_ago")
+    @classmethod
+    def validate_offset_is_not_negative(cls, value: int) -> int:
+        """Emit the closed error code Task 3 relies on Task 2 emitting here."""
+        if value < 0:
+            raise ValueError(
+                "STRATEGY.REFERENCE_NEGATIVE_OFFSET: bars_ago must be non-negative"
+            )
+        return value
+
+
+class NotExpression(CanonicalModel):
+    op: Literal["not"]
+    operand: Expression
+
+
+class NegateExpression(CanonicalModel):
+    op: Literal["negate"]
+    operand: Expression
+
+
+class IsMissingExpression(CanonicalModel):
+    op: Literal["is_missing"]
+    operand: Expression
+
+
+class AddExpression(CanonicalModel):
+    op: Literal["add"]
+    left: Expression
+    right: Expression
+
+
+class SubtractExpression(CanonicalModel):
+    op: Literal["subtract"]
+    left: Expression
+    right: Expression
+
+
+class MultiplyExpression(CanonicalModel):
+    op: Literal["multiply"]
+    left: Expression
+    right: Expression
+
+
+class DivideExpression(CanonicalModel):
+    op: Literal["divide"]
+    left: Expression
+    right: Expression
+
+
+class MinimumExpression(CanonicalModel):
+    op: Literal["minimum"]
+    left: Expression
+    right: Expression
+
+
+class MaximumExpression(CanonicalModel):
+    op: Literal["maximum"]
+    left: Expression
+    right: Expression
+
+
+class EqualExpression(CanonicalModel):
+    op: Literal["equal"]
+    left: Expression
+    right: Expression
+
+
+class NotEqualExpression(CanonicalModel):
+    op: Literal["not_equal"]
+    left: Expression
+    right: Expression
+
+
+class LessThanExpression(CanonicalModel):
+    op: Literal["less_than"]
+    left: Expression
+    right: Expression
+
+
+class LessThanOrEqualExpression(CanonicalModel):
+    op: Literal["less_than_or_equal"]
+    left: Expression
+    right: Expression
+
+
+class GreaterThanExpression(CanonicalModel):
+    op: Literal["greater_than"]
+    left: Expression
+    right: Expression
+
+
+class GreaterThanOrEqualExpression(CanonicalModel):
+    op: Literal["greater_than_or_equal"]
+    left: Expression
+    right: Expression
+
+
+class CrossesAboveExpression(CanonicalModel):
+    op: Literal["crosses_above"]
+    left: Expression
+    right: Expression
+
+
+class CrossesBelowExpression(CanonicalModel):
+    op: Literal["crosses_below"]
+    left: Expression
+    right: Expression
+
+
+class AndExpression(CanonicalModel):
+    """Order is preserved: rule evaluation order carries semantics."""
+
+    op: Literal["and"]
+    operands: tuple[Expression, ...] = Field(
+        min_length=1, max_length=MAX_EXPRESSION_OPERANDS
+    )
+
+
+class OrExpression(CanonicalModel):
+    op: Literal["or"]
+    operands: tuple[Expression, ...] = Field(
+        min_length=1, max_length=MAX_EXPRESSION_OPERANDS
+    )
+
+
+def _child_expressions(node: CanonicalModel) -> tuple[CanonicalModel, ...]:
+    children: list[CanonicalModel] = []
+    for name in type(node).model_fields:
+        attribute = getattr(node, name)
+        if isinstance(attribute, CanonicalModel):
+            children.append(attribute)
+        elif isinstance(attribute, tuple):
+            children.extend(
+                item for item in attribute if isinstance(item, CanonicalModel)
+            )
+    return tuple(children)
+
+
+def _bound_expression_depth[NodeT: CanonicalModel](node: NodeT) -> NodeT:
+    """Bound tree depth without Python recursion, so no ``RecursionError``."""
+    pending: list[tuple[CanonicalModel, int]] = [(node, 1)]
+    while pending:
+        current, level = pending.pop()
+        if level > MAX_EXPRESSION_DEPTH:
+            raise ValueError(
+                "STRATEGY.EXPRESSION_DEPTH_EXCEEDED: expression nesting "
+                "exceeds the maximum depth"
+            )
+        pending.extend((child, level + 1) for child in _child_expressions(current))
+    return node
+
+
+type ExpressionNode = (
+    LiteralExpression
+    | RefExpression
+    | NotExpression
+    | NegateExpression
+    | IsMissingExpression
+    | AddExpression
+    | SubtractExpression
+    | MultiplyExpression
+    | DivideExpression
+    | MinimumExpression
+    | MaximumExpression
+    | EqualExpression
+    | NotEqualExpression
+    | LessThanExpression
+    | LessThanOrEqualExpression
+    | GreaterThanExpression
+    | GreaterThanOrEqualExpression
+    | CrossesAboveExpression
+    | CrossesBelowExpression
+    | AndExpression
+    | OrExpression
+)
+type Expression = Annotated[
+    ExpressionNode,
+    Field(discriminator="op"),
+    AfterValidator(_bound_expression_depth),
+]
+
+_NODE_MODELS: Final = (
+    LiteralExpression,
+    RefExpression,
+    NotExpression,
+    NegateExpression,
+    IsMissingExpression,
+    AddExpression,
+    SubtractExpression,
+    MultiplyExpression,
+    DivideExpression,
+    MinimumExpression,
+    MaximumExpression,
+    EqualExpression,
+    NotEqualExpression,
+    LessThanExpression,
+    LessThanOrEqualExpression,
+    GreaterThanExpression,
+    GreaterThanOrEqualExpression,
+    CrossesAboveExpression,
+    CrossesBelowExpression,
+    AndExpression,
+    OrExpression,
+)
+
+for _model in _NODE_MODELS:
+    _model.model_rebuild()
+
+EXPRESSION_ADAPTER: TypeAdapter[Expression] = TypeAdapter(Expression)
