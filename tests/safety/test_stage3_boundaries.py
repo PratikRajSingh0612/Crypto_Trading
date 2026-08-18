@@ -56,8 +56,10 @@ _ALLOWED_SOURCE_FILES = {
     "strategy/evaluation.py",
     "strategy/expressions.py",
     "strategy/feature_graph.py",
+    "strategy/loader.py",
     "strategy/models.py",
     "strategy/validation.py",
+    "strategy/versioning.py",
     "strategy/yaml_source.py",
 }
 _ALLOWED_IMPORT_ROOTS = {
@@ -159,8 +161,6 @@ _DEFERRED_DEFINITIONS = {
     "RuntimeAvailabilityObservation",
     "SanitizedAdapterResultManifest",
     "SemanticStatus",
-    "StrategyLoader",
-    "StrategyVersion",
     "UnitOfWork",
     "ValidationOutcome",
     "ingest_dataset",
