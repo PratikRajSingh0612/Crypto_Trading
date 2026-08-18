@@ -1322,6 +1322,159 @@ unless a focused regression proves that its own implementation independently
 violates the 256-diagnostic contract. Aligning it with the marker policy is a
 separate scope ruling, not Task 4 work.
 
+#### 5.4.2 Task 3 diagnostic bounding — reviewed correction, supersedes the paragraph above
+
+**The separate scope ruling anticipated above has been granted.** The paragraph
+immediately preceding this subsection is superseded on exactly one point: Task 3's
+`validate_strategy_expressions` is now **required** to apply the same bounded
+output policy as every other Stage 4 producer. Everything else it says stands —
+in particular that Task 3 never violated `Failure`'s `max_length`.
+
+**The defect, stated precisely.** Truncating a sorted, deduplicated prefix at
+exactly `MAX_RESULT_DIAGNOSTICS` is *silent*. A caller receiving 256 diagnostics
+cannot distinguish a specification with exactly 256 unique defects from one with
+20,000, because no marker distinguishes them and no count is published. Section
+5.4.1 item 5 forbids exactly that for the Task 4 combiner; there is no principled
+reason the same output contract should differ by producer, and a caller that
+merges the two would inherit two incompatible truncation semantics.
+
+**Required behaviour.** `validate_strategy_expressions` must, in this exact order:
+
+1. **Collect** its bounded-input findings, as it does today. Every finding source
+   is already bounded by `MAX_RULES` and `MAX_EXPRESSION_DEPTH`, so collecting all
+   of them is itself bounded work.
+2. **Deduplicate** by `diagnostic_id`, which section 5.3.3 derives from the
+   complete material payload.
+3. **Canonically sort** by the total key fixed below.
+4. **Return all** unique diagnostics when the count is at most
+   `MAX_RESULT_DIAGNOSTICS`.
+5. **Return the first `MAX_RESULT_DIAGNOSTICS - 1` plus the terminal
+   `STRATEGY.DIAGNOSTIC_LIMIT_REACHED` marker** when the count exceeds
+   `MAX_RESULT_DIAGNOSTICS`, with the marker **last**.
+
+It must never silently truncate, never raise for an expected diagnostic overflow,
+and never modify `Failure`, `MAX_RESULT_DIAGNOSTICS`, or `domain/results.py`. **No
+second diagnostic-limit code is introduced**: the marker is the existing
+`STRATEGY.DIAGNOSTIC_LIMIT_REACHED` of section 5.4.1, emitted with
+`source_component = "strategy.validation"` rather than
+`"strategy.feature_graph"`.
+
+**The combiner must absorb an inherited marker — reviewed correction to this
+correction.** Giving Task 3 a marker creates a hazard that the first draft of this
+subsection got wrong, so it is fixed here explicitly rather than left to
+implementation. `validate_feature_graph` re-sorts **every** inherited diagnostic by
+section 5.4.1's key, which leads on `error_code`; `D` precedes `E`, `F`, `P` and
+`R`, so a marker emitted by Task 3 would sort to **index 0** of the combiner's
+substantive run. That directly contradicts section 5.4.1 item 6 — the marker "is
+never itself sorted into the substantive run" — and the sortedness amendment above,
+which fixes the returned tuple as the sorted substantive run followed by **the
+single** terminal marker. It is reachable from a specification a committed test
+already builds: 320 unique Task 3 findings become 255 plus a marker, the graph
+contributes none, so the combiner would see exactly 256 unique diagnostics, take
+its complete-output path, and return a tuple whose marker sits **first** and whose
+terminal position holds a substantive diagnostic. The positional signal would be
+exactly inverted, and at 257 or more there would be two markers, one mid-run.
+
+The combiner therefore, before ordering:
+
+1. **Partitions** its combined input into substantive diagnostics and any
+   `STRATEGY.DIAGNOSTIC_LIMIT_REACHED` markers, from any `source_component`.
+2. Records `inherited_overflow` as true when at least one such marker was present.
+3. Deduplicates and canonically sorts **only** the substantive run.
+4. Returns the substantive run unchanged when its unique count is at most
+   `MAX_RESULT_DIAGNOSTICS` **and** `inherited_overflow` is false.
+5. Otherwise returns the first `MAX_RESULT_DIAGNOSTICS - 1` substantive
+   diagnostics plus **exactly one** terminal marker, which the combiner emits under
+   its own `source_component`.
+
+An inherited marker therefore forces a terminal marker even when the combiner's own
+substantive count is small, which is the honest outcome: an upstream producer
+truncated, so the returned set is provably incomplete and must say so. Exactly one
+marker is ever returned, it is always last, and "at most 256 and complete" remains
+distinguishable from "bounded" by the tuple alone. The rule is re-entrant: a marker
+already bearing the combiner's own `source_component` is absorbed too, because
+step 1 partitions markers from **any** producer.
+
+**This amends section 5.4.1 items 4 and 5, and the amendment is stated rather than
+left implicit**, exactly as that subsection requires of its own amendment to
+section 5.4 bullet 3. Item 4 as written returns every unique diagnostic with **no**
+marker for a count of 1 through 256, and item 5 triggers only above 256. Two things
+change:
+
+1. **The counting basis** is the unique **substantive** diagnostic count — markers
+   are partitioned out before the count is taken, and are never themselves counted
+   toward the bound.
+2. **Item 5's trigger widens** to *the substantive count exceeds the bound **or** a
+   marker was absorbed*. Item 4's no-marker guarantee correspondingly narrows to
+   *at most 256 substantive **and** nothing absorbed*.
+
+Item 4's "carrying every unique diagnostic" is likewise read as every unique
+substantive diagnostic: an absorbed marker is not dropped information, it is
+**replaced** by the combiner's own terminal marker, which carries the same meaning
+under the correct `source_component` and in the correct position.
+
+**One committed Task 3 test is invalidated by this subsection, and it is named here
+for the same reason section 5.10 names the three that ruling invalidates.**
+`test_the_diagnostic_count_is_bounded_by_the_result_contract` builds 320 unique
+findings and then comprehends `diagnostic.details["rule_id"]` over every returned
+diagnostic. Once the marker occupies the last slot that comprehension meets a
+diagnostic whose details are `diagnostic_limit` and `retained_diagnostics`, and
+raises `KeyError` — a hard error, not an assertion drift, because the length
+assertion still holds. It must be updated to exclude the marker, or to assert the
+marker's own contract explicitly.
+
+**Task 3's total ordering key, and why it is not section 5.4.1's key.** Task 3
+sorts by
+
+```text
+(rule_id, node_path, error_code, canonical_json_bytes(details))
+```
+
+The first three components are Task 3's **existing reviewed key**, unchanged, so
+every committed ordering guarantee is preserved byte for byte — a reader still
+sees diagnostics grouped by rule, then by node path, then by code, and the
+committed tests that pin that order stay green. The fourth component is added
+because the three-part key alone is **not total**: an entry rule and an exit rule
+may share an identifier, and two such findings at the same `node_path` with the
+same `error_code` differ only in `details.rule_collection`, so they tie. Section
+5.4.1 item 2 rules that a key admitting a genuine tie is unacceptable, because a
+permutation test over it passes vacuously. The fourth component removes the last
+tie without disturbing the first three.
+
+**Spec-level findings.** A finding that attaches to no rule has no `rule_id` and no
+`node_path`, so this key needs a convention for them. **Section 5.10 fixes it**: a
+spec-level finding takes the empty string for both leading components, in the key
+only and never in `details`, which sorts it before every rule-level finding because
+`NormalizedIdentifier` requires a leading lowercase letter. The only spec-level code
+this correction introduces is `STRATEGY.REFERENCE_NAMESPACE_COLLISION`.
+
+Section 5.4.1's combiner key `(error_code, source_component,
+canonical_json_bytes(details))` is deliberately **not** adopted here. That key
+exists to merge diagnostics from several producers, which is the combiner's
+problem and not Task 3's — Task 3 has exactly one `source_component`. Both keys
+are total; each is total for its own producer's payload.
+
+**The decisive reason is that adopting it would be pure churn.**
+`validate_feature_graph` **re-sorts every inherited Task 3 diagnostic** with
+section 5.4.1's key, so Task 3's own order is observable **only** to a direct
+caller of `validate_strategy_expressions` and is discarded the moment the combiner
+runs. Re-keying Task 3 would therefore churn that single surface and change nothing
+downstream. A second reason, weaker but real: because the four-part key is a strict
+**refinement** of the committed three-part key, the Task 3 step's committed
+statement that diagnostics are "sorted by `(rule_id, node_path, error_code)`"
+remains literally true, which the alternative cannot claim.
+
+For accuracy about cost, since an earlier draft of this subsection overstated it:
+adopting section 5.4.1's key would break **two** committed assertions — the
+simultaneous-defect ordering test and the rule-id ordering test, the latter because
+`"entry_rules" < "exit_rules"` inverts it — plus one docstring. It is **not** four
+tests. The overstated figure is withdrawn; it was never the load-bearing reason, and
+the re-sort argument above is.
+
+**Ownership.** This is a correction to Task 3's committed implementation,
+authorized by this ruling and by nothing else. It does not reopen Task 3's scope
+generally: no other Task 3 behaviour, message, code, or detail field changes.
+
 ### 5.5 Strategy identity
 
 `StrategyVersion.content_hash` is
@@ -1493,6 +1646,7 @@ STRATEGY.EXTENSION_DECLARATION       STRATEGY.POLICY_FORBIDDEN_MARKET
 STRATEGY.POLICY_FORBIDDEN_DIRECTION  STRATEGY.EVALUATION_DIVIDE_BY_ZERO
 STRATEGY.EVALUATION_NON_FINITE       STRATEGY.EVALUATION_SERIES_TOO_LONG
 STRATEGY.EVALUATION_MISSING_INPUT    STRATEGY.DIAGNOSTIC_LIMIT_REACHED
+STRATEGY.REFERENCE_NAMESPACE_COLLISION
 CAPABILITY.UNKNOWN_NAME              CAPABILITY.VOCABULARY_VERSION
 CAPABILITY.DECLARATION_OVERLAP       CAPABILITY.REQUIREMENT_UNMET
 CAPABILITY.APPROXIMATION_DISALLOWED  CAPABILITY.APPROXIMATION_MISSING
@@ -1511,6 +1665,152 @@ in section 5.4.1, and it is the only code that correction introduces. No other
 code is added, and none is removed — `STRATEGY.REFERENCE_FUTURE_BAR` in
 particular remains reserved per section 6.5.2. Any further addition still
 requires a plan amendment.
+
+**Second reviewed correction — exactly one further code added.**
+`STRATEGY.REFERENCE_NAMESPACE_COLLISION` is the second and only other addition
+since approval. It is the reference-namespace disjointness code defined in section
+5.10, and that correction introduces no other code. The table therefore stands at
+its approved contents plus exactly these two. Nothing is removed. Any further
+addition still requires a plan amendment.
+
+### 5.10 Reference namespace disjointness — reviewed correction
+
+**The defect this closes.** `NormalizedIdentifier` permits a dot, so `bar.close` is
+a syntactically valid `FeatureDefinition.id` and a valid parameter key. Nothing
+rejected such a declaration, and the layers then disagreed about what the name
+meant: static validation resolved a source bar field first, while the evaluator's
+input resolution preferred a declared feature. A specification could therefore
+validate with **no diagnostic at all** while two byte-identical feature
+declarations produced different series, decided only by how their identifiers
+sorted. Reference precedence is not a fix for that; it merely picks a winner for an
+ambiguity that should never have been representable.
+
+**The ruling.** For `expressions/v1` the three declaration namespaces are
+**pairwise disjoint**:
+
+```text
+SOURCE_FIELD    FEATURE    PARAMETER
+```
+
+`SOURCE_FIELD` contains **exactly** these six names, and no others:
+
+```text
+bar.open   bar.high   bar.low   bar.close   bar.volume   bar.timestamp_utc
+```
+
+A specification is rejected when any of the following holds:
+
+1. a declared feature identifier equals a source-field name;
+2. a declared parameter identifier equals a source-field name;
+3. a declared feature identifier equals a declared parameter identifier.
+
+**The `bar.` prefix is deliberately NOT reserved.** Only the six exact names above
+are reserved. A feature or parameter named `bar.midpoint`, `bar.close_ema`, or
+`barrier` is unaffected, because reserving a prefix would forbid names the approved
+model permits and would be a wider change than the ambiguity requires. Membership
+is tested by exact string equality against the closed six-name set.
+
+**Diagnostic.** One `STRATEGY.REFERENCE_NAMESPACE_COLLISION` per **distinct
+conflicting name** — never one per namespace pair, and never one per declaration
+site, so a name colliding across all three namespaces still yields exactly one
+diagnostic. Severity `ERROR`, category `SCHEMA_VALIDATION`, a fixed bounded
+message interpolating no input, and deterministic details:
+
+| Detail | Value |
+|---|---|
+| `reference_name` | the exact colliding name |
+| `namespaces` | the namespaces that claim it, in the fixed order below |
+
+Namespace order in `namespaces` is fixed as `SOURCE_FIELD`, `FEATURE`,
+`PARAMETER`, independent of declaration order, so the detail payload — and
+therefore the derived `diagnostic_id` — is a function of the declaration set
+alone.
+
+**`details` is exactly those two keys.** A namespace collision is a **spec-level**
+defect: it attaches to no rule, no rule collection, and no expression node.
+It therefore carries **no** `rule_collection`, `rule_id`, or `node_path` detail,
+unlike every rule-level Task 3 finding, and it must not be constructed through the
+per-rule finding helper that injects them.
+
+**Its position in section 5.4.2's sort key is fixed here, because that key leads on
+`rule_id` and `node_path` which a spec-level finding does not have.** A spec-level
+finding takes the **empty string** for both components of the key. The empty string
+sorts before every `NormalizedIdentifier`, whose pattern requires a leading
+lowercase letter, so **every namespace-collision diagnostic precedes every
+rule-level diagnostic**, deterministically and without a tie: two namespace
+findings differ in `reference_name`, hence in `canonical_json_bytes(details)`, which
+is the key's fourth component. Those empty strings exist **only** in the sort key
+and never in `details`.
+
+**Interaction with duplicate-feature detection.** `STRATEGY.FEATURE_DUPLICATE_ID`
+remains **independent**: neither diagnostic masks or gates the other. Precisely,
+because the two checks live in different modules, a specification declaring
+`bar.close` twice as a feature yields **both** diagnostics from
+`validate_feature_graph`, which combines them, and yields the namespace collision
+alone from `validate_strategy_expressions`, which does not own duplicate-ID
+detection. Neither entry point suppresses a diagnostic the other would report.
+
+**Fail-closed requirement.** A namespace-invalid specification must not produce a
+successful feature series or signal series. `validate_feature_graph` inherits
+Task 3's diagnostics and returns `Failure` when any are present, so it yields no
+`FeatureGraph` and the validated Task 4 path cannot be entered. Stated precisely,
+because `evaluate_level_one` is public and accepts a **caller-supplied**
+`FeatureGraph`: the guarantee is that no graph obtained **from validation** can
+carry a namespace-invalid specification into evaluation. A caller that fabricates a
+`FeatureGraph` by hand has left the validated path, exactly as the evaluator's own
+committed tests acknowledge. This must be proven by test, not assumed.
+
+**Three committed Task 3 tests are invalidated by this ruling, and inverting them
+is required rather than incidental.** They currently assert that a collision is
+*accepted* under the precedence rule this ruling replaces with rejection:
+
+- `test_a_source_bar_field_outranks_a_colliding_feature` (rule 1);
+- `test_a_source_bar_field_outranks_a_colliding_parameter` (rule 2);
+- `test_a_declared_feature_outranks_a_colliding_parameter` (rule 3).
+
+Each must become a rejection test naming
+`STRATEGY.REFERENCE_NAMESPACE_COLLISION`. A fourth,
+`test_the_losing_side_of_each_precedence_edge_is_genuinely_boolean`, keeps passing
+because its probes use non-colliding names, but its docstring claim to guard "the
+three tests above" must be corrected.
+
+**Why this is not the asymmetry it resembles.** Section 5.4.2 declines section
+5.4.1's combiner key partly *because* it would break committed Task 3 tests, while
+this ruling breaks three. The distinction is that there the breakage would be
+**gratuitous** — no requirement demands a different order, and the change would
+churn observable output for no behavioural gain — whereas here the breakage is the
+**point**: the controller has ruled that those three specifications are invalid, so
+tests asserting their acceptance are now asserting the wrong contract. Breaking a
+test to implement a ruling is required; breaking one to reshuffle an order nothing
+asked to change is not.
+
+**`_reference_scope`'s precedence becomes unreachable, and is deliberately kept.**
+Once collisions are rejected, no name can be claimed by two namespaces, so the
+`scope.update(SOURCE_BAR_FIELDS)` overwrite can never overwrite anything. This
+ruling forbids altering precedence as a substitute for rejection, and the precedence
+is retained as defence in depth: it keeps the resolver total if a future version
+ever admits a controlled overlap. Its docstring must record that the ordering is now
+unreachable rather than continue to claim that "nothing forbids the three namespaces
+from colliding", which this ruling makes false.
+
+**Ownership of the implementation.** This correction is a **standalone
+controller-directed corrective landing** between the Task 4 implementation commit
+`2b8601fb3db4d43691586fd5253cb3473d5248a0` and Task 5. It is **not** owned by any
+numbered task in section 9: Task 4 is already committed and Task 5 is versioning
+and hashing. Accordingly, Task 4's own restriction — that it "must not modify
+Task 3's `validate_strategy_expressions` unless a focused regression proves that its
+own implementation independently violates the 256-diagnostic contract", citing
+section 5.4.1's scope paragraph — is neither breached nor relied upon here; that
+restriction bound Task 4, and this landing is not Task 4. See the cross-reference
+note in the Task 4 section.
+
+**Ownership.** The Task 3 static-validation layer owns this check, because it
+already holds the parameter names, the feature names, the source-field vocabulary,
+and the reference semantics. Task 4's modules change only if a focused test proves
+the public entry point can otherwise bypass corrected static validation. No new
+source module, no expression-AST change, and no schema field is authorized, and
+reference precedence must not be altered as a substitute for rejecting the
+ambiguity.
 
 ## 6. Exact Stage 4 file map
 
@@ -2884,7 +3184,15 @@ it and changes none of those definitions.
 5. Depth beyond `MAX_EXPRESSION_DEPTH` is rejected by the checker, complementing
    Task 2's model-level bound.
 6. Diagnostics from a rule with several errors are complete, deduplicated, and
-   sorted by `(rule_id, node_path, error_code)`.
+   sorted by `(rule_id, node_path, error_code)`. **Amended by section 5.4.2:**
+   "complete" is bound-qualified by the governing sentence at section 5.4.1, and the
+   key gains `canonical_json_bytes(details)` as a fourth component so that it is
+   total. The three components stated here keep their meaning and their relative
+   precedence, so this statement remains literally true; the fourth only breaks ties
+   the first three admit. **Section 5.10** fixes where a spec-level finding — one
+   with no rule — sorts, and the committed docstring asserting that a shared rule
+   identifier leaves the sort key tied must be corrected, since the fourth component
+   removes that tie.
 
 **Focused verification:** `pytest-focused -o addopts= tests\unit\strategy -q`.
 **Broader:** `pytest-all`. **Also:** Ruff, strict mypy.
@@ -3060,6 +3368,15 @@ request a separate scope ruling rather than editing it.
 Task 4 **must not** modify Task 3's `validate_strategy_expressions` unless a
 focused regression proves that Task 3's own implementation independently violates
 the 256-diagnostic contract. See section 5.4.1's scope paragraph.
+
+**Cross-reference correction.** Section 5.4.1's scope paragraph has since been
+superseded on one point by **section 5.4.2**, which requires Task 3 to adopt the
+bounded-output policy. The restriction above still stands **as written, for
+Task 4**: it bound Task 4, Task 4 is committed at
+`2b8601fb3db4d43691586fd5253cb3473d5248a0` without having modified Task 3, and
+nothing here retroactively authorizes Task 4 to do so. The work section 5.4.2
+mandates is performed by the standalone pre-Task-5 corrective landing described in
+section 5.10, which is not Task 4 and is not bound by this sentence.
 
 **Reviewed correction — a detected cycle gates warm-up and topological order**
 
@@ -3601,7 +3918,8 @@ exact roadmap-status guard.
 5. Confirm no source, schema, dependency, or lockfile change is present in this
    commit.
 6. **Record the complete Stage 4 plan history — reviewed correction.** The
-   approved plan was corrected twice during implementation, so recording only the
+   approved plan was corrected three times during implementation — twice during
+   Tasks 2 and 4, and once by the pre-Task-5 corrective landing — so recording only the
    original approval hash would misstate which document the stage was built
    against. Task 9 must record **all** relevant Stage 4 plan commits, in order:
    - the **original approved plan commit**
@@ -3630,7 +3948,26 @@ exact roadmap-status guard.
         topological ordering, which is the consequence that makes Task 4 step 2
         executable (Task 4, "a detected cycle gates warm-up and topological
         order").
+   - **this pre-Task-5 reference-and-diagnostic correction commit**
+     (`docs: close stage 4 reference and diagnostic gaps`), whose hash is likewise
+     read from Git after it lands and recorded in **both** the ledger and the
+     roadmap's Stage 4 row, for the same reason. Named descriptively rather than by
+     hash because a document cannot contain its own commit hash. It carries
+     **two** reviewed rulings:
+     1. reference-namespace disjointness and its single new error code
+        `STRATEGY.REFERENCE_NAMESPACE_COLLISION` (sections 5.10 and 5.9);
+     2. Task 3 diagnostic bounding, which supersedes section 5.4.1's
+        "separate scope ruling, not Task 4 work" paragraph on that one point
+        (section 5.4.2).
    - any further reviewed plan-correction commit that lands before Task 9.
+
+   **The complete Stage 4 plan-commit chain Task 9 must record is therefore four
+   commits**, in order: `b6721b870c79db7b999b9eb70107e53992cbe1ab`,
+   `65eca5b17d45c0cf04f856dc6049e0c3ee7a2be9`,
+   `f898499d647d1d4ade571345973c6ced5e84403c`, and this one. The Stage 4
+   implementation commit `2b8601fb3db4d43691586fd5253cb3473d5248a0`
+   (`feat: add feature graph and level 1 evaluator`) is Task 4's, not a plan
+   commit, and is recorded separately.
 
    The plan-approval guard's pinned corrected-plan hash still identifies the
    approval commit, not the corrections; Task 9 records the corrections alongside
