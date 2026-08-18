@@ -31,6 +31,7 @@ from typing import Final, NamedTuple, cast
 
 from pydantic import JsonValue
 
+from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.diagnostics import (
     Diagnostic,
     DiagnosticCategory,
@@ -80,6 +81,15 @@ BOOLEAN_TYPES: Final = frozenset({LiteralValueType.BOOLEAN})
 
 _ENTRY_RULES: Final = "entry_rules"
 _EXIT_RULES: Final = "exit_rules"
+
+_NAMESPACE_COLLISION: Final = "STRATEGY.REFERENCE_NAMESPACE_COLLISION"
+_LIMIT_REACHED: Final = "STRATEGY.DIAGNOSTIC_LIMIT_REACHED"
+
+# The three declaration namespaces of plan section 5.10, and the fixed order in
+# which a collision reports them. Plain string constants, never a lookup table.
+_SOURCE_FIELD_NAMESPACE: Final = "SOURCE_FIELD"
+_FEATURE_NAMESPACE: Final = "FEATURE"
+_PARAMETER_NAMESPACE: Final = "PARAMETER"
 
 
 class _TypeRule(StrEnum):
@@ -186,6 +196,14 @@ _MESSAGES: Final = {
         "strategy expression references a name that is not a declared parameter, "
         "a permitted source bar field, or a declared feature"
     ),
+    _NAMESPACE_COLLISION: (
+        "strategy declares one name in more than one reference namespace, so the "
+        "reference is ambiguous"
+    ),
+    _LIMIT_REACHED: (
+        "strategy validation produced more unique diagnostics than the result "
+        "contract can carry; earlier diagnostics in canonical order are retained"
+    ),
 }
 
 
@@ -201,10 +219,14 @@ class _Finding(NamedTuple):
 def _reference_scope(spec: StrategySpec) -> dict[str, LiteralValueType]:
     """Return every resolvable reference name and its declared type.
 
-    Precedence, fixed here because nothing forbids the three namespaces from
-    colliding: a source bar field wins over a declared feature, which wins over
-    a declared parameter. Bar fields are the closed reserved vocabulary, so a
-    declaration may not shadow one.
+    Precedence is a source bar field over a declared feature over a declared
+    parameter. **It is now unreachable, and deliberately retained.** Plan section
+    5.10 makes the three namespaces pairwise disjoint and rejects any collision, so
+    no name can be claimed twice and the ``SOURCE_BAR_FIELDS`` update below can
+    never overwrite an entry. The ordering is kept as defence in depth: it keeps
+    this resolver total if a later expression-semantics version ever admits a
+    controlled overlap, and section 5.10 forbids altering precedence as a
+    substitute for rejecting the ambiguity.
     """
     scope: dict[str, LiteralValueType] = {
         name: definition.value_type for name, definition in spec.parameters.items()
@@ -415,9 +437,55 @@ def _check_rule(rule_context: _RuleContext) -> list[_Finding]:
     return findings
 
 
+def _namespace_findings(spec: StrategySpec) -> list[_Finding]:
+    """Reject any name claimed by more than one declaration namespace.
+
+    Plan section 5.10 makes `SOURCE_FIELD`, `FEATURE` and `PARAMETER` pairwise
+    disjoint. Only the **six exact** source-field names are reserved — the `bar.`
+    prefix deliberately is not — so membership is exact equality against
+    ``SOURCE_BAR_FIELDS`` and a name such as ``bar.midpoint`` or ``barrier`` is
+    unaffected.
+
+    One finding per **distinct** conflicting name, never one per namespace pair, so
+    a name claimed by all three still yields exactly one. ``namespaces`` is built in
+    the fixed order `SOURCE_FIELD`, `FEATURE`, `PARAMETER` rather than in
+    declaration order, so the details payload and therefore the derived
+    ``diagnostic_id`` are functions of the declaration set alone.
+
+    A collision is **spec-level**: it attaches to no rule, no rule collection, and
+    no expression node. It therefore takes the empty string for the ordering key's
+    ``rule_id`` and ``node_path`` — which sorts it before every rule-level finding,
+    because ``NormalizedIdentifier`` requires a leading lowercase letter — and puts
+    neither of them in ``details``. It is deliberately not built through
+    ``_RuleContext.finding``, which injects both.
+    """
+    features = {feature.id for feature in spec.features}
+    parameters = set(spec.parameters)
+    findings: list[_Finding] = []
+    for name in sorted(features | parameters):
+        claimed: list[DiagnosticDetailValue] = []
+        if name in SOURCE_BAR_FIELDS:
+            claimed.append(_SOURCE_FIELD_NAMESPACE)
+        if name in features:
+            claimed.append(_FEATURE_NAMESPACE)
+        if name in parameters:
+            claimed.append(_PARAMETER_NAMESPACE)
+        if len(claimed) < 2:
+            continue
+        findings.append(
+            _Finding(
+                "",
+                "",
+                _NAMESPACE_COLLISION,
+                {"reference_name": name, "namespaces": claimed},
+            )
+        )
+    return findings
+
+
 def _collect_findings(spec: StrategySpec) -> list[_Finding]:
     scope = _reference_scope(spec)
-    findings: list[_Finding] = []
+    findings: list[_Finding] = _namespace_findings(spec)
     for rule_collection, rules in (
         (_ENTRY_RULES, spec.entry_rules),
         (_EXIT_RULES, spec.exit_rules),
@@ -425,6 +493,58 @@ def _collect_findings(spec: StrategySpec) -> list[_Finding]:
         for rule in rules:
             findings.extend(_check_rule(_RuleContext(rule_collection, rule, scope)))
     return findings
+
+
+def _limit_marker(observed_at_utc: datetime) -> Diagnostic:
+    """The terminal diagnostic-limit marker of plan sections 5.4.1 and 5.4.2.
+
+    The same closed code the feature-graph combiner uses, emitted under this
+    module's own ``source_component``; section 5.4.1's ordering key carries
+    ``source_component`` so the two producers' markers stay distinct diagnostics of
+    one code. No second limit code is introduced.
+
+    ``retained_diagnostics`` is the fixed literal ``MAX_RESULT_DIAGNOSTICS - 1``,
+    never a computed figure, so the payload and the identity derived from it are
+    byte-identical for every overflow size. No omitted or total count is published:
+    the plan authorizes none and a fabricated figure would be worse than none.
+
+    It is spec-level, so it takes the empty ordering-key components and carries
+    neither in ``details``.
+    """
+    return _diagnostic(
+        _Finding(
+            "",
+            "",
+            _LIMIT_REACHED,
+            {
+                "diagnostic_limit": MAX_RESULT_DIAGNOSTICS,
+                "retained_diagnostics": MAX_RESULT_DIAGNOSTICS - 1,
+            },
+        ),
+        observed_at_utc,
+    )
+
+
+def _order_key(finding: _Finding) -> tuple[str, str, str, bytes]:
+    """Task 3's total ordering key, fixed by plan section 5.4.2.
+
+    The first three components are Task 3's original reviewed key, unchanged, so
+    every committed ordering guarantee still holds. The fourth is required because
+    the first three are **not total**: an entry rule and an exit rule may share an
+    identifier, so two findings at the same ``node_path`` with the same
+    ``error_code`` differ only in ``details.rule_collection`` and would tie. Section
+    5.4.1 item 2 rules a tie unacceptable, because a permutation test over a key
+    admitting one passes vacuously.
+
+    A spec-level finding carries the empty string for the first two components and
+    therefore sorts before every rule-level finding.
+    """
+    return (
+        finding.rule_id,
+        finding.node_path,
+        finding.error_code,
+        canonical_json_bytes(cast(JsonValue, finding.details)),
+    )
 
 
 def _diagnostic(finding: _Finding, observed_at_utc: datetime) -> Diagnostic:
@@ -475,29 +595,39 @@ def validate_strategy_expressions(
     findings = _collect_findings(spec)
     if not findings:
         return Success[StrategySpec](outcome="SUCCESS", value=spec)
-    # Sorted before deduplication and before the bound, so both the retained set
-    # and its order are functions of the declaration alone. The sort is stable
-    # over a generation order that is itself deterministic -- rule collection,
-    # then declared index, then pre-order left to right -- so a tie in the plan's
-    # three-part key still resolves identically on every run.
-    ordered = sorted(
-        findings,
-        key=lambda finding: (finding.rule_id, finding.node_path, finding.error_code),
+    # Plan section 5.4.2's exact order: collect, deduplicate, canonically sort,
+    # bound, then append the terminal marker. Deduplicating before the bound is
+    # what makes the bound count *unique* diagnostics rather than raw findings.
+    #
+    # The deduplication key is exactly the diagnostic identity of section 5.3.3.
+    # That identity payload is a function of `(error_code, details)` alone: every
+    # other field in it is either a fixed literal or a function of `error_code`
+    # through this module's own closed per-code tables. So equal keys mean equal
+    # `diagnostic_id`s, and this can never drop a distinct diagnostic.
+    unique: dict[tuple[str, bytes], _Finding] = {}
+    for finding in findings:
+        identity = (
+            finding.error_code,
+            canonical_json_bytes(cast(JsonValue, finding.details)),
+        )
+        unique.setdefault(identity, finding)
+    ordered = sorted(unique.values(), key=_order_key)
+    if len(ordered) <= MAX_RESULT_DIAGNOSTICS:
+        return Failure(
+            outcome="FAILURE",
+            diagnostics=tuple(
+                _diagnostic(finding, observed_at_utc) for finding in ordered
+            ),
+        )
+    # Beyond the bound the result is explicitly marked rather than silently cut:
+    # the first `MAX_RESULT_DIAGNOSTICS - 1` in canonical order, then one terminal
+    # marker. `Failure`'s own bound is untouched, and no exception is raised for
+    # what is an expected outcome.
+    retained = tuple(
+        _diagnostic(finding, observed_at_utc)
+        for finding in ordered[: MAX_RESULT_DIAGNOSTICS - 1]
     )
-    diagnostics: list[Diagnostic] = []
-    seen: set[str] = set()
-    for finding in ordered:
-        diagnostic = _diagnostic(finding, observed_at_utc)
-        # Section 5.3.3 makes the complete material payload the diagnostic's
-        # identity, so an equal identity means an equal diagnostic and this can
-        # never drop a distinct one.
-        if diagnostic.diagnostic_id in seen:
-            continue
-        seen.add(diagnostic.diagnostic_id)
-        diagnostics.append(diagnostic)
-        # ``Failure`` admits at most ``MAX_RESULT_DIAGNOSTICS``. Truncating the
-        # sorted prefix keeps the checker inside its ``Result``-only contract; the
-        # alternative is a ``ValidationError`` raised out of a failure path.
-        if len(diagnostics) == MAX_RESULT_DIAGNOSTICS:
-            break
-    return Failure(outcome="FAILURE", diagnostics=tuple(diagnostics))
+    return Failure(
+        outcome="FAILURE",
+        diagnostics=(*retained, _limit_marker(observed_at_utc)),
+    )

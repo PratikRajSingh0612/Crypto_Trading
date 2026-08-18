@@ -25,11 +25,15 @@ from crypto_lab.domain.results import MAX_RESULT_DIAGNOSTICS, Failure, Success
 from crypto_lab.strategy.feature_graph import (
     FEATURE_OPERATIONS,
     FeatureGraph,
+    bounded_failure,
     topological_order,
     validate_feature_graph,
 )
 from crypto_lab.strategy.models import MAX_FEATURES, StrategySpec
-from crypto_lab.strategy.validation import SOURCE_BAR_FIELDS
+from crypto_lab.strategy.validation import (
+    SOURCE_BAR_FIELDS,
+    validate_strategy_expressions,
+)
 from crypto_lab.strategy.yaml_source import load_yaml_document
 
 _FIXTURES = Path(__file__).parents[2] / "fixtures" / "strategy"
@@ -481,6 +485,112 @@ def test_a_duplicated_identifier_still_yields_permutation_invariant_output(
     ) == canonical_json_bytes(
         [item.model_dump(mode="json") for item in backward.diagnostics]
     )
+
+
+# --- Plan section 5.4.2: the combiner absorbs an inherited marker --------------
+
+
+def _overflow_rules(count: int) -> dict[str, Any]:
+    """Entry rules whose Task 3 validation overflows the diagnostic bound.
+
+    Every numeric operand of an `and` is one expression type mismatch, and `and`
+    accepts at most 64 operands, so `count` findings need `count / 64` rules.
+    """
+    zero = {"op": "literal", "value_type": "DECIMAL", "value": "0"}
+    rules: list[dict[str, Any]] = []
+    remaining = count
+    while remaining >= 2:
+        width = min(64, remaining)
+        rules.append(
+            {
+                "id": f"probe_{len(rules):03d}",
+                "expression": {"op": "and", "operands": [zero] * width},
+            }
+        )
+        remaining -= width
+    return {
+        "entry_rules": rules,
+        "exit_rules": [
+            {
+                "id": "exit_probe",
+                "expression": {
+                    "op": "literal",
+                    "value_type": "BOOLEAN",
+                    "value": False,
+                },
+            }
+        ],
+    }
+
+
+def test_an_inherited_limit_marker_is_absorbed_rather_than_sorted_inline() -> None:
+    """`DIAGNOSTIC_LIMIT_REACHED` starts with `D`, so it would sort to index 0.
+
+    Task 3 now emits its own terminal marker on overflow. The combiner re-sorts
+    every inherited diagnostic on an error-code-leading key, so without absorbing
+    the marker it would land first in the substantive run and the terminal slot
+    would hold an ordinary diagnostic — exactly inverting the positional signal
+    that plan section 5.4.1 item 6 depends on.
+    """
+    spec = _spec(features=[_FAST, _SLOW], **_overflow_rules(320))
+    diagnostics = _failure(spec).diagnostics
+    codes = [item.error_code for item in diagnostics]
+
+    assert len(diagnostics) == MAX_RESULT_DIAGNOSTICS
+    assert codes.count(_LIMIT) == 1
+    assert codes[-1] == _LIMIT
+
+
+def test_an_absorbed_marker_forces_a_terminal_marker_on_a_small_run() -> None:
+    """An upstream truncation must surface even when this layer has few findings."""
+    overflowing = validate_strategy_expressions(
+        _spec(features=[_FAST, _SLOW], **_overflow_rules(320)), _OBSERVED_AT
+    )
+    assert isinstance(overflowing, Failure)
+    inherited_marker = overflowing.diagnostics[-1]
+    assert inherited_marker.error_code == _LIMIT
+    assert inherited_marker.source_component == "strategy.validation"
+
+    substantive = list(_failure(_spec(features=_cyclic_pair())).diagnostics)
+    assert _LIMIT not in {item.error_code for item in substantive}
+
+    combined = bounded_failure([inherited_marker, *substantive], _OBSERVED_AT)
+    codes = [item.error_code for item in combined.diagnostics]
+
+    assert codes.count(_LIMIT) == 1
+    assert codes[-1] == _LIMIT
+    assert len(combined.diagnostics) == len(substantive) + 1
+    # The retained marker is the combiner's own, not the inherited one.
+    assert combined.diagnostics[-1].source_component == "strategy.feature_graph"
+
+
+# --- Plan section 5.10: the combiner surfaces namespace collisions -------------
+
+_COLLISION = "STRATEGY.REFERENCE_NAMESPACE_COLLISION"
+
+
+def test_a_duplicate_reserved_feature_keeps_both_diagnostics() -> None:
+    """Duplicate-ID detection stays independent of namespace-collision detection.
+
+    They live in different modules, so only the combiner sees both. Neither masks
+    nor gates the other.
+    """
+    reserved = _feature("bar.close", inputs=["bar.close"], warm_up_bars=50)
+    spec = _spec(features=[_FAST, _SLOW, reserved, reserved], **_bar_rules())
+    codes = set(_codes(spec))
+
+    assert _COLLISION in codes
+    assert _DUPLICATE in codes
+
+
+def test_a_namespace_invalid_specification_yields_no_feature_graph() -> None:
+    """Fail-closed: no graph obtained from validation can reach the evaluator."""
+    reserved = _feature("bar.high", inputs=["bar.close"], warm_up_bars=50)
+    spec = _spec(features=[_FAST, _SLOW, reserved], **_bar_rules())
+    outcome = _validate(spec)
+
+    assert isinstance(outcome, Failure)
+    assert _COLLISION in {item.error_code for item in outcome.diagnostics}
 
 
 def test_the_witness_is_rotated_when_the_walk_enters_at_a_non_minimal_member() -> None:

@@ -975,6 +975,22 @@ def test_arithmetic_with_a_missing_operand_yields_missing_not_a_substitute() -> 
     assert _entry(spec, _bars(["1", "2", "3"])) == (False, False, True)
 
 
+def test_a_namespace_invalid_specification_produces_no_series() -> None:
+    """Plan section 5.10 fail-closed requirement, proven end to end.
+
+    The validated Task 4 path is `validate_feature_graph` then
+    `evaluate_level_one`. A specification whose feature shadows a reserved bar
+    field must never reach the second step, so no feature or signal series exists
+    for it.
+    """
+    spec = _probe_spec([_bar_feature("bar.close")], _ALWAYS_FALSE)
+    outcome = validate_feature_graph(spec, _OBSERVED_AT)
+
+    assert isinstance(outcome, Failure)
+    codes = {item.error_code for item in outcome.diagnostics}
+    assert "STRATEGY.REFERENCE_NAMESPACE_COLLISION" in codes
+
+
 def test_a_non_boolean_rule_outcome_is_false_rather_than_truthy() -> None:
     """Specification 12.3.2: a rule never becomes true through truthiness.
 

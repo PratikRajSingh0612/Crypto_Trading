@@ -667,12 +667,30 @@ def bounded_failure(
     permutation produce byte-identical output. Every Stage 4 finding source is
     bounded by ``MAX_FEATURES`` and ``MAX_RULES``, so collecting all of them is
     itself a bounded amount of work.
+
+    **Inherited markers are absorbed, per plan section 5.4.2.** Task 3 now emits its
+    own terminal marker on overflow, and this function inherits its diagnostics. Any
+    ``STRATEGY.DIAGNOSTIC_LIMIT_REACHED`` in the input is therefore removed before
+    ordering and recorded as an overflow signal, and at most one marker — this
+    module's own — is ever returned, always last. An inherited marker forces a
+    terminal marker even when this layer's own substantive count is small, which is
+    the honest outcome: an upstream producer truncated, so the returned set is
+    provably incomplete and must say so.
     """
     unique: dict[str, Diagnostic] = {}
+    inherited_overflow = False
     for diagnostic in diagnostics:
+        if diagnostic.error_code == DIAGNOSTIC_LIMIT_REACHED:
+            # Partitioned out **before** ordering, from any producer including this
+            # one, so no marker can enter the substantive run. Without this a
+            # marker inherited from Task 3 would sort to index 0, because ``D``
+            # precedes every other ``STRATEGY.*`` code on an error-code-leading
+            # key, and the terminal slot would hold an ordinary diagnostic.
+            inherited_overflow = True
+            continue
         unique.setdefault(diagnostic.diagnostic_id, diagnostic)
     ordered = sorted(unique.values(), key=_order_key)
-    if len(ordered) <= MAX_RESULT_DIAGNOSTICS:
+    if len(ordered) <= MAX_RESULT_DIAGNOSTICS and not inherited_overflow:
         return Failure(outcome="FAILURE", diagnostics=tuple(ordered))
     retained = tuple(ordered[: MAX_RESULT_DIAGNOSTICS - 1])
     return Failure(

@@ -18,7 +18,11 @@ import pytest
 from pydantic import ValidationError
 
 from crypto_lab.domain.canonical_json import canonical_json_bytes
-from crypto_lab.domain.diagnostics import DiagnosticCategory, DiagnosticDetailValue
+from crypto_lab.domain.diagnostics import (
+    DiagnosticCategory,
+    DiagnosticDetailValue,
+    DiagnosticSeverity,
+)
 from crypto_lab.domain.results import (
     MAX_RESULT_DIAGNOSTICS,
     Failure,
@@ -37,11 +41,15 @@ from crypto_lab.strategy.expressions import (
 from crypto_lab.strategy.models import RuleDefinition, StrategySpec
 from crypto_lab.strategy.validation import (
     _ACCEPTED_OPERAND_TYPES,
+    _ENTRY_RULES,
+    _EXIT_RULES,
     _MESSAGES,
     _RESULT_TYPES,
     _TYPE_RULES,
     SOURCE_BAR_FIELDS,
     _child_operands,
+    _Finding,
+    _order_key,
     _TypeRule,
     validate_strategy_expressions,
 )
@@ -103,6 +111,8 @@ _FAST = {"op": "ref", "id": "fast_sma", "bars_ago": 0}
 _SLOW = {"op": "ref", "id": "slow_sma", "bars_ago": 0}
 
 _MISMATCH = "STRATEGY.EXPRESSION_TYPE_MISMATCH"
+_COLLISION = "STRATEGY.REFERENCE_NAMESPACE_COLLISION"
+_LIMIT = "STRATEGY.DIAGNOSTIC_LIMIT_REACHED"
 
 _ARITHMETIC_OPS = ("add", "subtract", "multiply", "divide", "minimum", "maximum")
 _ORDERING_OPS = (
@@ -439,12 +449,15 @@ def test_a_positive_historical_offset_is_accepted(bars_ago: int) -> None:
     )
 
 
-# Every edge of the documented precedence chain is asserted separately.
 # `NormalizedIdentifier` is `^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`, so a dotted
 # `bar.close` is a legal feature ID and a legal parameter key and all three
-# namespaces can genuinely collide. Each test below drives its probe through a
-# numeric operator and shadows the winner with a `BOOLEAN` declaration, so the
-# losing resolution would be a type mismatch rather than a silent pass.
+# namespaces can genuinely collide.
+#
+# The three tests below asserted **acceptance** under a documented precedence
+# chain. Plan section 5.10 replaces that precedence with rejection: the three
+# declaration namespaces are pairwise disjoint, so each of these specifications is
+# now invalid and each test is inverted. Precedence itself is retained in
+# `_reference_scope` as defence in depth and is unreachable on the validated path.
 
 
 def _numeric_probe(name: str, **overrides: object) -> StrategySpec:
@@ -464,35 +477,52 @@ def _boolean_feature(feature_id: str) -> dict[str, Any]:
     return declaration | {"id": feature_id, "output_type": "BOOLEAN"}
 
 
-def test_a_source_bar_field_outranks_a_colliding_parameter() -> None:
-    """Bar fields are reserved, so a parameter cannot shadow one."""
+def _decimal_feature(feature_id: str) -> dict[str, Any]:
+    return dict(_document()["features"][0]) | {"id": feature_id}
+
+
+def _collisions(spec: StrategySpec) -> list[dict[str, DiagnosticDetailValue]]:
+    """Every namespace-collision diagnostic's details, in returned order."""
+    return [
+        dict(diagnostic.details)
+        for diagnostic in _failure(spec).diagnostics
+        if diagnostic.error_code == _COLLISION
+    ]
+
+
+def test_a_parameter_colliding_with_a_source_bar_field_is_rejected() -> None:
+    """Precedence is replaced by rejection: the namespaces are disjoint."""
     parameters = dict(_document()["parameters"])
     parameters["bar.close"] = {"value_type": "BOOLEAN", "value": True}
 
-    _accepted(_numeric_probe("bar.close", parameters=parameters))
+    assert _collisions(_numeric_probe("bar.close", parameters=parameters)) == [
+        {"reference_name": "bar.close", "namespaces": ["SOURCE_FIELD", "PARAMETER"]}
+    ]
 
 
-def test_a_source_bar_field_outranks_a_colliding_feature() -> None:
-    """Bar fields also outrank a declared feature, not only a parameter."""
+def test_a_feature_colliding_with_a_source_bar_field_is_rejected() -> None:
     features = [*_document()["features"], _boolean_feature("bar.close")]
 
-    _accepted(_numeric_probe("bar.close", features=features))
+    assert _collisions(_numeric_probe("bar.close", features=features)) == [
+        {"reference_name": "bar.close", "namespaces": ["SOURCE_FIELD", "FEATURE"]}
+    ]
 
 
-def test_a_declared_feature_outranks_a_colliding_parameter() -> None:
-    """`fast_sma` is a DECIMAL feature in the fixture; the parameter is BOOLEAN."""
+def test_a_feature_colliding_with_a_parameter_is_rejected() -> None:
     parameters = dict(_document()["parameters"])
     parameters["fast_sma"] = {"value_type": "BOOLEAN", "value": True}
 
-    _accepted(_numeric_probe("fast_sma", parameters=parameters))
+    assert _collisions(_numeric_probe("fast_sma", parameters=parameters)) == [
+        {"reference_name": "fast_sma", "namespaces": ["FEATURE", "PARAMETER"]}
+    ]
 
 
-def test_the_losing_side_of_each_precedence_edge_is_genuinely_boolean() -> None:
-    """Guards the three tests above from passing because the shadow is numeric.
+def test_a_boolean_shadow_on_an_uncontested_name_still_type_checks() -> None:
+    """The three tests above are rejection tests now, so this no longer guards them.
 
-    Each asserts acceptance, so a shadow that happened to type-check numerically
-    would make them vacuous. Here the same declarations win on a name no higher
-    namespace claims, and the resulting mismatch proves they are BOOLEAN.
+    It is kept because it independently proves the shadow declarations really are
+    `BOOLEAN`: on a name no other namespace claims there is no collision, the
+    declaration resolves, and the numeric probe fails on type instead.
     """
     parameters = dict(_document()["parameters"])
     parameters["shadow.probe"] = {"value_type": "BOOLEAN", "value": True}
@@ -504,6 +534,113 @@ def test_the_losing_side_of_each_precedence_edge_is_genuinely_boolean() -> None:
     assert _findings(_numeric_probe("other.probe", features=features)) == [
         ("enter_probe", "expression.left", _MISMATCH)
     ]
+
+
+# --- Plan section 5.10: reference namespace disjointness ----------------------
+
+
+@pytest.mark.parametrize("field", sorted(SOURCE_BAR_FIELDS))
+def test_every_source_field_name_is_rejected_as_a_feature_id(field: str) -> None:
+    """All six reserved names, not just the one an example happens to use."""
+    features = [*_document()["features"], _decimal_feature(field)]
+
+    assert _collisions(_spec(features=features)) == [
+        {"reference_name": field, "namespaces": ["SOURCE_FIELD", "FEATURE"]}
+    ]
+
+
+@pytest.mark.parametrize("field", sorted(SOURCE_BAR_FIELDS))
+def test_every_source_field_name_is_rejected_as_a_parameter_id(field: str) -> None:
+    parameters = dict(_document()["parameters"])
+    parameters[field] = {"value_type": "INTEGER", "value": 1}
+
+    assert _collisions(_spec(parameters=parameters)) == [
+        {"reference_name": field, "namespaces": ["SOURCE_FIELD", "PARAMETER"]}
+    ]
+
+
+def test_a_name_claimed_by_all_three_namespaces_yields_exactly_one_diagnostic() -> None:
+    """One diagnostic per distinct conflicting name, never one per pair."""
+    parameters = dict(_document()["parameters"])
+    parameters["bar.close"] = {"value_type": "INTEGER", "value": 1}
+    features = [*_document()["features"], _decimal_feature("bar.close")]
+
+    assert _collisions(_spec(features=features, parameters=parameters)) == [
+        {
+            "reference_name": "bar.close",
+            "namespaces": ["SOURCE_FIELD", "FEATURE", "PARAMETER"],
+        }
+    ]
+
+
+def test_a_valid_feature_and_parameter_pair_is_still_accepted() -> None:
+    """The check must not reject a specification whose namespaces are disjoint."""
+    parameters = dict(_document()["parameters"])
+    parameters["probe_period"] = {"value_type": "INTEGER", "value": 4}
+    features = [*_document()["features"], _decimal_feature("probe_mean")]
+
+    _accepted(_numeric_probe("probe_mean", features=features, parameters=parameters))
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["barrier", "bar.midpoint", "bar.close2", "bar.open_ema", "bars", "bar.vwap"],
+)
+def test_a_name_merely_beginning_with_bar_is_not_reserved(name: str) -> None:
+    """Only the six exact names are reserved; the `bar.` prefix is not."""
+    features = [*_document()["features"], _decimal_feature(name)]
+
+    _accepted(_numeric_probe(name, features=features))
+
+
+def test_collision_diagnostics_are_identical_under_declaration_permutation() -> None:
+    """Section 5.4.1 item 2 binds unconditionally, including on rejected input.
+
+    `features` is a list, so its declaration order is observable; `parameters` is a
+    mapping that `canonical_json_bytes` sorts before construction, so its order is
+    already normalised and cannot vary. The list is therefore what this permutes.
+    """
+    extra = [_decimal_feature("bar.close"), _decimal_feature("bar.high")]
+    base = _document()["features"]
+    forward = _failure(_spec(features=[*base, *extra]))
+    backward = _failure(_spec(features=[*reversed(extra), *base]))
+
+    assert canonical_json_bytes(
+        [item.model_dump(mode="json") for item in forward.diagnostics]
+    ) == canonical_json_bytes(
+        [item.model_dump(mode="json") for item in backward.diagnostics]
+    )
+
+
+def test_two_colliding_names_yield_one_diagnostic_each_in_canonical_order() -> None:
+    parameters = dict(_document()["parameters"])
+    parameters["bar.volume"] = {"value_type": "INTEGER", "value": 1}
+    features = [*_document()["features"], _decimal_feature("bar.open")]
+
+    assert _collisions(_spec(features=features, parameters=parameters)) == [
+        {"reference_name": "bar.open", "namespaces": ["SOURCE_FIELD", "FEATURE"]},
+        {"reference_name": "bar.volume", "namespaces": ["SOURCE_FIELD", "PARAMETER"]},
+    ]
+
+
+def test_a_namespace_collision_sorts_before_every_rule_level_diagnostic() -> None:
+    """Spec-level findings take the empty string for the key's leading components."""
+    features = [*_document()["features"], _decimal_feature("bar.close")]
+    spec = _spec(
+        features=features,
+        entry_rules=[_rule("aaa_probe", {"op": "and", "operands": [_ZERO]})],
+    )
+    codes = [diagnostic.error_code for diagnostic in _failure(spec).diagnostics]
+
+    assert codes == [_COLLISION, _MISMATCH]
+
+
+def test_the_namespace_collision_diagnostic_carries_no_rule_detail() -> None:
+    """It attaches to no rule, so it must not fabricate one."""
+    features = [*_document()["features"], _decimal_feature("bar.close")]
+    collision = _collisions(_spec(features=features))[0]
+
+    assert sorted(collision) == ["namespaces", "reference_name"]
 
 
 # --- Step 5: the checker's own depth bound -----------------------------------
@@ -646,7 +783,15 @@ def test_the_same_defect_at_two_different_nodes_is_not_deduplicated() -> None:
 
 
 def test_the_same_rule_id_in_both_collections_stays_distinct_and_ordered() -> None:
-    """The sort key ties, so the stable sort keeps the entry rule first."""
+    """The order is decided by the sort key, not by a stable sort over a tie.
+
+    This docstring previously read "the sort key ties, so the stable sort keeps the
+    entry rule first". Plan section 5.4.2 falsified that: the key gained
+    `canonical_json_bytes(details)` as a fourth component precisely because this
+    pair tied on the first three, and `"entry_rules" < "exit_rules"` now separates
+    them outright. `test_the_ordering_key_separates_a_shared_rule_identifier` below
+    pins that, so this test no longer relies on sort stability for its order.
+    """
     duplicate = {"op": "and", "operands": [_ZERO]}
     spec = _spec(
         entry_rules=[_rule("both_probe", duplicate)],
@@ -660,6 +805,35 @@ def test_the_same_rule_id_in_both_collections_stays_distinct_and_ordered() -> No
         "entry_rules",
         "exit_rules",
     ]
+
+
+def test_the_ordering_key_separates_a_shared_rule_identifier() -> None:
+    """The fourth key component is load-bearing, not decorative.
+
+    An entry rule and an exit rule may share an identifier, and two findings at the
+    same `node_path` with the same `error_code` then differ **only** in
+    `details.rule_collection`. Without the fourth component the key ties, and plan
+    section 5.4.1 item 2 rules a tie unacceptable because a permutation test over
+    such a key passes vacuously. Asserted on the key itself, because a tie is
+    invisible from the returned order while generation happens to be entry-first.
+    """
+    shared = {"rule_id": "both_probe", "node_path": "expression.operands[0]"}
+    entry = _Finding(
+        "both_probe",
+        "expression.operands[0]",
+        _MISMATCH,
+        {"rule_collection": _ENTRY_RULES, **shared},
+    )
+    exits = _Finding(
+        "both_probe",
+        "expression.operands[0]",
+        _MISMATCH,
+        {"rule_collection": _EXIT_RULES, **shared},
+    )
+
+    assert _order_key(entry)[:3] == _order_key(exits)[:3]
+    assert _order_key(entry) != _order_key(exits)
+    assert _order_key(entry) < _order_key(exits)
 
 
 def test_two_runs_over_equal_inputs_are_byte_identical_including_identifiers() -> None:
@@ -700,7 +874,17 @@ def test_declaration_order_of_the_namespaces_cannot_change_the_result() -> None:
 
 
 def test_the_diagnostic_count_is_bounded_by_the_result_contract() -> None:
-    """More defects than `Failure` admits are truncated, never raised."""
+    """More defects than `Failure` admits are bounded, never raised.
+
+    Updated by plan section 5.4.2: the 256th slot now holds the terminal marker
+    rather than one more rule diagnostic, and the marker is excluded from the
+    comprehension. Reading `details["rule_id"]` over every diagnostic would now
+    raise `KeyError`, because the marker's details are `diagnostic_limit` and
+    `retained_diagnostics`.
+
+    Four rules stay represented, not three: 5 x 64 = 320 findings, and the retained
+    255 are 64 + 64 + 64 + 63, so `probe_d` contributes its first 63.
+    """
     operands: list[dict[str, Any]] = [_ZERO] * 64
     spec = _spec(
         entry_rules=[
@@ -711,8 +895,139 @@ def test_the_diagnostic_count_is_bounded_by_the_result_contract() -> None:
     diagnostics = _failure(spec).diagnostics
 
     assert len(diagnostics) == MAX_RESULT_DIAGNOSTICS
-    retained = {diagnostic.details["rule_id"] for diagnostic in diagnostics}
+    assert diagnostics[-1].error_code == _LIMIT
+    retained = {diagnostic.details["rule_id"] for diagnostic in diagnostics[:-1]}
     assert retained == {"probe_a", "probe_b", "probe_c", "probe_d"}
+
+
+# --- Plan section 5.4.2: the bounded output policy ----------------------------
+
+
+def _bounded_rules(count: int) -> list[dict[str, Any]]:
+    """Rules whose static validation yields exactly `count` unique findings.
+
+    Each numeric operand of an `and` is one type mismatch, and `and` accepts at
+    most 64 operands, so wide rules supply the bulk and a single-operand `not`
+    rule supplies an odd remainder of one.
+    """
+    rules: list[dict[str, Any]] = []
+    remaining = count
+    while remaining >= 2:
+        width = min(64, remaining)
+        rules.append(
+            _rule(
+                f"probe_{len(rules):03d}",
+                {"op": "and", "operands": [_ZERO] * width},
+            )
+        )
+        remaining -= width
+    if remaining == 1:
+        rules.append(_rule(f"probe_{len(rules):03d}", {"op": "not", "operand": _ZERO}))
+    return rules
+
+
+def _bounded_spec(count: int) -> StrategySpec:
+    return _spec(entry_rules=_bounded_rules(count))
+
+
+@pytest.mark.parametrize("count", [1, 2, 64, 255, MAX_RESULT_DIAGNOSTICS])
+def test_the_generator_produces_exactly_the_requested_unique_count(count: int) -> None:
+    """Guards every bound test below from passing on a miscounted generator."""
+    diagnostics = _failure(_bounded_spec(count)).diagnostics
+
+    assert len(diagnostics) == count
+    assert len({item.diagnostic_id for item in diagnostics}) == count
+
+
+def test_two_hundred_fifty_five_unique_diagnostics_are_returned_whole() -> None:
+    diagnostics = _failure(_bounded_spec(255)).diagnostics
+
+    assert len(diagnostics) == 255
+    assert _LIMIT not in {item.error_code for item in diagnostics}
+
+
+def test_the_exact_bound_of_unique_diagnostics_is_returned_whole() -> None:
+    """256 is the exact boundary at which diagnostics are still complete."""
+    diagnostics = _failure(_bounded_spec(MAX_RESULT_DIAGNOSTICS)).diagnostics
+
+    assert len(diagnostics) == MAX_RESULT_DIAGNOSTICS
+    assert _LIMIT not in {item.error_code for item in diagnostics}
+
+
+def test_one_past_the_bound_returns_the_prefix_plus_a_terminal_marker() -> None:
+    """Silent truncation is the defect this closes: 257 must not look like 256."""
+    diagnostics = _failure(_bounded_spec(MAX_RESULT_DIAGNOSTICS + 1)).diagnostics
+
+    assert len(diagnostics) == MAX_RESULT_DIAGNOSTICS
+    assert diagnostics[-1].error_code == _LIMIT
+    assert _LIMIT not in {item.error_code for item in diagnostics[:-1]}
+
+
+def test_overflow_is_distinguishable_from_an_exact_full_result() -> None:
+    exact = _failure(_bounded_spec(MAX_RESULT_DIAGNOSTICS)).diagnostics
+    overflowing = _failure(_bounded_spec(MAX_RESULT_DIAGNOSTICS + 1)).diagnostics
+
+    assert len(exact) == len(overflowing) == MAX_RESULT_DIAGNOSTICS
+    assert exact[-1].error_code != _LIMIT
+    assert overflowing[-1].error_code == _LIMIT
+
+
+def test_the_marker_is_always_the_last_element() -> None:
+    for count in (MAX_RESULT_DIAGNOSTICS + 1, 320, 512):
+        diagnostics = _failure(_bounded_spec(count)).diagnostics
+        codes = [item.error_code for item in diagnostics]
+        assert codes.index(_LIMIT) == len(codes) - 1, count
+
+
+def test_deduplication_precedes_the_bound() -> None:
+    """The bound counts unique diagnostics, not raw findings."""
+    wide = _rule("probe_dup", {"op": "and", "operands": [_ZERO] * 64})
+    diagnostics = _failure(_spec(entry_rules=[wide] * 5)).diagnostics
+
+    assert len(diagnostics) == 64
+    assert _LIMIT not in {item.error_code for item in diagnostics}
+
+
+@pytest.mark.parametrize("count", [255, MAX_RESULT_DIAGNOSTICS, 257, 320])
+def test_no_expected_boundary_exception_escapes(count: int) -> None:
+    """Crossing the bound is an expected outcome, never a raised error."""
+    assert isinstance(_validate(_bounded_spec(count)), Failure)
+
+
+@pytest.mark.parametrize("count", [255, MAX_RESULT_DIAGNOSTICS, 257])
+def test_bounded_output_is_identical_under_rule_permutation(count: int) -> None:
+    rules = _bounded_rules(count)
+    forward = _failure(_spec(entry_rules=rules))
+    backward = _failure(_spec(entry_rules=list(reversed(rules))))
+
+    assert canonical_json_bytes(forward) == canonical_json_bytes(backward)
+
+
+def test_the_failure_contract_is_left_unchanged() -> None:
+    """`domain/results.py` is not modified by this correction."""
+    sample = _failure(_bounded_spec(2)).diagnostics[0]
+
+    assert MAX_RESULT_DIAGNOSTICS == 256
+    with pytest.raises(ValidationError):
+        Failure(
+            outcome="FAILURE",
+            diagnostics=(sample,) * (MAX_RESULT_DIAGNOSTICS + 1),
+        )
+
+
+def test_the_marker_carries_the_validators_own_source_component() -> None:
+    """One marker code, but each producer emits it under its own component."""
+    marker = _failure(_bounded_spec(MAX_RESULT_DIAGNOSTICS + 1)).diagnostics[-1]
+
+    assert marker.error_code == _LIMIT
+    assert marker.source_component == "strategy.validation"
+    assert marker.severity is DiagnosticSeverity.ERROR
+    assert marker.category is DiagnosticCategory.SCHEMA_VALIDATION
+    assert marker.causal_diagnostic_ids == ()
+    assert dict(marker.details) == {
+        "diagnostic_limit": MAX_RESULT_DIAGNOSTICS,
+        "retained_diagnostics": MAX_RESULT_DIAGNOSTICS - 1,
+    }
 
 
 # --- A rule is a signal, so its root expression must be BOOLEAN ---------------
@@ -845,7 +1160,7 @@ def test_the_entry_point_accepts_no_runtime_bar_state() -> None:
     assert parameters["observed_at_utc"].annotation == "datetime"
 
 
-def test_the_module_emits_exactly_its_own_three_error_codes() -> None:
+def test_the_module_emits_exactly_its_own_five_error_codes() -> None:
     """`STRATEGY.REFERENCE_FUTURE_BAR` is unreachable here and is not emitted.
 
     A future or still-open bar can only be named by a negative `bars_ago`, which
@@ -854,8 +1169,10 @@ def test_the_module_emits_exactly_its_own_three_error_codes() -> None:
     Stage 4 vocabulary for the layer that owns evaluation context.
     """
     assert sorted(_MESSAGES) == [
+        _LIMIT,
         "STRATEGY.EXPRESSION_DEPTH_EXCEEDED",
         "STRATEGY.EXPRESSION_TYPE_MISMATCH",
+        _COLLISION,
         "STRATEGY.REFERENCE_UNKNOWN",
     ]
     assert "STRATEGY.REFERENCE_FUTURE_BAR" not in _MESSAGES
