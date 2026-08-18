@@ -705,3 +705,143 @@ def test_the_derived_version_identifier_validates_as_a_strategy_version_id() -> 
     assert version.strategy_version_id == strategy_version_identifier(
         strategy_version_hash(spec)
     )
+
+
+# --- Deep immutability of the material mapping fields ----------------------
+#
+# `CanonicalModel` sets `frozen=True`, which is shallow: it stops attribute
+# rebinding but not mutation of a nested container. Both mapping fields reach
+# the hashed payload through `spec.model_dump(mode="json")`, so an in-place
+# insertion used to succeed and leave the recorded `content_hash` stale. These
+# assert the invariant, so a regression fails here rather than in a hash.
+
+
+def test_the_spec_parameter_mapping_rejects_in_place_insertion() -> None:
+    version = _version(_base_spec())
+    recorded = version.content_hash
+    replacement = next(iter(version.strategy_spec.parameters.values()))
+
+    with pytest.raises(TypeError):
+        version.strategy_spec.parameters["injected_key"] = replacement  # type: ignore[index]
+
+    assert "injected_key" not in version.strategy_spec.parameters
+    assert version.content_hash == recorded
+    assert strategy_version_hash(version.strategy_spec) == recorded
+
+
+def test_the_feature_parameter_mapping_rejects_in_place_insertion() -> None:
+    version = _version(_base_spec())
+    recorded = version.content_hash
+    feature = version.strategy_spec.features[0]
+
+    with pytest.raises(TypeError):
+        feature.parameters["injected_key"] = "fast_period"  # type: ignore[index]
+
+    assert "injected_key" not in feature.parameters
+    assert version.content_hash == recorded
+    assert strategy_version_hash(version.strategy_spec) == recorded
+
+
+# --- Mapping order: preserved in the record, immaterial to identity ---------
+#
+# `json.dumps` rather than `canonical_json_bytes` throughout this block:
+# `canonical_json_bytes` sorts object keys, which would destroy the very
+# difference under test before the model ever saw it.
+
+
+def _reordered(mapping: dict[str, Any]) -> dict[str, Any]:
+    return dict(reversed(list(mapping.items())))
+
+
+def _spec_from_json(mapping: dict[str, Any]) -> StrategySpec:
+    return StrategySpec.model_validate_json(json.dumps(mapping))
+
+
+def test_the_validated_parameter_insertion_order_is_preserved() -> None:
+    """No validator may sort either mapping merely to make it immutable."""
+    mapping = _base_mapping()
+    straight = _spec_from_json(mapping)
+    declared = tuple(mapping["parameters"])
+
+    mapping["parameters"] = _reordered(mapping["parameters"])
+    reversed_spec = _spec_from_json(mapping)
+
+    assert tuple(straight.parameters) == declared
+    assert tuple(reversed_spec.parameters) == tuple(reversed(declared))
+    assert tuple(reversed_spec.parameters) != tuple(straight.parameters)
+
+
+def test_the_validated_feature_parameter_insertion_order_is_preserved() -> None:
+    mapping = _base_mapping()
+    mapping["features"][0]["parameters"] = {
+        "period": "fast_period",
+        "other": "slow_period",
+    }
+    forward = _spec_from_json(mapping)
+
+    mapping["features"][0]["parameters"] = _reordered(
+        mapping["features"][0]["parameters"]
+    )
+    backward = _spec_from_json(mapping)
+
+    assert tuple(forward.features[0].parameters) == ("period", "other")
+    assert tuple(backward.features[0].parameters) == ("other", "period")
+
+
+def test_mapping_insertion_order_alone_does_not_change_identity() -> None:
+    """Order is preserved in the record yet immaterial to the hash, because
+    canonical JSON sorts object keys before they are ever hashed."""
+    mapping = _base_mapping()
+    mapping["features"][0]["parameters"] = {
+        "period": "fast_period",
+        "other": "slow_period",
+    }
+    straight = _spec_from_json(mapping)
+
+    mapping["parameters"] = _reordered(mapping["parameters"])
+    mapping["features"][0]["parameters"] = _reordered(
+        mapping["features"][0]["parameters"]
+    )
+    reordered = _spec_from_json(mapping)
+
+    # Non-vacuity: the two records genuinely iterate in different orders.
+    assert tuple(reordered.parameters) != tuple(straight.parameters)
+    assert tuple(reordered.features[0].parameters) != tuple(
+        straight.features[0].parameters
+    )
+
+    assert canonical_json_bytes(reordered) == canonical_json_bytes(straight)
+    assert strategy_version_hash(reordered) == strategy_version_hash(straight)
+
+
+# --- Feature parameters are material content -------------------------------
+
+
+def test_changing_one_feature_parameter_value_changes_the_hash() -> None:
+    mapping = _base_mapping()
+    baseline = strategy_version_hash(_spec(mapping))
+
+    mapping["features"][0]["parameters"]["period"] = "slow_period"
+
+    assert strategy_version_hash(_spec(mapping)) != baseline
+
+
+def test_adding_one_feature_parameter_changes_the_hash() -> None:
+    """Model-level rather than loader-level: the operation-signature check that
+    would reject an unexpected parameter belongs to the Task 4 graph validator,
+    so this isolates the identity question from that diagnostic."""
+    mapping = _base_mapping()
+    baseline = strategy_version_hash(_spec(mapping))
+
+    mapping["features"][0]["parameters"]["extra"] = "slow_period"
+
+    assert strategy_version_hash(_spec(mapping)) != baseline
+
+
+def test_removing_one_feature_parameter_changes_the_hash() -> None:
+    mapping = _base_mapping()
+    baseline = strategy_version_hash(_spec(mapping))
+
+    mapping["features"][0]["parameters"] = {}
+
+    assert strategy_version_hash(_spec(mapping)) != baseline

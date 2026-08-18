@@ -10,26 +10,32 @@ in step 14.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping as CollectionsMapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args, get_origin
 
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.capability_requirements import ApproximationPolicy
+from crypto_lab.domain.identifiers import NormalizedIdentifier
 from crypto_lab.domain.records import MarketType
 from crypto_lab.domain.results import Success
 from crypto_lab.strategy.expressions import LiteralValueType
 from crypto_lab.strategy.models import (
+    MAX_FEATURE_PARAMETERS,
+    MAX_PARAMETERS,
     Direction,
     EngineExtensionDeclaration,
     ExtensionEconomicEffect,
     ExtensionLifecycleEffect,
+    FeatureDefinition,
     ParameterDefinition,
     StrategySpec,
+    _frozen_mapping,
 )
 from crypto_lab.strategy.yaml_source import load_yaml_document
 
@@ -619,3 +625,257 @@ def test_the_three_variants_load_to_one_identical_document() -> None:
         "sma_cross_long.commented.yaml",
     ):
         assert _document(name) == canonical
+
+
+# --- Deep immutability of the two material mapping fields -------------------
+#
+# `CanonicalModel` sets `frozen=True`, which blocks attribute rebinding and
+# nothing more: a `dict` field stayed mutable through ordinary public item
+# access. Both mappings reach the strategy-version payload through
+# `spec.model_dump(mode="json")`, so an in-place edit changed hash material
+# after construction. Plan section 5.5.1 freezes both. These tests pin the
+# public contract, not the implementation type, except where the runtime type
+# *is* the contract.
+
+_MUTATOR_CALLS: tuple[tuple[str, tuple[object, ...]], ...] = (
+    ("clear", ()),
+    ("popitem", ()),
+    ("update", ({"injected_key": "injected_value"},)),
+    ("setdefault", ("injected_key", "injected_value")),
+    ("pop", ("fast_period",)),
+)
+
+
+def _assert_mapping_is_immutable(mapping: Any, present_key: str) -> None:
+    """Assert immutability without over-specifying which method is absent.
+
+    `MappingProxyType` omits the mutators entirely, so a missing method raises
+    `AttributeError` while item assignment and deletion raise `TypeError`. The
+    contract asserted here is that no route mutates, not that any particular
+    spelling raises any particular class.
+    """
+    before = dict(mapping)
+
+    with pytest.raises(TypeError):
+        mapping[present_key] = next(iter(mapping.values()))
+    with pytest.raises(TypeError):
+        del mapping[present_key]
+    for name, arguments in _MUTATOR_CALLS:
+        with pytest.raises((AttributeError, TypeError)):
+            getattr(mapping, name)(*arguments)
+
+    assert dict(mapping) == before
+
+
+def _feature_parameters(spec: StrategySpec) -> Any:
+    return spec.features[0].parameters
+
+
+def test_both_mapping_fields_are_annotated_mapping_not_dict() -> None:
+    spec_annotation = StrategySpec.model_fields["parameters"].annotation
+    feature_annotation = FeatureDefinition.model_fields["parameters"].annotation
+
+    for annotation in (spec_annotation, feature_annotation):
+        assert get_origin(annotation) is CollectionsMapping
+        assert get_origin(annotation) is not dict
+
+    assert get_args(spec_annotation)[1] is ParameterDefinition
+    # The key type and the feature value type are `NormalizedIdentifier`, an
+    # `Annotated[str, ...]` alias, so the underlying runtime type is `str`.
+    for annotation in (spec_annotation, feature_annotation):
+        assert get_args(annotation)[0] is NormalizedIdentifier
+    assert get_args(feature_annotation)[1] is NormalizedIdentifier
+
+
+def test_both_mapping_fields_are_not_dict_at_runtime() -> None:
+    spec = _spec()
+
+    assert not isinstance(spec.parameters, dict)
+    assert not isinstance(_feature_parameters(spec), dict)
+    assert isinstance(spec.parameters, CollectionsMapping)
+    assert isinstance(_feature_parameters(spec), CollectionsMapping)
+
+
+def test_an_empty_feature_parameter_mapping_is_still_not_a_dict() -> None:
+    """`{}` is a `dict` instance, so the empty case needs its own proof."""
+    block = _document()["features"]
+    assert isinstance(block, list)
+    features = [item | {"parameters": {}} for item in block]
+
+    spec = _spec(features=features)
+
+    assert dict(_feature_parameters(spec)) == {}
+    assert not isinstance(_feature_parameters(spec), dict)
+
+
+def test_the_spec_parameter_mapping_rejects_every_mutation_route() -> None:
+    _assert_mapping_is_immutable(_spec().parameters, "fast_period")
+
+
+def test_the_feature_parameter_mapping_rejects_every_mutation_route() -> None:
+    _assert_mapping_is_immutable(_feature_parameters(_spec()), "period")
+
+
+def test_the_frozen_mapping_helper_copies_before_it_wraps() -> None:
+    """The one assertion that fails if `_frozen_mapping` stops copying.
+
+    A private helper is tested directly here because the invariant is not
+    observable through the public boundary: pydantic-core builds a fresh `dict`
+    when validating a parametrized `Mapping` in either mode, so by the time a
+    validator runs, the mapping is already detached and
+    `MappingProxyType(validated)` would behave identically. The copy is kept as
+    defence in depth per plan section 5.5.1 item 9, and a requirement no test can
+    fail on is a requirement that silently rots.
+    """
+    source = {"alpha": "beta"}
+
+    frozen = _frozen_mapping(source)
+    source["gamma"] = "delta"
+    del source["alpha"]
+
+    assert dict(frozen) == {"alpha": "beta"}
+    assert "gamma" not in frozen
+
+
+def test_mutating_the_caller_input_after_construction_leaves_both_unchanged() -> None:
+    """The caller's own mapping is detached from the constructed record.
+
+    This passes with or without `_frozen_mapping`'s copy, because validation
+    already rebuilds the mapping; the helper's own test is what pins the copy.
+    What this does prove is the property a caller actually depends on: no
+    post-construction edit to the source document reaches a validated record.
+    """
+    payload = _document()
+    spec_source = payload["parameters"]
+    feature_source = payload["features"][0]["parameters"]
+    assert isinstance(spec_source, dict)
+    assert isinstance(feature_source, dict)
+
+    spec = StrategySpec.model_validate_json(canonical_json_bytes(payload))
+    recorded_spec_keys = tuple(spec.parameters)
+    recorded_feature = dict(_feature_parameters(spec))
+
+    spec_source["injected_key"] = {"value_type": "INTEGER", "value": 1}
+    spec_source.pop("fast_period")
+    feature_source["injected_key"] = "slow_period"
+
+    assert tuple(spec.parameters) == recorded_spec_keys
+    assert "injected_key" not in spec.parameters
+    assert dict(_feature_parameters(spec)) == recorded_feature
+
+
+def test_mutating_a_model_dump_result_leaves_both_mappings_unchanged() -> None:
+    spec = _spec()
+    recorded_spec_keys = tuple(spec.parameters)
+    recorded_feature = dict(_feature_parameters(spec))
+
+    for mode in ("python", "json"):
+        dumped = spec.model_dump(mode=mode)
+        assert type(dumped["parameters"]) is dict
+        assert type(dumped["features"][0]["parameters"]) is dict
+
+        dumped["parameters"]["injected_key"] = {"value_type": "INTEGER", "value": 1}
+        dumped["parameters"].pop("fast_period")
+        dumped["features"][0]["parameters"]["injected_key"] = "slow_period"
+
+    assert tuple(spec.parameters) == recorded_spec_keys
+    assert "injected_key" not in spec.parameters
+    assert dict(_feature_parameters(spec)) == recorded_feature
+
+
+@pytest.mark.parametrize("mode", ["python", "json"])
+def test_a_round_trip_restores_immutable_mappings_in_both_modes(mode: str) -> None:
+    spec = _spec()
+    dumped = spec.model_dump(mode=mode)
+
+    if mode == "python":
+        restored = StrategySpec.model_validate(dumped)
+    else:
+        restored = StrategySpec.model_validate_json(canonical_json_bytes(dumped))
+
+    assert restored == spec
+    assert not isinstance(restored.parameters, dict)
+    assert not isinstance(_feature_parameters(restored), dict)
+    _assert_mapping_is_immutable(restored.parameters, "fast_period")
+    _assert_mapping_is_immutable(_feature_parameters(restored), "period")
+
+
+def test_a_contained_parameter_definition_is_still_frozen() -> None:
+    definition = _spec().parameters["fast_period"]
+
+    with pytest.raises(ValidationError):
+        definition.value = 99
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_both_mapping_fields_keep_their_object_json_schema(mode: Any) -> None:
+    """The published contract must stay an object with the same value schema.
+
+    Both modes are asserted because the schema registry renders
+    `mode="serialization"`, and a field serializer replaces that mode's schema
+    with its own return type's schema -- so the serializer's annotation, not the
+    field's, is what a generated schema publishes.
+    """
+    schema = StrategySpec.model_json_schema(mode=mode)
+    definitions = schema["$defs"]
+    spec_parameters = schema["properties"]["parameters"]
+    feature_parameters = definitions["FeatureDefinition"]["properties"]["parameters"]
+
+    def resolved(node: dict[str, Any]) -> dict[str, Any]:
+        """Inside a model schema a named type is a `$ref`; inline it to compare."""
+        reference = node.get("$ref")
+        if reference is None:
+            return node
+        assert reference.startswith("#/$defs/")
+        target: dict[str, Any] = definitions[reference.removeprefix("#/$defs/")]
+        return target
+
+    assert spec_parameters["type"] == "object"
+    assert feature_parameters["type"] == "object"
+    assert spec_parameters["additionalProperties"] == {
+        "$ref": "#/$defs/ParameterDefinition"
+    }
+
+    # The exact `NormalizedIdentifier` schema, not a loosened string.
+    identifier = TypeAdapter(NormalizedIdentifier).json_schema()
+    assert resolved(feature_parameters["additionalProperties"]) == identifier
+    assert resolved(spec_parameters["propertyNames"]) == identifier
+    assert resolved(feature_parameters["propertyNames"]) == identifier
+
+    # The declared bound must survive into *both* modes. A field serializer
+    # replaces the serialization-mode schema with its own return type's schema,
+    # which carries no `max_length`, so this is the assertion that catches a
+    # silently weakened published contract.
+    assert spec_parameters["maxProperties"] == MAX_PARAMETERS
+    assert feature_parameters["maxProperties"] == MAX_FEATURE_PARAMETERS
+
+
+def test_both_mapping_length_bounds_still_reject_an_oversized_mapping() -> None:
+    """The freeze runs after `max_length`, so the bound must still be enforced."""
+    with pytest.raises(ValidationError):
+        _spec(
+            parameters={
+                f"p{index:04d}": {"value_type": "INTEGER", "value": 1}
+                for index in range(MAX_PARAMETERS + 1)
+            }
+        )
+
+    block = _document()["features"]
+    assert isinstance(block, list)
+    oversized = {
+        f"p{index:04d}": "fast_period" for index in range(MAX_FEATURE_PARAMETERS + 1)
+    }
+    with pytest.raises(ValidationError):
+        _spec(features=[block[0] | {"parameters": oversized}, *block[1:]])
+
+
+def test_the_feature_definition_carries_exactly_its_seven_fields() -> None:
+    assert list(FeatureDefinition.model_fields) == [
+        "id",
+        "operation",
+        "inputs",
+        "parameters",
+        "output_type",
+        "warm_up_bars",
+        "missing_value_policy",
+    ]

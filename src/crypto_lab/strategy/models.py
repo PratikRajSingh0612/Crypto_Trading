@@ -12,14 +12,17 @@ packages already carry their own independent local definitions.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Annotated, Literal, Self, cast
 
 from pydantic import (
     Field,
     StringConstraints,
     WithJsonSchema,
+    field_serializer,
     field_validator,
     model_validator,
 )
@@ -94,6 +97,35 @@ FeatureOperation = Annotated[
 
 def _is_missing(value: object) -> bool:
     return value is MISSING
+
+
+def _frozen_mapping[KeyT, ValueT](
+    validated: Mapping[KeyT, ValueT],
+) -> Mapping[KeyT, ValueT]:
+    """Detach a validated mapping and return an immutable view of the copy.
+
+    `CanonicalModel` sets `frozen=True`, which stops attribute rebinding and
+    nothing else: a `dict` field stayed mutable through ordinary public item
+    access, so hash material reachable from a `StrategyVersion` could be changed
+    after construction while the recorded `content_hash` stayed stale. Plan
+    section 5.5.1 fixes the representation here.
+
+    `dict(validated)` first is **defence in depth, not a currently reachable
+    fix**. `MappingProxyType` is a live view, so wrapping an object someone else
+    holds would leave the record aliased to a mapping they can still mutate.
+    Measured against this Pydantic: no such path exists today, because
+    pydantic-core builds a fresh `dict` when it validates a parametrized
+    `Mapping`, in JSON mode and in Python mode alike -- so the object reaching
+    here is already detached and the copy changes nothing observable. It is kept
+    because the invariant should not depend on that internal behaviour, and
+    because a future field whose values are not themselves validated would make
+    the alias live. Plan section 5.5.1 item 9 forbids wrapping without copying
+    for the same reason.
+
+    The values need no copy of their own: every value is either a frozen
+    `CanonicalModel` or a `str`.
+    """
+    return MappingProxyType(dict(validated))
 
 
 def _extension_key(
@@ -271,12 +303,45 @@ class FeatureDefinition(CanonicalModel):
     inputs: tuple[NormalizedIdentifier, ...] = Field(
         min_length=1, max_length=MAX_FEATURE_INPUTS
     )
-    parameters: dict[NormalizedIdentifier, NormalizedIdentifier] = Field(
-        max_length=MAX_FEATURE_PARAMETERS
+    parameters: Mapping[NormalizedIdentifier, NormalizedIdentifier] = Field(
+        max_length=MAX_FEATURE_PARAMETERS,
+        # Restated for serialization mode. A field serializer replaces that
+        # mode's schema with its own return type's schema, which carries no
+        # `max_length`, so without this the generated schema -- which
+        # `schema_registry` renders from `mode="serialization"` -- would publish
+        # a weaker bound than the runtime enforces. Identical to the validation
+        # -mode value, so the merge is idempotent there.
+        json_schema_extra={"maxProperties": MAX_FEATURE_PARAMETERS},
     )
     output_type: LiteralValueType
     warm_up_bars: Annotated[int, Field(strict=True, ge=0, le=MAX_WARM_UP_BARS)]
     missing_value_policy: MissingValuePolicy
+
+    @field_validator("parameters", mode="after")
+    @classmethod
+    def freeze_parameters(cls, value: Mapping[str, str]) -> Mapping[str, str]:
+        """Runs after the `max_length` bound, so the bound still sees a mapping."""
+        return _frozen_mapping(value)
+
+    @field_serializer("parameters", when_used="always")
+    def serialize_parameters(
+        self,
+        value: Mapping[str, str],
+    ) -> dict[NormalizedIdentifier, NormalizedIdentifier]:
+        """Emit an ordinary object in every mode, so `mappingproxy` never leaks.
+
+        The return type restates the exact key and value types rather than plain
+        `str`: a field serializer replaces the serialization-mode JSON Schema
+        with its own return type's schema, so annotating `dict[str, str]` would
+        publish a bare `{"type": "string"}` in place of the exact
+        `NormalizedIdentifier` contract.
+
+        `when_used="always"` rather than `"json"`: `canonical_json._normalize`
+        dispatches on `type(value) is dict` and reaches a model through
+        `model_dump(mode="python")`, so a python-mode `mappingproxy` would raise
+        `unsupported canonical JSON type` and break hashing outright.
+        """
+        return dict(value)
 
 
 class RuleDefinition(CanonicalModel):
@@ -355,8 +420,10 @@ class StrategySpec(CanonicalModel):
     required_capabilities: tuple[CapabilityRequirement, ...] = Field(
         min_length=1, max_length=MAX_REQUIRED_CAPABILITIES
     )
-    parameters: dict[NormalizedIdentifier, ParameterDefinition] = Field(
-        max_length=MAX_PARAMETERS
+    parameters: Mapping[NormalizedIdentifier, ParameterDefinition] = Field(
+        max_length=MAX_PARAMETERS,
+        # Restated for serialization mode; see `FeatureDefinition.parameters`.
+        json_schema_extra={"maxProperties": MAX_PARAMETERS},
     )
     features: tuple[FeatureDefinition, ...] = Field(max_length=MAX_FEATURES)
     entry_rules: tuple[RuleDefinition, ...] = Field(min_length=1, max_length=MAX_RULES)
@@ -370,6 +437,23 @@ class StrategySpec(CanonicalModel):
         max_length=MAX_ENGINE_EXTENSIONS
     )
     authoring_metadata: AuthoringMetadata
+
+    @field_validator("parameters", mode="after")
+    @classmethod
+    def freeze_parameters(
+        cls,
+        value: Mapping[str, ParameterDefinition],
+    ) -> Mapping[str, ParameterDefinition]:
+        """Runs after the `max_length` bound, so the bound still sees a mapping."""
+        return _frozen_mapping(value)
+
+    @field_serializer("parameters", when_used="always")
+    def serialize_parameters(
+        self,
+        value: Mapping[str, ParameterDefinition],
+    ) -> dict[NormalizedIdentifier, ParameterDefinition]:
+        """Emit an ordinary object in every mode; see `FeatureDefinition`'s note."""
+        return dict(value)
 
     @field_validator("market_type")
     @classmethod

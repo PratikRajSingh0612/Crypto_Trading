@@ -17,12 +17,14 @@ import ast
 import copy
 import importlib
 import sys
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from crypto_lab.domain.base import CanonicalModel
 from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.diagnostics import Diagnostic, DiagnosticCategory
 from crypto_lab.domain.hashing import sha256_bytes
@@ -800,3 +802,193 @@ def test_the_loader_exposes_no_path_loading_convenience() -> None:
     """Bytes only: a path-accepting entry point would reintroduce filesystem reach."""
     public = {name for name in vars(StrategyLoader) if not name.startswith("_")}
     assert public == {"load"}
+
+
+# --- Deep immutability of the loader-produced record ------------------------
+
+_FORBIDDEN_MATERIAL_TYPES = (dict, list, set, bytearray)
+# Excluded because it is explicitly outside the section 5.5 identity payload.
+_NON_MATERIAL_FIELDS = frozenset({"source_provenance"})
+
+
+def _material_violations(value: object, path: str) -> list[str]:
+    """Walk the material graph, reporting a readable path for each mutable find.
+
+    `dict` is tested before `Mapping` because every `dict` *is* a `Mapping`; the
+    point of the audit is that only the immutable ones survive. Only public
+    values are traversed -- `model_fields` names and attribute access -- never
+    Pydantic's private state.
+    """
+    if isinstance(value, _FORBIDDEN_MATERIAL_TYPES):
+        return [f"{path}: {type(value).__name__}"]
+
+    found: list[str] = []
+    if isinstance(value, CanonicalModel):
+        for name in type(value).model_fields:
+            if name in _NON_MATERIAL_FIELDS:
+                continue
+            found.extend(_material_violations(getattr(value, name), f"{path}.{name}"))
+    elif isinstance(value, Mapping):
+        for key, nested in value.items():
+            found.extend(_material_violations(key, f"{path}<key {key!r}>"))
+            found.extend(_material_violations(nested, f"{path}[{key!r}]"))
+    elif isinstance(value, tuple | frozenset):
+        for index, item in enumerate(value):
+            found.extend(_material_violations(item, f"{path}[{index}]"))
+    return found
+
+
+def _reachable_mappings(value: object, path: str) -> list[tuple[str, object]]:
+    """Collect every `Mapping` the audit reaches, so the audit is provably alive."""
+    found: list[tuple[str, object]] = []
+    if isinstance(value, CanonicalModel):
+        for name in type(value).model_fields:
+            if name in _NON_MATERIAL_FIELDS:
+                continue
+            found.extend(_reachable_mappings(getattr(value, name), f"{path}.{name}"))
+    elif isinstance(value, Mapping):
+        found.append((path, value))
+        for key, nested in value.items():
+            found.extend(_reachable_mappings(nested, f"{path}[{key!r}]"))
+    elif isinstance(value, tuple | frozenset):
+        for index, item in enumerate(value):
+            found.extend(_reachable_mappings(item, f"{path}[{index}]"))
+    return found
+
+
+def test_the_material_graph_holds_no_mutable_container() -> None:
+    """One recursive audit over everything the content hash is computed from."""
+    version = _succeed(_valid_bytes())
+
+    assert _material_violations(version, "StrategyVersion") == []
+
+
+def test_the_audit_actually_reaches_both_parameter_mappings() -> None:
+    """A vacuous audit would also report zero violations, so prove it is alive."""
+    version = _succeed(_valid_bytes())
+
+    reached = _reachable_mappings(version, "StrategyVersion")
+    paths = [path for path, _ in reached]
+
+    assert "StrategyVersion.strategy_spec.parameters" in paths
+    assert "StrategyVersion.strategy_spec.features[0].parameters" in paths
+    assert "StrategyVersion.strategy_spec.features[1].parameters" in paths
+    for path, mapping in reached:
+        assert not isinstance(mapping, dict), path
+        assert isinstance(mapping, Mapping), path
+
+
+def test_the_loader_produced_record_exposes_both_mappings_immutably() -> None:
+    version = _succeed(_valid_bytes())
+    spec = version.strategy_spec
+    recorded = version.content_hash
+
+    # Deliberately a second, independent implementation of the mutation sweep in
+    # `test_strategy_models.py::_assert_mapping_is_immutable`, rather than a
+    # shared helper: this module's subject is the *loader-produced* record, and
+    # importing a helper across test modules would let one edit silently weaken
+    # both. The typing differs for a concrete reason -- `Mapping[str, Any]`
+    # rather than the two exact value types, because a union of the two would
+    # defeat the targeted suppressions below.
+    cases: tuple[tuple[Mapping[str, Any], str], ...] = (
+        (spec.parameters, "fast_period"),
+        (spec.features[0].parameters, "period"),
+    )
+    for mapping, present in cases:
+        before = dict(mapping)
+        # The suppressions are the point rather than a workaround: static typing
+        # already forbids these two lines, and the assertions prove the runtime
+        # agrees instead of silently permitting them.
+        with pytest.raises(TypeError):
+            mapping[present] = next(iter(mapping.values()))  # type: ignore[index]
+        with pytest.raises(TypeError):
+            del mapping[present]  # type: ignore[attr-defined]
+        for name, arguments in (
+            ("clear", ()),
+            ("popitem", ()),
+            ("update", ({"injected": "x"},)),
+            ("setdefault", ("injected", "x")),
+            ("pop", (present,)),
+        ):
+            with pytest.raises((AttributeError, TypeError)):
+                getattr(mapping, name)(*arguments)
+        assert dict(mapping) == before
+
+    # The recorded identity is still the identity of the current content after
+    # every failed attempt -- the point of the correction.
+    assert version.content_hash == recorded
+    assert version.content_hash == strategy_version_hash(spec)
+
+
+def test_the_loader_hands_the_model_canonically_sorted_mapping_keys() -> None:
+    """Author-declared mapping order is *not* preserved end to end.
+
+    `StrategyLoader.load` validates from `canonical_json_bytes(...)`, and
+    `canonical_json_text` passes `sort_keys=True`, so the model receives keys
+    already sorted. `bar_offsets.valid.yaml` declares `shift_zero` first, which
+    makes the difference observable.
+
+    Pinned because plan section 5.5.1 requires that the freeze itself introduce
+    no reordering, and it would be easy to misread that as a promise that
+    authored order survives a load. It does not, and no hash depends on it.
+    """
+    name = "bar_offsets.valid.yaml"
+    declared = tuple(_document_parameters(name))
+    version = _succeed((_FIXTURES / name).read_bytes(), source_name=name)
+
+    loaded = tuple(version.strategy_spec.parameters)
+
+    assert declared == ("shift_zero", "shift_one", "shift_two")
+    assert loaded == tuple(sorted(declared))
+    assert loaded != declared
+
+
+def _document_parameters(name: str) -> dict[str, Any]:
+    outcome = load_yaml_document((_FIXTURES / name).read_bytes(), name, _OBSERVED_AT)
+    assert isinstance(outcome, Success), outcome
+    document = outcome.value.value
+    assert isinstance(document, dict)
+    parameters = document["parameters"]
+    assert isinstance(parameters, dict)
+    return parameters
+
+
+_GOLDEN_CONTENT_HASHES = {
+    "adjacent_entry_exit.valid.yaml": (
+        "8b81dbf4494601af4066e81afcca08cd3d368abeba6314c0003ddbb42a06abbb"
+    ),
+    "bar_offsets.valid.yaml": (
+        "e75c3148df232dd5fa29d9737d3bf3d7cc06a36fa9e75db41a26053d49697095"
+    ),
+    "crossover_equality.valid.yaml": (
+        "84544ac5e658c6f63e9b47e9f42c6e5fd091d1666e1e0fb6739f6a9154347100"
+    ),
+    "decimal_rounding.valid.yaml": (
+        "1cb08a6889c1221252cef7626e7cc59e2a413c92f9b190a827e4ba65f259169b"
+    ),
+    "missing_input.valid.yaml": (
+        "a84031fd1cc5e4a96c598e9b23c6a610443ceba54c050d6c00ab284840ac6899"
+    ),
+    "sma_cross_long.valid.yaml": (
+        "14f59d879338f36a91f639e932567dba35cc17b835cfb16d7a4362c05b23c29e"
+    ),
+    "warm_up_boundary.valid.yaml": (
+        "96bb8aafe175f5c99091bc7d0ad5f1f31b0b2cec947bc714e6e6e0ed83cd94a7"
+    ),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_GOLDEN_CONTENT_HASHES))
+def test_the_committed_fixture_content_hashes_are_unchanged(name: str) -> None:
+    """Literal golden identities, so a hash change can never pass unnoticed.
+
+    Every other hash test here is relational — this variant equals that one, this
+    field is material — so a change that shifted *every* strategy identity
+    together would satisfy all of them. Plan section 5.5.1 item 12 requires the
+    deep-immutability correction to leave canonical bytes untouched, and these
+    seven values were confirmed identical against the pre-correction `models.py`
+    at `c6fdecb` before being pinned here.
+    """
+    version = _succeed((_FIXTURES / name).read_bytes(), source_name=name)
+
+    assert version.content_hash == _GOLDEN_CONTENT_HASHES[name]

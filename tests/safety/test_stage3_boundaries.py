@@ -81,10 +81,18 @@ _ALLOWED_IMPORT_ROOTS = {
     "pydantic",
     "re",
     "tomllib",
+    "types",
     "typing",
     "uuid",
     "yaml",
 }
+# `types` is the narrowest root in the set. Plan section 5.5.1's deep-immutability
+# landing needs exactly one name from it, in exactly one file, so the root alone
+# is not a sufficient guard: `test_the_types_root_is_confined_to_one_exact_import`
+# pins the location and the form as well.
+_TYPES_ROOT = "types"
+_TYPES_IMPORTER = "strategy/models.py"
+_TYPES_SYMBOL = "MappingProxyType"
 _FORBIDDEN_PATH_ACCESS = {
     "pathlib.Path.cwd",
     "pathlib.Path.expanduser",
@@ -392,6 +400,104 @@ def test_source_imports_only_the_explicit_stage3_allowlist(
                 if root not in _ALLOWED_IMPORT_ROOTS:
                     failures.append(f"{path}: import root is not allowed: {module}")
     assert failures == []
+
+
+def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
+    """An exact set, not a lower bound: a silent addition must fail here.
+
+    The count is asserted alongside the set so the reviewed number 22 appears
+    literally, which is what plan section 3.9 and Appendix C pin.
+    """
+    assert len(_ALLOWED_IMPORT_ROOTS) == 22
+    assert _ALLOWED_IMPORT_ROOTS == {
+        "__future__",
+        "argparse",
+        "codecs",
+        "collections",
+        "contextlib",
+        "copy",
+        "crypto_lab",
+        "dataclasses",
+        "datetime",
+        "decimal",
+        "enum",
+        "hashlib",
+        "importlib",
+        "json",
+        "pathlib",
+        "pydantic",
+        "re",
+        "tomllib",
+        "types",
+        "typing",
+        "uuid",
+        "yaml",
+    }
+
+
+def test_the_types_root_is_confined_to_one_exact_import(
+    repository_root: Path,
+) -> None:
+    """`types` is allowlisted only for `from types import MappingProxyType`.
+
+    Plan section 5.5.1 authorizes the root for one name in one file, so the root
+    membership above is deliberately not the whole guard. This fails when the
+    root is imported from a second source file, when a bare `import types`
+    replaces the exact form, when an alias is used, when a second symbol joins
+    the statement, and when the symbol is dropped while the root stays
+    allowlisted.
+    """
+    source_root = repository_root / "src/crypto_lab"
+    observed: list[tuple[str, int]] = []
+    failures: list[str] = []
+
+    for path in _source_files(repository_root):
+        relative = path.relative_to(source_root).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.partition(".")[0] == _TYPES_ROOT:
+                        failures.append(
+                            f"{relative}:{node.lineno}: "
+                            f"`import {alias.name}` is not the approved form"
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                if node.module is None:
+                    continue
+                if node.module.partition(".")[0] != _TYPES_ROOT:
+                    continue
+                if relative != _TYPES_IMPORTER:
+                    failures.append(
+                        f"{relative}:{node.lineno}: only {_TYPES_IMPORTER} "
+                        f"may import the {_TYPES_ROOT} root"
+                    )
+                    continue
+                if node.module != _TYPES_ROOT:
+                    failures.append(
+                        f"{relative}:{node.lineno}: submodule import "
+                        f"`{node.module}` is not approved"
+                    )
+                    continue
+                names = [alias.name for alias in node.names]
+                if names != [_TYPES_SYMBOL]:
+                    failures.append(
+                        f"{relative}:{node.lineno}: expected exactly "
+                        f"[{_TYPES_SYMBOL}], found {names}"
+                    )
+                    continue
+                if node.names[0].asname is not None:
+                    failures.append(
+                        f"{relative}:{node.lineno}: {_TYPES_SYMBOL} must not be aliased"
+                    )
+                    continue
+                observed.append((relative, node.lineno))
+
+    assert failures == []
+    # The root is allowlisted *because* this import exists. If the
+    # implementation stops needing it, the root must leave the set in the same
+    # change, so an unused permission cannot linger.
+    assert [relative for relative, _ in observed] == [_TYPES_IMPORTER]
 
 
 def test_project_source_has_no_environment_access(
