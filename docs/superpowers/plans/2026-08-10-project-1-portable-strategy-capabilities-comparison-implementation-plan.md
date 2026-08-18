@@ -118,7 +118,9 @@ invents no alternative.
 - `crypto_lab.domain.base.CanonicalModel` — Pydantic v2 `BaseModel` with
   `ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True,
   strict=True, validate_default=True)`. Module constant `SCHEMA_VERSION =
-  "1.0.0"`.
+  "1.0.0"`. **`frozen=True` prevents attribute rebinding only, and is shallow
+  with respect to a mutable nested container held by a field** — see section
+  5.5.1, which corrects this entry and governs every strategy-identity mapping.
 - Every canonical top-level record declares `schema_version:
   Literal["1.0.0"]`.
 - State-governed optionality uses
@@ -279,7 +281,7 @@ cannot add a single source file, import root, or schema without editing it.
 | Guard | Current value | Stage 4 obligation |
 |---|---|---|
 | `_ALLOWED_SOURCE_FILES` | 33 exact relative paths | Add all 18 new `strategy/*.py`, `capabilities/*.py`, and `domain/*.py` files listed in Appendix C, each in the task that creates it, taking the set to 51 |
-| `_ALLOWED_IMPORT_ROOTS` | 17 roots | Add `codecs`, `contextlib`, `copy`, and `yaml`, taking the set to 21. The bytes-only contract of section 5.2 removes any need for `io`; `re` is already present |
+| `_ALLOWED_IMPORT_ROOTS` | 17 roots | Add `codecs`, `contextlib`, `copy`, and `yaml` in Task 2, taking the set to 21. The bytes-only contract of section 5.2 removes any need for `io`; `re` is already present. The post-Task-5 deep-immutability landing of section 5.5.1 then adds `types`, taking the set to **22**, restricted to the exact form `from types import MappingProxyType` in `strategy/models.py` alone |
 | `_DEFERRED_DEFINITIONS` | 79 names | Remove exactly the names Stage 4 defines (section 9.8) |
 | `test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctly` | `assert len(paths) == 11` | Change to `20` |
 | `test_stage3_completion_status_is_exact` | Pins far more than the Stage 3 row: the roadmap status line `Stages 1 through 3 complete`; the sentence `Stages 1 through 3 have approved detailed implementation plans.`; the Stage 3 approved-plan line; the Stage 3 dependency-bootstrap control row; three negative assertions, one of which pins the absence of `Complete at` plus the Stage 3 Task 8 hash; the Stage 4 phrase `Eligible for just-in-time planning after Stage 3 completion`; the literal `` `DISABLED_WITH_EVIDENCE` ``; and the README line `**Status:** Project 1 Stages 1-3 complete` | See the status-authority rule below. No task may weaken a Stage 3 assertion |
@@ -1505,6 +1507,204 @@ filesystem path), `source_bytes_sha256`, `source_byte_length`, and
 `observed_at_utc`. It is retained for audit and is explicitly outside the
 identity payload.
 
+#### 5.5.1 Deep strategy immutability — reviewed correction
+
+**The defect.** `CanonicalModel` sets `frozen=True`, and section 3.1 records
+that configuration as the immutability guarantee for every canonical record.
+That guarantee is **shallow**: Pydantic's `frozen=True` blocks attribute
+rebinding on the model, and blocks nothing about the interior of a mutable
+nested Python container held by a field. Two `StrategySpec`-reachable fields
+were annotated `dict[...]` and therefore stored an ordinary mutable `dict`
+after validation. Both are embedded in the section 5.5 payload through
+`spec.model_dump(mode="json")`, so an ordinary in-place insertion through
+public item access mutated hash material after `StrategyVersion` construction
+while the recorded `content_hash` stayed at its now-stale value. Both fields
+are corrected together, atomically, because they are one defect class.
+
+1. `CanonicalModel`'s frozen configuration is shallow with respect to nested
+   mutable Python containers. Section 3.1's `frozen=True` entry must be read as
+   preventing attribute rebinding only.
+2. **Scoped immutability rule.** Every value reachable through the canonical
+   strategy-version identity payload must be immutable through normal supported
+   public operations after ordinary validated construction. This covers
+   `StrategySpec`, its nested models, `StrategySpec.parameters`, every
+   `FeatureDefinition.parameters` mapping, and every other value included in
+   `strategy_version_payload`. It does **not** make an unrelated dictionary in
+   configuration, diagnostics, or another non-strategy record part of this
+   corrective landing. `domain/diagnostics.py`'s `details` and
+   `configuration/models.py`'s `runtime_metadata` are outside this landing:
+   neither is reachable from `StrategyVersion`, and both are frozen Stage 3
+   files.
+3. `StrategySpec.parameters` has the public annotation
+   `Mapping[NormalizedIdentifier, ParameterDefinition]`, where `Mapping` is
+   `collections.abc.Mapping` — never the deprecated `typing.Mapping`.
+   `collections` is already an allowed import root.
+4. `FeatureDefinition.parameters` has the public annotation
+   `Mapping[NormalizedIdentifier, NormalizedIdentifier]`, with the same
+   `collections.abc` provenance.
+5. Both fields preserve their existing YAML and JSON object shape. Neither
+   becomes an array, and neither is converted to a tuple of pairs.
+6. Both fields preserve their existing key and value constraints, including the
+   `NormalizedIdentifier` key contract and the `Field(max_length=)` bounds
+   `MAX_PARAMETERS` and `MAX_FEATURE_PARAMETERS`.
+7. **Ordering.** Neither mapping is sorted or reordered. Specifically:
+   - the validated mapping's insertion order is preserved in the in-memory
+     record and in ordinary `model_dump` output;
+   - mapping entry order has **no** strategy-identity significance, because
+     canonical JSON sorts object keys;
+   - changing insertion order alone must not change canonical bytes or the
+     strategy content hash;
+   - no validator may sort or reorder either mapping merely to implement
+     immutability.
+
+   Neither field carries a normalizing **validator**, unlike
+   `required_capabilities` and `engine_extensions`, which section 3.1's
+   unique-and-sorted convention really does govern. "Freeze" here therefore means
+   copy and wrap, never canonicalize.
+
+   **What order the record actually holds.** The model preserves exactly the
+   order it is handed; it does not follow that author-declared order is
+   observable through the loader. `StrategyLoader.load` validates from
+   `canonical_json_bytes(...)`, and `canonical_json_text` passes
+   `sort_keys=True`, so the production path hands Pydantic **already-sorted**
+   keys. `bar_offsets.valid.yaml` declares `shift_zero, shift_one, shift_two`
+   and the loaded record iterates `shift_one, shift_two, shift_zero`. Author
+   order is thus **not** preserved end to end and is **not** protected. The
+   requirement above is narrower and is what matters: the freeze must not itself
+   introduce a reordering, so that the in-memory record is a faithful function of
+   its validated input and a future non-canonical construction path is not
+   silently re-sorted. A test that asserts order preservation must feed the model
+   order-preserving bytes directly rather than routing through
+   `canonical_json_bytes`, which would destroy the difference under test.
+8. The reviewed standard-library representation is
+   `MappingProxyType(dict(validated_mapping))`, imported as
+   `from types import MappingProxyType`. No new packaged dependency and no
+   custom immutable `Mapping` class is introduced.
+
+   **Closed-world consequence.** `types` is a new *source import root*. It is
+   authorized as the 22nd allowed root, narrowly: only
+   `src/crypto_lab/strategy/models.py` may import it, and only in the exact form
+   `from types import MappingProxyType` — no alias, no second symbol, no bare
+   `import types`, and no other source file. Section 3.9, Appendix C, and Task 8
+   step 6 carry the updated set and count. Reaching `MappingProxyType` by
+   reflection, indirect type extraction, or a private runtime attribute in order
+   to avoid the allowlist is **forbidden**: that would evade the guard rather
+   than satisfy it.
+9. Wrapping a caller-owned dictionary without first copying it is **forbidden**.
+   `MappingProxyType` is a live view: wrapping the caller's object would leave
+   the stored record aliased to a mapping the caller can still mutate, which
+   reproduces the defect through a longer path.
+10. **Serialization authority.** Both fields require explicit serialization to
+    ordinary mapping objects, so `mappingproxy` never leaks into canonical data.
+    - `model_dump(mode="json")` is the **authoritative** serialization path: it
+      is what `strategy_version_payload` consumes and therefore what the content
+      hash is computed over.
+    - `model_dump(mode="python")` remains a supported, detached public
+      representation. It is not merely decorative: `canonical_json._normalize`
+      dispatches on `type(value) is dict` and reaches a model through
+      `model_dump(mode="python")`, so a python-mode dump emitting `mappingproxy`
+      would raise `unsupported canonical JSON type` for any caller that passes a
+      `StrategySpec` to `canonical_json_*` directly.
+    - Both modes must emit ordinary dictionaries rather than `MappingProxyType`.
+    - A python-mode test does **not** substitute for a JSON-mode hash-path test.
+11. Python-mode and JSON-mode reconstruction must restore immutable mappings.
+    `model_validate(model_dump(mode="python"))` and
+    `model_validate_json(...)` both yield a record whose two mapping fields are
+    immutable, so immutability survives a round trip rather than holding only on
+    a first construction.
+12. Canonical JSON and content hashes for existing semantic strategy values
+    remain byte-identical. The correction changes the stored container type and
+    the annotation, not the serialized shape, the key order, the value
+    encoding, or the payload field set, so every committed strategy hash stands.
+13. Caller-owned input dictionaries and `model_dump` outputs are detached from
+    the stored canonical record. Mutating either afterwards cannot alter a
+    constructed record.
+14. Hash mismatch detection is **not** a substitute for preventing mutation.
+    `StrategyVersion.validate_identity_is_recomputed` runs once, at
+    construction; it cannot observe a later mutation, and a stale
+    `content_hash` is exactly the failure the record exists to make impossible.
+15. Explicitly unvalidated Pydantic construction surfaces — `model_construct`
+    and `model_copy(update=...)` — are not authoritative validation boundaries
+    and must not be used by production code to create `StrategySpec` or
+    `StrategyVersion` records. `model_copy(update=...)` does **not** validate
+    the update values; existing test-only use is permitted where it is not
+    treated as a validation path.
+16. **Generated-schema preservation.** A field serializer replaces the
+    *serialization-mode* JSON Schema with the schema of its own return type, so
+    an unguarded serializer silently publishes a weaker contract than the runtime
+    enforces. Both modes must therefore be preserved exactly.
+
+    `StrategySpec.parameters`, in **both** validation and serialization mode:
+    - `type: object`;
+    - `propertyNames` carrying the exact `NormalizedIdentifier` contract;
+    - `additionalProperties` carrying the exact `ParameterDefinition` contract;
+    - `maxProperties: 128`.
+
+    `FeatureDefinition.parameters`, in **both** modes:
+    - `type: object`;
+    - `propertyNames` carrying the exact `NormalizedIdentifier` contract;
+    - `additionalProperties` carrying the exact `NormalizedIdentifier` contract;
+    - `maxProperties: 32`.
+
+    Restoring `maxProperties` in serialization mode may use a field-level
+    `json_schema_extra`, `WithJsonSchema`, or another reviewed
+    Pydantic-supported schema hook inside `models.py`. It is **not** acceptable
+    to widen the schema merely because Task 8 has not generated it yet, to
+    hand-edit a future generated schema, to change field shape, to remove the
+    field serializer, or to expose `MappingProxyType` in schema output.
+17. Task 9 must record this plan-correction commit together with all earlier
+    Stage 4 plan corrections, per Task 9 step 6.
+
+**Ownership.** This is a **post-Task-5 deep-immutability corrective landing,
+required before Task 6**. It is not Task 6 work and does not change the Stage 4
+task count or ordering. It lands as exactly two commits:
+
+1. `docs: require deep strategy immutability` — this plan section and the
+   closed-world import-root update, and nothing else;
+2. `fix: freeze strategy mapping fields` — `src/crypto_lab/strategy/models.py`,
+   its directly owned tests in `tests/unit/strategy/` and
+   `tests/property/test_strategy_hashing.py`, and the closed-world guard update
+   in `tests/safety/test_stage3_boundaries.py`.
+
+Each of the two commits carries its own fresh independent review, resolving every
+Critical and Important finding before it lands, and the implementation commit
+follows section 7's RED-then-GREEN sequence and passes `scripts/verify.ps1`
+twice. Acceptance gate 19's "nine tasks, each with its own independent review" is
+therefore not weakened by a landing that sits outside the task sequence.
+
+**Forward obligation on Tasks 6 and 7.** Every new canonical record a task
+introduces must be audited for reachable mutable containers **before that task
+commits**. Where an economically or canonically material mapping is required,
+the task must use a typed `Mapping` public contract, detach caller-owned data,
+expose an immutable runtime representation, serialize to the approved ordinary
+object shape, and include both a mutation test and a recursive material-graph
+test. This obligation governs new records only; it does not authorize changing
+existing unrelated Stage 3 records during this correction. Task 6's and Task 7's
+own independent-review gates must apply this rule; it is recorded here rather
+than in their sections because it is a property of the records, not a change to
+either task's scope.
+
+**Latent collision to resolve before that obligation fires.** The `types` root is
+confined to `strategy/models.py`, so a Task 6 or Task 7 record needing an
+immutable material mapping could not reach `MappingProxyType`, and a custom
+immutable `Mapping` class is unauthorized. No currently planned Task 6 or Task 7
+record declares a mapping field — `CapabilityDeclaration`,
+`ApproximationDeclaration`, `CompatibilityResult`,
+`RuntimeAvailabilityObservation`, and `ComparisonEligibilityResult` are scalars
+and ordered sequences — so this is latent rather than live. If one is introduced,
+it requires a further reviewed correction widening the `types` location list; it
+must not be resolved by relaxing the guard in passing.
+
+**Scope.** This correction changes two field annotations and their directly
+owned validation, serialization, and schema support in
+`src/crypto_lab/strategy/models.py`; the closed-world import-root set and its
+exact-use guard; and the directly owned strategy tests. It does not change the
+Stage 4 task count or ordering, `StrategySpec`'s or `FeatureDefinition`'s field
+names or field order, parameter economic meaning, the section 5.5 hash payload,
+the committed schema count, dependency decisions, capability work, Task 6 scope,
+or roadmap status. `strategy/versioning.py` and `strategy/loader.py` are not
+modified.
+
 ### 5.6 Level 1 evaluator constraints
 
 The evaluator is pure, deterministic, fixture-sized, offline, engine-neutral,
@@ -2166,7 +2366,7 @@ recursive alias, feature cycle, and the valid golden inputs — are fixture file
 
 | Path | Change |
 |---|---|
-| `tests/safety/test_stage3_boundaries.py` | **Tasks 2 through 8**, each applying only the subset matching the files and deferred names it creates: `_ALLOWED_SOURCE_FILES`, `_ALLOWED_IMPORT_ROOTS`, `_DEFERRED_DEFINITIONS`, schema count `11` to `20`. Task 9: the Stage 4 completion status guard only |
+| `tests/safety/test_stage3_boundaries.py` | **Tasks 2 through 8**, each applying only the subset matching the files and deferred names it creates: `_ALLOWED_SOURCE_FILES`, `_ALLOWED_IMPORT_ROOTS`, `_DEFERRED_DEFINITIONS`, schema count `11` to `20`. Also the post-Task-5 deep-immutability landing of section 5.5.1, which adds the `types` root and its location-and-form guard. Task 9: the Stage 4 completion status guard only |
 | `tests/safety/test_project_dependencies.py` | `_EXPECTED_RUNTIME_REQUIREMENTS`, `_EXPECTED_DEVELOPMENT_NAMES`, pinned mypy table keys |
 | `tests/unit/test_schema_registry.py` | Closed 11-entry `_EXPECTED` path-to-`$id` map, `len(SCHEMA_DEFINITIONS) == 11`, and the test name (Appendix I) |
 | `tests/unit/test_package_layout.py` | Closed `PACKAGE_MODULES` list, which drives the fresh-import probe |
@@ -2296,8 +2496,10 @@ without extending `_ALLOWED_SOURCE_FILES` fails, and a task that adds the whole
 Appendix C list up front also fails, because the allowlist would then name
 files that do not yet exist. `_DEFERRED_DEFINITIONS` removals follow the same
 rule — remove a name in the task that defines it, never earlier.
-`_ALLOWED_IMPORT_ROOTS` is membership-only, so its four additions may be made
-once in Task 2.
+`_ALLOWED_IMPORT_ROOTS` is membership-only, so its four Task 2 additions may be
+made once in Task 2. Its fifth addition, `types`, belongs to the post-Task-5
+deep-immutability landing of section 5.5.1 rather than to any task, and carries
+that section's location-and-form restriction.
 
 ### 9.0 Implementation preflight
 
@@ -3813,6 +4015,17 @@ records Stage 4 completion against Task 8's committed hash.
 3. Run `schema-generate-write`, then review every generated file by hand
    before staging it. Generated bytes are reviewed source, not incidental
    output.
+
+   **Assert the strategy mapping constraints rather than eyeballing them.** The
+   registry renders `mode="serialization"`, where a field serializer can silently
+   drop a constraint, so the generated strategy-spec schema must be asserted to
+   carry, for `parameters`, `type: object`, `maxProperties: 128`, the exact
+   `NormalizedIdentifier` `propertyNames`, and the exact `ParameterDefinition`
+   `additionalProperties`; and for each `FeatureDefinition.parameters`,
+   `type: object`, `maxProperties: 32`, and the exact `NormalizedIdentifier`
+   `propertyNames` and `additionalProperties`. Per section 5.5.1 item 16 these
+   must not be widened, hand-edited, reshaped, or achieved by removing a
+   serializer, and `mappingproxy` must not appear anywhere in schema output.
 4. Run `schema-generate-check` and confirm a clean result.
 5. Prove the eleven Stage 3 schemas are byte-identical:
 
@@ -3824,13 +4037,23 @@ git diff --stat main..HEAD -- schemas/domain schemas/configuration `
    This must report **no changes**. Any change requires an independently
    approved architecture correction that owns it.
 6. Confirm `_ALLOWED_SOURCE_FILES`, `_ALLOWED_IMPORT_ROOTS`, and
-   `_DEFERRED_DEFINITIONS` are already complete. Task 8 creates no source file,
-   defines none of the fourteen deferred names, and the four import roots were
-   added once in Task 2, so all three lists finished at Task 7. Task 8's only
-   legitimate edits to that module are the `11` to `20` schema count in step 1
-   and the README status-line assertion in step 7. If any of the three lists is
-   still incomplete here, an earlier task ended dirty — stop and repair that
-   task rather than patching it in Task 8.
+   `_DEFERRED_DEFINITIONS` are already complete. Task 8 creates no source file
+   and defines none of the fourteen deferred names. Four import roots were added
+   in Task 2 and `types` was added by the post-Task-5 deep-immutability landing
+   of section 5.5.1, so all three lists finished before Task 8. Task 8's role
+   here is **confirmation, not authoring**: the guard for the `types` root is
+   written by that landing's second commit, so Task 8 must confirm both are
+   already present and passing, and must not add them itself:
+   - the exact **22**-root `_ALLOWED_IMPORT_ROOTS` set of Appendix C; and
+   - the location-and-form restriction on the `types` root — only
+     `src/crypto_lab/strategy/models.py`, only
+     `from types import MappingProxyType`, no alias, no additional symbol, no
+     bare `import types`, no second source file.
+
+   Task 8's only legitimate edits to that module are the `11` to `20` schema
+   count in step 1 and the README status-line assertion in step 7. If any of the
+   three lists is still incomplete here, an earlier task or landing ended dirty —
+   stop and repair it rather than patching it in Task 8.
 7. Update `docs/development/verification.md` with Stage 4 focused checks and
    the 20-file registry, and `README.md` with the status line and a
    strategy-loading summary.
@@ -3918,25 +4141,31 @@ exact roadmap-status guard.
 5. Confirm no source, schema, dependency, or lockfile change is present in this
    commit.
 6. **Record the complete Stage 4 plan history — reviewed correction.** The
-   approved plan was corrected three times during implementation — twice during
-   Tasks 2 and 4, and once by the pre-Task-5 corrective landing — so recording only the
-   original approval hash would misstate which document the stage was built
-   against. Task 9 must record **all** relevant Stage 4 plan commits, in order:
+   approved plan was corrected several times during implementation, so recording
+   only the original approval hash would misstate which document the stage was
+   built against. Task 9 must **derive the history from Git rather than from a
+   count written down here**, and must record every one of:
+   - the original Stage 4 plan-approval commit;
+   - every reviewed Stage 4 plan-correction commit;
+   - the deep-immutability plan-correction commit of section 5.5.1;
+   - the Task 8 implementation-completion commit;
+   - the Task 9 status-record commit.
+
+   The already-known plan commits are, in order:
    - the **original approved plan commit**
      `b6721b870c79db7b999b9eb70107e53992cbe1ab`;
    - the **Task 2 hash-material correction**
      `65eca5b17d45c0cf04f856dc6049e0c3ee7a2be9`
      (`docs: define stage 4 hash-material model types`);
-   - **this Task 4 fixture-and-diagnostic correction commit**
-     (`docs: resolve stage 4 fixture and diagnostic bounds`), whose hash is read
-     from Git after it lands, recorded in the ledger, **and recorded in the
-     roadmap's Stage 4 row alongside the other two** — the ledger alone is not
-     sufficient, because section 9.0 step 4 makes it git-ignored, so a
-     ledger-only record would leave this correction in no committed artifact. The
-     Stage 3 row is the precedent for recording a post-approval correction hash in
-     the roadmap. It is deliberately named descriptively rather than by hash here,
-     because a document cannot contain its own commit hash. It carries **four**
-     reviewed changes:
+   - the **Task 4 fixture-and-diagnostic correction**
+     `f898499d647d1d4ade571345973c6ced5e84403c`
+     (`docs: resolve stage 4 fixture and diagnostic bounds`). It has landed, so
+     its hash is now known and stated here rather than deferred. It must be
+     recorded in the ledger **and** in the roadmap's Stage 4 row — the ledger
+     alone is not sufficient, because section 9.0 step 4 makes it git-ignored, so
+     a ledger-only record would leave the correction in no committed artifact.
+     The Stage 3 row is the precedent for recording a post-approval correction
+     hash in the roadmap. It carries **four** reviewed changes:
      1. Task 4 fixture ownership — `invalid/feature_cycle.yaml` plus the six root
         golden inputs, with Task 2's glob narrowed for the future (sections 6.5.1
         and 6.5.3);
@@ -3948,26 +4177,43 @@ exact roadmap-status guard.
         topological ordering, which is the consequence that makes Task 4 step 2
         executable (Task 4, "a detected cycle gates warm-up and topological
         order").
-   - **this pre-Task-5 reference-and-diagnostic correction commit**
-     (`docs: close stage 4 reference and diagnostic gaps`), whose hash is likewise
-     read from Git after it lands and recorded in **both** the ledger and the
-     roadmap's Stage 4 row, for the same reason. Named descriptively rather than by
-     hash because a document cannot contain its own commit hash. It carries
-     **two** reviewed rulings:
+   - the **pre-Task-5 reference-and-diagnostic correction**
+     `f57357379222404685d805d081de4f61f36a7fe5`
+     (`docs: close stage 4 reference and diagnostic gaps`). It has also landed, so
+     its hash is stated here and recorded in **both** the ledger and the
+     roadmap's Stage 4 row, for the same reason. It carries **two** reviewed
+     rulings:
      1. reference-namespace disjointness and its single new error code
         `STRATEGY.REFERENCE_NAMESPACE_COLLISION` (sections 5.10 and 5.9);
      2. Task 3 diagnostic bounding, which supersedes section 5.4.1's
         "separate scope ruling, not Task 4 work" paragraph on that one point
         (section 5.4.2).
+   - the **deep-immutability plan correction** of section 5.5.1
+     (`docs: require deep strategy immutability`) — the commit containing the
+     reviewed deep-immutability section and the closed-world 22-root import
+     update. Its hash is derived from Git after the commit exists, and is
+     recorded in both the ledger and the roadmap's Stage 4 row. Named
+     descriptively rather than by hash because a document cannot contain its own
+     commit hash;
    - any further reviewed plan-correction commit that lands before Task 9.
 
-   **The complete Stage 4 plan-commit chain Task 9 must record is therefore four
-   commits**, in order: `b6721b870c79db7b999b9eb70107e53992cbe1ab`,
+   **Derive the chain from Git, not from arithmetic here.** The known hashes are
+   `b6721b870c79db7b999b9eb70107e53992cbe1ab`,
    `65eca5b17d45c0cf04f856dc6049e0c3ee7a2be9`,
-   `f898499d647d1d4ade571345973c6ced5e84403c`, and this one. The Stage 4
-   implementation commit `2b8601fb3db4d43691586fd5253cb3473d5248a0`
-   (`feat: add feature graph and level 1 evaluator`) is Task 4's, not a plan
-   commit, and is recorded separately.
+   `f898499d647d1d4ade571345973c6ced5e84403c`, and
+   `f57357379222404685d805d081de4f61f36a7fe5`, followed by the
+   deep-immutability plan-correction commit and any later one, each read from
+   Git. Task 9 must confirm the recorded set against
+   `git log --oneline -- <this plan path>` rather than against a number, so the
+   record cannot drift as further corrections land.
+
+   Implementation commits are **not** plan commits and are recorded separately;
+   they are likewise derived from Git rather than counted here. Two that are
+   easily mistaken for plan commits because they accompany plan corrections are
+   the Task 4 implementation commit `2b8601fb3db4d43691586fd5253cb3473d5248a0`
+   (`feat: add feature graph and level 1 evaluator`) and the deep-immutability
+   implementation commit `fix: freeze strategy mapping fields`. This is not a
+   closed enumeration of Stage 4's non-plan commits.
 
    The plan-approval guard's pinned corrected-plan hash still identifies the
    approval commit, not the corrections; Task 9 records the corrections alongside
@@ -4198,7 +4444,7 @@ No other `pyproject.toml` change is authorized. In particular
  }
 ```
 
-### Appendix C — `tests/safety/test_stage3_boundaries.py` patches (Tasks 2 through 8; status guard in Task 9)
+### Appendix C — `tests/safety/test_stage3_boundaries.py` patches (Tasks 2 through 8; the post-Task-5 deep-immutability landing of section 5.5.1; status guard in Task 9)
 
 Add to `_ALLOWED_SOURCE_FILES`, preserving alphabetical order:
 
@@ -4224,14 +4470,36 @@ Add to `_ALLOWED_SOURCE_FILES`, preserving alphabetical order:
 ```
 
 Add to `_ALLOWED_IMPORT_ROOTS`. The merged set has exactly 17 roots. Section
-5.2's bytes-only contract removes any need for `io`, so **four** are added,
-taking the set to 21:
+5.2's bytes-only contract removes any need for `io`, so **four** are added in
+Task 2, taking the set to 21:
 
 ```text
 "codecs",
 "contextlib",
 "copy",
 "yaml",
+```
+
+The post-Task-5 deep-immutability landing of section 5.5.1 adds **one** further
+root, taking the reviewed set to **22**:
+
+```text
+"types",
+```
+
+`types` carries a location-and-form restriction no other root has, and the
+closed-world test must enforce it executably rather than by comment: only
+`src/crypto_lab/strategy/models.py` may import it, and only as exactly
+`from types import MappingProxyType` — no alias, no additional symbol in the
+same statement, no bare `import types`, and no second source file. The general
+AST scanner is not weakened, no root assertion becomes subset membership, and no
+existing root is removed. The exact 22-root set is therefore:
+
+```text
+"__future__", "argparse", "codecs", "collections", "contextlib", "copy",
+"crypto_lab", "dataclasses", "datetime", "decimal", "enum", "hashlib",
+"importlib", "json", "pathlib", "pydantic", "re", "tomllib", "types",
+"typing", "uuid", "yaml",
 ```
 
 `codecs` is needed for the BOM literals in section 5.2 item 3, `contextlib`
