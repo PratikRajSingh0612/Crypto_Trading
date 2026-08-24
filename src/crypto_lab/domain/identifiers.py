@@ -90,6 +90,14 @@ def _partition_id(value: str) -> str:
     return validate_prefixed_uuid4(value, "part_")
 
 
+def _approximation_id(value: str) -> str:
+    return validate_prefixed_uuid4(value, "appx_")
+
+
+def _availability_observation_id(value: str) -> str:
+    return validate_prefixed_uuid4(value, "avail_")
+
+
 type ExperimentId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^exp_{_UUID4}$"),
@@ -161,6 +169,18 @@ type DatasetPartitionId = Annotated[
     StringConstraints(strict=True, pattern=rf"^part_{_UUID4}$"),
     AfterValidator(_partition_id),
     WithJsonSchema(exact_string_schema(rf"^part_{_UUID4}$")),
+]
+type ApproximationId = Annotated[
+    str,
+    StringConstraints(strict=True, pattern=rf"^appx_{_UUID4}$"),
+    AfterValidator(_approximation_id),
+    WithJsonSchema(exact_string_schema(rf"^appx_{_UUID4}$")),
+]
+type AvailabilityObservationId = Annotated[
+    str,
+    StringConstraints(strict=True, pattern=rf"^avail_{_UUID4}$"),
+    AfterValidator(_availability_observation_id),
+    WithJsonSchema(exact_string_schema(rf"^avail_{_UUID4}$")),
 ]
 type Sha256 = Annotated[
     str,

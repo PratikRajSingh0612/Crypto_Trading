@@ -1,0 +1,400 @@
+"""Enforce the ``strategy`` and ``capabilities`` inward-dependency boundaries.
+
+Specification section 27.1 declares the dependency-direction table normative and
+gives both packages exactly one allowed inward dependency: ``domain``. Plan
+section 5.7 exists because specification section 8.2 places ``AdapterDescriptor``,
+``RuntimeAvailabilityObservation``, and ``ComparisonLevel`` in the resolver
+signature: rather than add the ``capabilities -> adapters`` edge that table
+forbids, Stage 4 relocated those contracts into ``domain``. This test is what
+makes the relocation binding instead of incidental.
+
+The ``strategy`` assertion is **preventive**: it begins green, because Task 2
+through Task 5 already respected the boundary. It is declared here rather than
+asserted for the first time so a later stage cannot quietly add an edge.
+
+A local scanner is used rather than the one in ``test_domain_import_boundary.py``:
+that module is specialized to the domain root, is outside this task's file map,
+and generalizing it would change a committed guard for a caller that does not need
+it.
+"""
+
+from __future__ import annotations
+
+import ast
+from dataclasses import dataclass
+from importlib.util import resolve_name
+from pathlib import Path
+
+import pytest
+
+_CAPABILITIES = "capabilities"
+_STRATEGY = "strategy"
+#: Every central package other than ``domain`` and the scanned package itself.
+#: Plan Task 6 step 11 names ``adapters`` first and then the other eight; ``cli``
+#: is included because a composition root must never be imported by a layer.
+_PROHIBITED_FOR_CAPABILITIES: tuple[str, ...] = (
+    "crypto_lab.adapters",
+    "crypto_lab.strategy",
+    "crypto_lab.experiments",
+    "crypto_lab.datasets",
+    "crypto_lab.artifacts",
+    "crypto_lab.persistence",
+    "crypto_lab.process_supervision",
+    "crypto_lab.configuration",
+    "crypto_lab.audit",
+    "crypto_lab.cli",
+)
+_PROHIBITED_FOR_STRATEGY: tuple[str, ...] = (
+    "crypto_lab.adapters",
+    "crypto_lab.capabilities",
+    "crypto_lab.experiments",
+    "crypto_lab.datasets",
+    "crypto_lab.artifacts",
+    "crypto_lab.persistence",
+    "crypto_lab.process_supervision",
+    "crypto_lab.configuration",
+    "crypto_lab.audit",
+    "crypto_lab.cli",
+)
+#: ``schema_registry`` sits outside the layered packages and may import inward, so
+#: a layer importing *it* would invert the direction.
+_COMPOSITION_MODULE = "crypto_lab.schema_registry"
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class PackageImportViolation:
+    """One import that crosses a package boundary the table forbids."""
+
+    relative_path: str
+    line_number: int
+    imported_name: str
+
+
+def _module_package(source_path: Path, package_root: Path, package: str) -> str:
+    parts = list(source_path.relative_to(package_root).with_suffix("").parts)
+    parts.pop()
+    return ".".join(("crypto_lab", package, *parts))
+
+
+def _imported_names(
+    node: ast.Import | ast.ImportFrom,
+    module_package: str,
+) -> tuple[str, ...]:
+    """Resolve one import node to the absolute names it actually reaches.
+
+    ``from crypto_lab import adapters`` names the subpackage in ``node.names``
+    rather than in ``node.module``, and a relative import names nothing absolute at
+    all, so both shapes are expanded here. Without that, the two easiest ways to
+    write a forbidden import would both pass.
+    """
+    if isinstance(node, ast.Import):
+        return tuple(alias.name for alias in node.names)
+    base = node.module or ""
+    if node.level > 0:
+        base = resolve_name("." * node.level + base, module_package)
+    if base == "crypto_lab":
+        return tuple(f"crypto_lab.{alias.name}" for alias in node.names)
+    return (base,)
+
+
+def _is_within(imported_name: str, package_name: str) -> bool:
+    return imported_name == package_name or imported_name.startswith(f"{package_name}.")
+
+
+def find_package_import_violations(
+    package_root: Path,
+    package: str,
+    prohibited: tuple[str, ...],
+) -> tuple[PackageImportViolation, ...]:
+    """Return every prohibited import below one central package root.
+
+    Every ``Import`` and ``ImportFrom`` node is walked, including function-local
+    ones, so deferring an import inside a function body does not evade the check.
+    """
+    violations: list[PackageImportViolation] = []
+    for source_path in sorted(
+        package_root.rglob("*.py"), key=lambda path: path.as_posix()
+    ):
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"), filename=str(source_path)
+        )
+        module_package = _module_package(source_path, package_root, package)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Import | ast.ImportFrom):
+                continue
+            for imported_name in _imported_names(node, module_package):
+                forbidden = any(
+                    _is_within(imported_name, candidate) for candidate in prohibited
+                ) or _is_within(imported_name, _COMPOSITION_MODULE)
+                if forbidden:
+                    violations.append(
+                        PackageImportViolation(
+                            relative_path=source_path.relative_to(
+                                package_root
+                            ).as_posix(),
+                            line_number=node.lineno,
+                            imported_name=imported_name,
+                        )
+                    )
+    return tuple(sorted(violations))
+
+
+def _allowed_project_imports(
+    package_root: Path,
+    package: str,
+) -> tuple[str, ...]:
+    """Return every ``crypto_lab`` import reached from one package, deduplicated."""
+    reached: set[str] = set()
+    for source_path in sorted(
+        package_root.rglob("*.py"), key=lambda path: path.as_posix()
+    ):
+        tree = ast.parse(
+            source_path.read_text(encoding="utf-8"), filename=str(source_path)
+        )
+        module_package = _module_package(source_path, package_root, package)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Import | ast.ImportFrom):
+                continue
+            for imported_name in _imported_names(node, module_package):
+                if imported_name.startswith("crypto_lab"):
+                    reached.add(imported_name)
+    return tuple(sorted(reached))
+
+
+def _package_root(repository_root: Path, package: str) -> Path:
+    return repository_root / "src" / "crypto_lab" / package
+
+
+# --------------------------------------------------------------------------
+# The repository assertions
+# --------------------------------------------------------------------------
+
+
+def test_capabilities_imports_nothing_from_any_prohibited_package(
+    repository_root: Path,
+) -> None:
+    assert (
+        find_package_import_violations(
+            _package_root(repository_root, _CAPABILITIES),
+            _CAPABILITIES,
+            _PROHIBITED_FOR_CAPABILITIES,
+        )
+        == ()
+    )
+
+
+def test_capabilities_reaches_only_domain_and_itself(
+    repository_root: Path,
+) -> None:
+    """An allowlist, not only a denylist.
+
+    A denylist over today's package names would pass silently the moment a new
+    central package appears. This asserts the positive shape of section 27.1's
+    single allowed inward dependency instead.
+    """
+    reached = _allowed_project_imports(
+        _package_root(repository_root, _CAPABILITIES), _CAPABILITIES
+    )
+    unexpected = tuple(
+        name
+        for name in reached
+        if not (
+            _is_within(name, "crypto_lab.domain")
+            or _is_within(name, "crypto_lab.capabilities")
+        )
+    )
+    assert unexpected == ()
+    # The relocation is the point: the resolver's descriptor and availability
+    # contracts must be reached through `domain`, never through `adapters`.
+    assert "crypto_lab.domain.descriptors" in reached
+
+
+def test_strategy_imports_nothing_from_any_prohibited_package(
+    repository_root: Path,
+) -> None:
+    """Preventive: this begins green and exists so it cannot silently stop being."""
+    assert (
+        find_package_import_violations(
+            _package_root(repository_root, _STRATEGY),
+            _STRATEGY,
+            _PROHIBITED_FOR_STRATEGY,
+        )
+        == ()
+    )
+
+
+def test_strategy_reaches_only_domain_and_itself(repository_root: Path) -> None:
+    """Preventive, for the same reason as above."""
+    reached = _allowed_project_imports(
+        _package_root(repository_root, _STRATEGY), _STRATEGY
+    )
+    unexpected = tuple(
+        name
+        for name in reached
+        if not (
+            _is_within(name, "crypto_lab.domain")
+            or _is_within(name, "crypto_lab.strategy")
+        )
+    )
+    assert unexpected == ()
+
+
+# --------------------------------------------------------------------------
+# Scanner self-tests -- a guard that cannot fail is not a guard
+# --------------------------------------------------------------------------
+
+
+def _write_package(tmp_path: Path, package: str, source: str) -> Path:
+    package_root = tmp_path / "src" / "crypto_lab" / package
+    package_root.mkdir(parents=True)
+    (package_root / "sample.py").write_text(source, encoding="utf-8")
+    return package_root
+
+
+@pytest.mark.parametrize("prohibited_package", _PROHIBITED_FOR_CAPABILITIES)
+def test_the_scanner_rejects_every_prohibited_package(
+    tmp_path: Path,
+    prohibited_package: str,
+) -> None:
+    package_root = _write_package(
+        tmp_path, _CAPABILITIES, f"import {prohibited_package}\n"
+    )
+
+    violations = find_package_import_violations(
+        package_root, _CAPABILITIES, _PROHIBITED_FOR_CAPABILITIES
+    )
+
+    assert tuple(item.imported_name for item in violations) == (prohibited_package,)
+
+
+@pytest.mark.parametrize(
+    ("statement", "expected_name"),
+    [
+        ("import crypto_lab.adapters", "crypto_lab.adapters"),
+        (
+            "import crypto_lab.adapters.descriptors",
+            "crypto_lab.adapters.descriptors",
+        ),
+        ("import crypto_lab.adapters as protocol", "crypto_lab.adapters"),
+        ("from crypto_lab import adapters", "crypto_lab.adapters"),
+        ("from crypto_lab import adapters as protocol", "crypto_lab.adapters"),
+        (
+            "from crypto_lab.adapters.descriptors import AdapterDescriptor",
+            "crypto_lab.adapters.descriptors",
+        ),
+        (
+            "from crypto_lab.schema_registry import SCHEMA_DEFINITIONS",
+            _COMPOSITION_MODULE,
+        ),
+    ],
+)
+def test_the_scanner_rejects_each_import_shape(
+    tmp_path: Path,
+    statement: str,
+    expected_name: str,
+) -> None:
+    package_root = _write_package(tmp_path, _CAPABILITIES, f"{statement}\n")
+
+    violations = find_package_import_violations(
+        package_root, _CAPABILITIES, _PROHIBITED_FOR_CAPABILITIES
+    )
+
+    assert tuple(item.imported_name for item in violations) == (expected_name,)
+
+
+def test_the_scanner_reaches_a_function_local_import(tmp_path: Path) -> None:
+    """A deferred import is the obvious way to dodge a module-level scan."""
+    package_root = _write_package(
+        tmp_path,
+        _CAPABILITIES,
+        "def resolve() -> None:\n"
+        "    from crypto_lab.adapters.descriptors import AdapterDescriptor\n"
+        "    del AdapterDescriptor\n",
+    )
+
+    violations = find_package_import_violations(
+        package_root, _CAPABILITIES, _PROHIBITED_FOR_CAPABILITIES
+    )
+
+    assert tuple(item.imported_name for item in violations) == (
+        "crypto_lab.adapters.descriptors",
+    )
+    assert violations[0].line_number == 2
+
+
+def test_the_scanner_reaches_a_relative_import_that_escapes_the_package(
+    tmp_path: Path,
+) -> None:
+    package_root = _write_package(
+        tmp_path, _CAPABILITIES, "from ..adapters import descriptors\n"
+    )
+
+    violations = find_package_import_violations(
+        package_root, _CAPABILITIES, _PROHIBITED_FOR_CAPABILITIES
+    )
+
+    assert tuple(item.imported_name for item in violations) == ("crypto_lab.adapters",)
+
+
+def test_the_scanner_recurses_into_a_nested_module(tmp_path: Path) -> None:
+    package_root = tmp_path / "src" / "crypto_lab" / _CAPABILITIES
+    nested = package_root / "nested"
+    nested.mkdir(parents=True)
+    (nested / "sample.py").write_text(
+        "import crypto_lab.experiments\n", encoding="utf-8"
+    )
+
+    violations = find_package_import_violations(
+        package_root, _CAPABILITIES, _PROHIBITED_FOR_CAPABILITIES
+    )
+
+    assert violations == (
+        PackageImportViolation(
+            relative_path="nested/sample.py",
+            line_number=1,
+            imported_name="crypto_lab.experiments",
+        ),
+    )
+
+
+def test_the_scanner_ignores_allowed_imports_and_lookalike_text(
+    tmp_path: Path,
+) -> None:
+    package_root = _write_package(
+        tmp_path,
+        _CAPABILITIES,
+        '''"""import crypto_lab.adapters inside a docstring."""
+# from crypto_lab import adapters
+from __future__ import annotations
+
+from enum import StrEnum
+
+from crypto_lab.domain.base import CanonicalModel
+from crypto_lab.domain.descriptors import AdapterDescriptor
+
+from . import sibling
+from .nested import helper
+''',
+    )
+
+    assert (
+        find_package_import_violations(
+            package_root, _CAPABILITIES, _PROHIBITED_FOR_CAPABILITIES
+        )
+        == ()
+    )
+
+
+def test_the_allowlist_scanner_reports_every_project_import(tmp_path: Path) -> None:
+    package_root = _write_package(
+        tmp_path,
+        _CAPABILITIES,
+        "from crypto_lab.domain.base import CanonicalModel\n"
+        "from crypto_lab.experiments import service\n"
+        "import json\n",
+    )
+
+    assert _allowed_project_imports(package_root, _CAPABILITIES) == (
+        "crypto_lab.domain.base",
+        "crypto_lab.experiments",
+    )

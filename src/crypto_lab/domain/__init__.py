@@ -8,6 +8,14 @@ from crypto_lab.domain.capability_requirements import (
     CapabilityRequirement,
 )
 from crypto_lab.domain.comparison_levels import ComparisonLevel
+from crypto_lab.domain.descriptors import (
+    AdapterDescriptor,
+    BoundedText,
+    EngineDescriptor,
+    OperatingSystem,
+    RuntimeAvailabilityObservation,
+    SupportedSchemaVersion,
+)
 from crypto_lab.domain.diagnostics import (
     Diagnostic,
     DiagnosticCategory,
@@ -57,10 +65,12 @@ from crypto_lab.domain.versioning import SemanticVersion, parse_semantic_version
 
 __all__ = (
     "SCHEMA_VERSION",
+    "AdapterDescriptor",
     "ApproximationPolicy",
     "ArtifactId",
     "AssetCode",
     "AuditEventId",
+    "BoundedText",
     "CandidateArtifactId",
     "CanonicalDecimal",
     "CanonicalHashEnvelope",
@@ -74,6 +84,7 @@ __all__ = (
     "DiagnosticCategory",
     "DiagnosticId",
     "DiagnosticSeverity",
+    "EngineDescriptor",
     "EventId",
     "ExperimentId",
     "Failure",
@@ -85,16 +96,19 @@ __all__ = (
     "Money",
     "NonNegativeDecimal",
     "NormalizedIdentifier",
+    "OperatingSystem",
     "PositiveDecimal",
     "Price",
     "Quantity",
     "Result",
     "RunId",
+    "RuntimeAvailabilityObservation",
     "SemanticVersion",
     "Sha256",
     "StrategyId",
     "StrategyVersionId",
     "Success",
+    "SupportedSchemaVersion",
     "UtcDateTime",
     "VocabularyVersion",
     "attempt_token_hash",
