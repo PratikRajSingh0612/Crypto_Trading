@@ -39,6 +39,7 @@ PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab.capabilities.models",
     "crypto_lab.capabilities.policy",
     "crypto_lab.capabilities.resolver",
+    "crypto_lab.capabilities.comparison",
     "crypto_lab.adapters",
     "crypto_lab.adapters.versioning",
     "crypto_lab.adapters.descriptors",
