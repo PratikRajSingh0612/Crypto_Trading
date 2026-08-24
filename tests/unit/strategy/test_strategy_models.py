@@ -14,20 +14,24 @@ from collections.abc import Mapping as CollectionsMapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, get_args, get_origin
+from typing import Any, Literal, get_args, get_origin
 
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import TypeAdapter, ValidationError
 
 from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.capability_requirements import ApproximationPolicy
+from crypto_lab.domain.hashing import sha256_bytes
 from crypto_lab.domain.identifiers import NormalizedIdentifier
-from crypto_lab.domain.records import MarketType
+from crypto_lab.domain.records import InstrumentId, MarketType
 from crypto_lab.domain.results import Success
 from crypto_lab.strategy.expressions import LiteralValueType
 from crypto_lab.strategy.models import (
     MAX_FEATURE_PARAMETERS,
     MAX_PARAMETERS,
+    MAX_UNIVERSE_INSTRUMENTS,
     Direction,
     EngineExtensionDeclaration,
     ExtensionEconomicEffect,
@@ -35,7 +39,16 @@ from crypto_lab.strategy.models import (
     FeatureDefinition,
     ParameterDefinition,
     StrategySpec,
+    Universe,
     _frozen_mapping,
+)
+from crypto_lab.strategy.versioning import (
+    STRATEGY_VERSION_PROFILE_VERSION,
+    StrategySourceProvenance,
+    StrategyVersion,
+    sorted_extension_hashes,
+    strategy_version_hash,
+    strategy_version_identifier,
 )
 from crypto_lab.strategy.yaml_source import load_yaml_document
 
@@ -879,3 +892,434 @@ def test_the_feature_definition_carries_exactly_its_seven_fields() -> None:
         "warm_up_bars",
         "missing_value_policy",
     ]
+
+
+# --------------------------------------------------------------------------
+# Runtime/schema uniqueness agreement -- final pre-Task-8 closure
+# --------------------------------------------------------------------------
+#
+# `validate_instruments_are_unique_and_sorted` rejects a duplicate, and plan
+# section 3.1 requires `json_schema_extra` to supply the `uniqueItems` Pydantic
+# does not emit for a tuple field. `Universe.instruments` carried the validator
+# and not the keyword, so a standards-compliant Draft 2020-12 validator accepted
+# a document ordinary Pydantic validation rejects. Task 8 publishes this record
+# through the `$defs` of both `strategy-spec-v1` and `strategy-version-v1`, so
+# both containers are pinned rather than only the nearer one. Same defect class
+# as the `capabilities/models.py` correction in commit `00879f6`.
+
+_SCHEMA_MODES: tuple[Literal["validation", "serialization"], ...] = (
+    "validation",
+    "serialization",
+)
+_CONTAINERS: tuple[str, ...] = ("StrategySpec", "StrategyVersion")
+_BTC = "BINANCE:BTC/USDT:SPOT"
+_ETH = "BINANCE:ETH/USDT:SPOT"
+_PROVENANCE_BYTES = b"schema_version: placeholder"
+
+# The two nodes this correction is allowed to move, as JSON pointers. Both are
+# reached through `$defs` in both containers, because `StrategySpec.universe`
+# and `StrategySpec.required_capabilities` are model-typed.
+_EXPECTED_UNIQUE_PATHS = {
+    "/$defs/CapabilityRequirement/properties/comparison_levels/uniqueItems",
+    "/$defs/Universe/properties/instruments/uniqueItems",
+}
+# Unique **by a designated semantic key** at runtime, never by whole value. A
+# flat `uniqueItems` would be strictly weaker than the real rule -- two
+# structurally distinct objects can share a key -- so asserting these stay
+# unmarked prevents a later change from publishing a false equivalence.
+_KEY_UNIQUE_SPEC_FIELDS = ("required_capabilities", "engine_extensions")
+
+
+def _model_for(container: str) -> type[StrategySpec] | type[StrategyVersion]:
+    return StrategySpec if container == "StrategySpec" else StrategyVersion
+
+
+def _containing_schema(
+    container: str,
+    mode: Literal["validation", "serialization"],
+) -> dict[str, Any]:
+    return _model_for(container).model_json_schema(mode=mode)
+
+
+def _spec_properties(container: str, schema: dict[str, Any]) -> dict[str, Any]:
+    """`StrategySpec`'s own property map, wherever it sits in this container."""
+    if container == "StrategySpec":
+        properties: dict[str, Any] = schema["properties"]
+        return properties
+    nested: dict[str, Any] = schema["$defs"]["StrategySpec"]["properties"]
+    return nested
+
+
+def _unique_item_paths(node: Any, prefix: str = "") -> set[str]:
+    """Every JSON-pointer path in a schema where `uniqueItems` is `True`.
+
+    A whole-document walk rather than a scan of top-level `properties`: the two
+    corrected fields are only ever reached through `$defs`, and the previous
+    correction's independent review found that a `properties`-only assertion
+    leaves exactly that path unguarded.
+    """
+    found: set[str] = set()
+    if isinstance(node, dict):
+        for key, value in node.items():
+            path = f"{prefix}/{key}"
+            if key == "uniqueItems" and value is True:
+                found.add(path)
+            else:
+                found |= _unique_item_paths(value, path)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            found |= _unique_item_paths(value, f"{prefix}/{index}")
+    return found
+
+
+def _provenance() -> StrategySourceProvenance:
+    return StrategySourceProvenance(
+        source_name="sma_cross_long.valid.yaml",
+        source_bytes_sha256=sha256_bytes(_PROVENANCE_BYTES),
+        source_byte_length=len(_PROVENANCE_BYTES),
+        observed_at_utc=_OBSERVED_AT,
+    )
+
+
+def _version(spec: StrategySpec) -> StrategyVersion:
+    """A real record: `validate_identity_is_recomputed` recomputes the hash."""
+    content_hash = strategy_version_hash(spec)
+    return StrategyVersion(
+        schema_version="1.0.0",
+        strategy_version_id=strategy_version_identifier(content_hash),
+        strategy_id=spec.strategy_id,
+        content_hash=content_hash,
+        strategy_spec=spec,
+        extension_hashes=tuple(sorted_extension_hashes(spec.engine_extensions)),
+        hashing_profile_version=STRATEGY_VERSION_PROFILE_VERSION,
+        created_at_utc=_OBSERVED_AT,
+        source_provenance=_provenance(),
+    )
+
+
+def _spec_document(instruments: list[str]) -> dict[str, Any]:
+    """A **complete** specification document carrying exactly `instruments`.
+
+    Taken from a validated record's own JSON dump rather than from the raw
+    fixture, so the same bytes are legal input to both render modes; a
+    serialization-mode schema describes what a serializer emits.
+    """
+    document = _spec().model_dump(mode="json")
+    document["universe"]["instruments"] = instruments
+    return document
+
+
+def _duplicate_version_document() -> dict[str, Any]:
+    """A complete version document whose universe repeats one instrument.
+
+    Edited as plain data after construction, so it is byte-identical to the
+    valid record apart from the array under test. Its `content_hash` no longer
+    matches the edited specification -- deliberately: JSON Schema never
+    recomputes identity, and at runtime `Universe`'s field validator trips
+    before `validate_identity_is_recomputed` is reached, so the rejection this
+    is paired against is the uniqueness rule and not the hash rule.
+    """
+    document = _version(_spec()).model_dump(mode="json")
+    document["strategy_spec"]["universe"]["instruments"] = [_BTC, _BTC]
+    return document
+
+
+@pytest.mark.parametrize("container", _CONTAINERS)
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_universe_instrument_tuple_emits_unique_items(
+    container: str,
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """The published contract must not be weaker than the runtime one.
+
+    Both containers and both modes: the registry renders `serialization` while
+    `model_json_schema()` defaults to `validation`, and Task 8 publishes
+    `strategy-spec-v1` and `strategy-version-v1` separately.
+    """
+    schema = _containing_schema(container, mode)
+
+    assert (
+        schema["$defs"]["Universe"]["properties"]["instruments"]["uniqueItems"] is True
+    )
+
+
+@pytest.mark.parametrize("container", _CONTAINERS)
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_registry_type_adapter_path_emits_universe_unique_items(
+    container: str,
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """`schema_registry.render_schema_files` renders through a `TypeAdapter`."""
+    schema = TypeAdapter(_model_for(container)).json_schema(mode=mode)
+
+    assert (
+        schema["$defs"]["Universe"]["properties"]["instruments"]["uniqueItems"] is True
+    )
+
+
+@pytest.mark.parametrize("container", _CONTAINERS)
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_universe_addition_preserves_every_other_keyword(
+    container: str,
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """Exactly one keyword is added; the node is otherwise identical.
+
+    The keyword set is transcribed from evidence captured before the edit, so
+    this fails if the fix replaced the node rather than extending it.
+
+    The item schema is checked twice, deliberately. Comparing the container's
+    `$defs` entry with `TypeAdapter(InstrumentId).json_schema()` proves the two
+    renderings agree, but it is **circular** as a widening proof: both sides
+    re-derive from the same annotated type, so widening `InstrumentId` moves
+    them together. The literal bounds below are the non-circular half, and they
+    were transcribed from the pre-correction capture.
+    """
+    schema = _containing_schema(container, mode)
+    universe = schema["$defs"]["Universe"]
+    node = universe["properties"]["instruments"]
+
+    assert set(node) == {
+        "type",
+        "items",
+        "maxItems",
+        "minItems",
+        "title",
+        "uniqueItems",
+    }
+    assert node["type"] == "array"
+    assert node["items"] == {"$ref": "#/$defs/InstrumentId"}
+    assert node["maxItems"] == MAX_UNIVERSE_INSTRUMENTS
+    assert node["minItems"] == 1
+    assert node["title"] == "Instruments"
+    identifier = schema["$defs"]["InstrumentId"]
+    assert identifier == TypeAdapter(InstrumentId).json_schema(mode=mode)
+    assert identifier["type"] == "string"
+    assert identifier["minLength"] == 10
+    assert identifier["maxLength"] == 107
+    assert len(identifier["allOf"]) == 2
+    assert all(set(branch) == {"pattern"} for branch in identifier["allOf"])
+    assert universe["required"] == ["kind", "instruments"]
+    assert universe["additionalProperties"] is False
+
+
+@pytest.mark.parametrize("container", _CONTAINERS)
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_constraint_lands_on_exactly_the_two_intended_nodes(
+    container: str,
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """A whole-schema walk, so nothing gains the keyword unnoticed.
+
+    `CapabilityRequirement.comparison_levels` appears here because
+    `StrategySpec.required_capabilities` is a tuple of that model: it is
+    propagation of the same field contract corrected in
+    `domain/capability_requirements.py`, not a second collateral change.
+    """
+    schema = _containing_schema(container, mode)
+
+    assert _unique_item_paths(schema) == _EXPECTED_UNIQUE_PATHS
+
+
+@pytest.mark.parametrize("container", _CONTAINERS)
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_key_unique_collections_stay_unmarked(
+    container: str,
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """Uniqueness by semantic key is not expressible as flat `uniqueItems`.
+
+    `normalize_required_capabilities` rejects a repeated `capability`, and
+    `normalize_engine_extensions` rejects a repeated `(adapter_name,
+    extension_id, version)`. Two structurally different objects can break either
+    rule while remaining distinct under `uniqueItems`, so marking them would
+    publish a constraint that is not the runtime one and would read as a claim
+    of equivalence that does not hold.
+
+    **This is a deliberate choice, not the repository's settled convention, and
+    an independent review was right to say so.** Two shipped schemas already
+    mark key-unique collections with flat `uniqueItems`:
+    `AdaptersConfig.entries` in `application-config-v1` (unique by
+    `(adapter_name, adapter_version)` over a five-field record) and
+    `AdapterDescriptor.supported_schema_versions` in `adapter-descriptor-v1`
+    (unique by `(schema_name, version)`). Neither is wrong -- a whole-object
+    duplicate is always also a key duplicate, so the keyword never rejects a
+    runtime-valid document; it is simply a partial constraint. Leaving these two
+    unmarked is the stricter reading of "publish only what the runtime means",
+    and the divergence is recorded in the task ledger for Task 8 rather than
+    silently settled here.
+    """
+    properties = _spec_properties(container, _containing_schema(container, mode))
+
+    for field in _KEY_UNIQUE_SPEC_FIELDS:
+        assert properties[field]["type"] == "array"
+        assert "uniqueItems" not in properties[field]
+
+
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_generated_spec_schema_rejects_duplicate_instruments(
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """The defect stated as an executable fact.
+
+    Before the correction this exact document was **accepted** by the generated
+    schema and **rejected** by Pydantic.
+    """
+    schema = StrategySpec.model_json_schema(mode=mode)
+    Draft202012Validator.check_schema(schema)
+
+    with pytest.raises(JsonSchemaValidationError):
+        Draft202012Validator(schema).validate(_spec_document([_BTC, _BTC]))
+
+
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_generated_version_schema_rejects_duplicate_instruments(
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """Propagation proved by enforcement, not merely by the keyword's presence."""
+    schema = StrategyVersion.model_json_schema(mode=mode)
+    Draft202012Validator.check_schema(schema)
+
+    with pytest.raises(JsonSchemaValidationError):
+        Draft202012Validator(schema).validate(_duplicate_version_document())
+
+
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_generated_spec_schema_accepts_distinct_instruments(
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """The correction must narrow nothing beyond uniqueness."""
+    document = _spec_document([_BTC, _ETH])
+
+    Draft202012Validator(StrategySpec.model_json_schema(mode=mode)).validate(document)
+    assert document["universe"]["instruments"] == [_BTC, _ETH]
+
+
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_generated_version_schema_accepts_distinct_instruments(
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """A complete, hash-consistent record with two instruments still validates."""
+    version = _version(_nested("universe", instruments=[_ETH, _BTC]))
+    document = version.model_dump(mode="json")
+
+    Draft202012Validator(StrategyVersion.model_json_schema(mode=mode)).validate(
+        document
+    )
+    assert document["strategy_spec"]["universe"]["instruments"] == [_BTC, _ETH]
+
+
+# Preventive runtime evidence. These begin GREEN: runtime uniqueness already
+# exists and is unchanged by this correction. They are declared so the agreement
+# is guarded from both sides rather than only from the schema side.
+
+
+def test_pydantic_still_rejects_duplicate_instruments() -> None:
+    """Preventive: the runtime half of the agreement, with its own message.
+
+    Asserting the message matters because the same validator also sorts; a
+    change that dropped only the uniqueness branch would otherwise pass.
+    """
+    with pytest.raises(ValidationError, match="unique"):
+        _nested("universe", instruments=[_BTC, _BTC])
+
+
+def test_universe_instruments_remain_a_normalized_frozen_tuple() -> None:
+    """Preventive: representation, ordering, and frozenness are unchanged.
+
+    Unlike `comparison_levels`, this validator **normalizes** an unsorted array
+    rather than rejecting it, so an unsorted input is legal at runtime and the
+    schema accepting one is agreement rather than divergence. The only residual
+    is that Draft 2020-12 cannot advertise that the emitted array is sorted.
+    """
+    spec = _nested("universe", instruments=[_ETH, _BTC])
+
+    assert isinstance(spec.universe.instruments, tuple)
+    assert spec.universe.instruments == (_BTC, _ETH)
+    assert Universe.model_config["frozen"] is True
+    assert StrategySpec.model_config["frozen"] is True
+    assert StrategyVersion.model_config["frozen"] is True
+    with pytest.raises(ValidationError):
+        spec.universe.instruments = ()
+
+
+def test_the_affected_models_keep_their_exact_field_order() -> None:
+    """Preventive: the correction adds metadata, never a field."""
+    assert list(Universe.model_fields) == ["kind", "instruments"]
+    assert list(StrategyVersion.model_fields) == [
+        "schema_version",
+        "strategy_version_id",
+        "strategy_id",
+        "content_hash",
+        "strategy_spec",
+        "extension_hashes",
+        "hashing_profile_version",
+        "created_at_utc",
+        "source_provenance",
+    ]
+
+
+@pytest.mark.parametrize("mode", ["python", "json"])
+def test_both_universe_dump_modes_keep_their_shape(mode: Any) -> None:
+    """Preventive: a schema keyword must not alter either serialized form."""
+    spec = _nested("universe", instruments=[_ETH, _BTC])
+    dumped = spec.model_dump(mode=mode)["universe"]
+
+    assert set(dumped) == set(Universe.model_fields)
+    if mode == "python":
+        assert isinstance(dumped["instruments"], tuple)
+    else:
+        assert dumped["instruments"] == [_BTC, _ETH]
+
+
+def test_the_correction_changes_no_strategy_canonical_byte_or_hash() -> None:
+    """Recorded before the edit and compared after.
+
+    `uniqueItems` is a JSON Schema keyword, not a model field, so no valid
+    instance's canonical serialization and no content identity may move. The
+    full specification and version documents are pinned by digest and length
+    rather than transcribed, because both run to thousands of bytes; the two
+    short records the correction actually touches are pinned literally.
+    """
+    spec = _spec()
+    version = _version(spec)
+    spec_bytes = canonical_json_bytes(spec.model_dump(mode="json"))
+    version_bytes = canonical_json_bytes(version.model_dump(mode="json"))
+
+    assert canonical_json_bytes(spec.universe.model_dump(mode="json")) == (
+        b'{"instruments":["BINANCE:BTC/USDT:SPOT"],"kind":"STATIC"}'
+    )
+    assert canonical_json_bytes(
+        spec.required_capabilities[0].model_dump(mode="json")
+    ) == (
+        b'{"approximation_policy":"REJECT","capability":"data.ohlcv",'
+        b'"comparison_levels":["LEVEL_1","LEVEL_2"],'
+        b'"minimum_semantics":"capabilities/v1","required":true,'
+        b'"schema_version":"1.0.0"}'
+    )
+    assert len(spec_bytes) == 2583
+    assert sha256_bytes(spec_bytes) == (
+        "035163fa4240c58bebde17a73840744100240821ddd4fd53e28bd4ee6678bc6a"
+    )
+    assert len(version_bytes) == 3161
+    assert sha256_bytes(version_bytes) == (
+        "f72def0278f7ea7964d330d9b573c7fda262dfe60bc0dc6c7c414c0d5d31bdee"
+    )
+
+
+def test_the_strategy_content_hash_is_unchanged_for_the_same_semantic_input() -> None:
+    """Identity is the strictest canonical-byte proof available for a strategy.
+
+    `strategy_version_payload` embeds the whole `model_dump(mode="json")`, so a
+    single moved byte anywhere in the specification changes this digest.
+    """
+    spec = _spec()
+    content_hash = strategy_version_hash(spec)
+
+    assert content_hash == (
+        "14f59d879338f36a91f639e932567dba35cc17b835cfb16d7a4362c05b23c29e"
+    )
+    assert strategy_version_identifier(content_hash) == (
+        "strv_14f59d87-9338-436a-91f6-39e932567dba"
+    )
+    assert _version(spec).content_hash == content_hash

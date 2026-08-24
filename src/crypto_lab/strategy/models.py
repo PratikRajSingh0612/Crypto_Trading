@@ -222,7 +222,24 @@ class Universe(CanonicalModel):
 
     kind: Literal["STATIC"]
     instruments: tuple[InstrumentId, ...] = Field(
-        min_length=1, max_length=MAX_UNIVERSE_INSTRUMENTS
+        min_length=1,
+        max_length=MAX_UNIVERSE_INSTRUMENTS,
+        # Plan section 3.1 requires `json_schema_extra` to supply the `uniqueItems`
+        # Pydantic does not emit for a tuple field; it names callables because that
+        # is the form `domain/descriptors.py` uses, and a literal mapping is the same
+        # mechanism. Without it the generated schema
+        # accepts a repeated instrument that
+        # `validate_instruments_are_unique_and_sorted` rejects, and Task 8 publishes
+        # this record through the `$defs` of both `strategy-spec-v1` and
+        # `strategy-version-v1`. Field-level rather than a model-level hook because
+        # it is additive; `StrategySpec.parameters` below sets `maxProperties` the
+        # same way.
+        #
+        # Unlike the comparison-level fields, the validator here **normalizes** an
+        # unsorted array rather than rejecting one, so a schema that admits any
+        # order agrees with the runtime. The only residue is that Draft 2020-12
+        # cannot advertise that a serialized array is sorted.
+        json_schema_extra={"uniqueItems": True},
     )
 
     @field_validator("instruments")

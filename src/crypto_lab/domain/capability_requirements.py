@@ -55,7 +55,25 @@ class CapabilityRequirement(CanonicalModel):
     minimum_semantics: Literal["capabilities/v1"]
     approximation_policy: ApproximationPolicy
     comparison_levels: tuple[ComparisonLevel, ...] = Field(
-        max_length=MAX_REQUIREMENT_COMPARISON_LEVELS
+        max_length=MAX_REQUIREMENT_COMPARISON_LEVELS,
+        # Plan section 3.1 requires `json_schema_extra` to supply the `uniqueItems`
+        # Pydantic does not emit for a tuple field; it names callables because that
+        # is the form `domain/descriptors.py` uses, and a literal mapping is the same
+        # mechanism. Without it the generated schema
+        # accepts duplicate levels that `validate_levels_are_unique_and_sorted`
+        # rejects, and Task 8 publishes this record directly as
+        # `capabilities/capability-requirement-v1.schema.json` and again through the
+        # `$defs` of `strategy-spec-v1` and `strategy-version-v1`. Field-level rather
+        # than a model-level hook because it is additive -- every other emitted
+        # keyword survives, which the focused schema tests assert keyword by keyword
+        # in both render modes. Same shape as the `capabilities/models.py`
+        # correction it completes.
+        #
+        # Only the uniqueness half is closed. Draft 2020-12 has no ordering keyword,
+        # so `["LEVEL_2", "LEVEL_1"]` still validates against the schema and is still
+        # rejected here. That residue is inexpressible rather than overlooked, and it
+        # is recorded in the task ledger.
+        json_schema_extra={"uniqueItems": True},
     )
 
     @field_validator("comparison_levels")
