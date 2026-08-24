@@ -68,6 +68,10 @@ _SUPPORT_KINDS = ("NATIVE", "APPROXIMATED", "UNSUPPORTED")
 _OUT_OF_VOCABULARY = ("market.crypto", "venue.binance", "orders.live")
 #: Drawn so the descriptor-side vocabulary-version branch is reachable too.
 _VOCABULARY_VERSIONS = ("capabilities/v1", "capabilities/v1", "capabilities/v2")
+#: Authoring versions for the provenance-invariance property. ``1.0.0`` matches the
+#: descriptor; the others deliberately do not, because a differing authoring
+#: version must not affect the decision.
+_AUTHORING_VERSIONS = ("1.0.0", "2.0.0", "0.9.1", "3.1.4")
 
 
 def _engine() -> EngineDescriptor:
@@ -316,16 +320,15 @@ def test_every_result_is_one_approved_outcome_with_canonical_reasons(
             *(item.capability for item in declarations),
         )
     )
+    # A declaration's `adapter_version` is provenance, not eligibility, so it is
+    # deliberately absent from this predicate: specification section 11.3 requires
+    # only that it be "included in run provenance", and section 13.2 closes
+    # descriptor invalidity to unknown names and overlapping declarations.
     declared_capabilities = [item.capability for item in declarations]
-    declarations_consistent = (
-        len(set(declared_capabilities)) == len(declared_capabilities)
-        and all(
-            name in descriptor.approximated_capabilities
-            for name in declared_capabilities
-        )
-        and all(
-            item.adapter_version == descriptor.adapter_version for item in declarations
-        )
+    declarations_consistent = len(set(declared_capabilities)) == len(
+        declared_capabilities
+    ) and all(
+        name in descriptor.approximated_capabilities for name in declared_capabilities
     )
     version_agrees = descriptor.capability_vocabulary_version == "capabilities/v1"
     all_native = all(
@@ -451,6 +454,53 @@ def test_runtime_availability_never_changes_a_semantic_verdict(
     unavailable_reasons = {reason.error_code for reason in outcomes[False].reasons}
     if outcomes[False].outcome is CompatibilityOutcome.UNAVAILABLE:
         assert unavailable_reasons.isdisjoint(semantic_codes)
+
+
+@given(inputs=_resolution_inputs(), authoring=st.sampled_from(_AUTHORING_VERSIONS))
+def test_the_declaration_authoring_version_is_provenance_only(
+    inputs: tuple[
+        tuple[CapabilityRequirement, ...],
+        AdapterDescriptor,
+        RuntimeAvailabilityObservation,
+        ComparisonLevel,
+        tuple[ApproximationDeclaration, ...],
+    ],
+    authoring: str,
+) -> None:
+    """Restamping every declaration's authoring version cannot move the decision.
+
+    Specification section 11.3 makes ``adapter_version`` a provenance record, so it
+    must be invisible to the outcome and to the reason set. **What this property
+    asserts broadly** is exactly that invariance -- outcome, reason set, and the set
+    of capabilities whose declarations were applied -- all of which are reachable
+    for any drawn input, so a version-equality rule reintroduced anywhere in step 1
+    surfaces here.
+
+    The provenance assertion at the end is deliberately *not* claimed to be broadly
+    reached: landing on ``SUPPORTED_WITH_APPROXIMATION`` needs a narrow conjunction
+    of drawn conditions, so ``approximations`` is often empty and that assertion is
+    then trivially true. The deterministic proof that provenance is retained rather
+    than rewritten lives in the resolver unit tests; this property covers the
+    invariance, not the retention.
+    """
+    requirements, descriptor, availability, level, declarations = inputs
+    restamped = tuple(
+        item.model_copy(update={"adapter_version": authoring}) for item in declarations
+    )
+    baseline = _resolve(inputs)
+    changed = _resolve((requirements, descriptor, availability, level, restamped))
+    assert isinstance(baseline, Success)
+    assert isinstance(changed, Success)
+    assert baseline.value.outcome is changed.value.outcome
+    assert baseline.value.reasons == changed.value.reasons
+    # Which declarations were applied must be identical, not merely how many. This
+    # is reachable for every drawn input, including the empty case.
+    assert tuple(item.capability for item in baseline.value.approximations) == tuple(
+        item.capability for item in changed.value.approximations
+    )
+    assert all(
+        item.adapter_version == authoring for item in changed.value.approximations
+    )
 
 
 @given(

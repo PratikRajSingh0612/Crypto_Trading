@@ -728,13 +728,25 @@ def test_conflicting_requirements_for_one_capability_fail_closed() -> None:
     assert _codes(result) == (("execution.partial_fills", APPROXIMATION_DISALLOWED),)
 
 
-def test_a_declaration_for_a_foreign_adapter_version_is_an_overlap() -> None:
-    """Section 13.3 step 1 requires the inputs to be "internally consistent".
+def test_a_declaration_with_a_different_authoring_version_is_applied() -> None:
+    """``ApproximationDeclaration.adapter_version`` is provenance, not eligibility.
 
-    A declaration naming a different adapter version is not a declaration about
-    this descriptor, so applying it would attach provenance -- which section 11.3
-    puts in the run record -- for an adapter version that was never resolved.
+    Specification section 11.3's constraint column says only that the "declaration
+    version is included in run provenance" -- it records which adapter version
+    authored the declaration and imposes no equality against the descriptor being
+    resolved. Section 13.3 step 1 is explicitly scoped to "vocabulary, protocol,
+    and schema versions", and an adapter version is not among the three. Section
+    13.2 closes descriptor invalidity to exactly "unknown capability names or
+    overlapping declarations", and a differing authoring version is neither. The
+    only same-identity requirement in the specification is section 17.2.1's, which
+    governs the availability observation on an ``UNAVAILABLE`` retry and is
+    enforced separately by ``_is_runnable``.
+
+    So when every semantic and runtime condition passes, the declaration
+    participates normally, and its original version survives into the result rather
+    than being rewritten to the descriptor's.
     """
+    declaration = _approximation(adapter_version="2.0.0")
     result = _succeeded(
         _resolve(
             (
@@ -743,11 +755,90 @@ def test_a_declaration_for_a_foreign_adapter_version_is_an_overlap() -> None:
                     approximation_policy=ApproximationPolicy.ALLOW_DECLARED,
                 ),
             ),
+            approximations=(declaration,),
+        )
+    )
+    assert result.outcome is CompatibilityOutcome.SUPPORTED_WITH_APPROXIMATION
+    assert result.reasons == ()
+    # Provenance is preserved, not normalized: the declaration keeps 2.0.0 while
+    # the result records the descriptor's own 1.0.0 separately.
+    assert result.approximations == (declaration,)
+    assert result.approximations[0].adapter_version == "2.0.0"
+    assert result.adapter_version == "1.0.0"
+
+
+def test_the_authoring_version_never_changes_the_semantic_outcome() -> None:
+    """Changing only the provenance version must not move the decision.
+
+    The paired assertion to the test above: the outcome and the reason set are
+    identical across authoring versions, while the serialized bytes differ only
+    because the retained provenance differs.
+    """
+    baseline = _succeeded(
+        _resolve(
+            (
+                _requirement(
+                    "execution.partial_fills",
+                    approximation_policy=ApproximationPolicy.ALLOW_DECLARED,
+                ),
+            ),
+            approximations=(_approximation(adapter_version="1.0.0"),),
+        )
+    )
+    restamped = _succeeded(
+        _resolve(
+            (
+                _requirement(
+                    "execution.partial_fills",
+                    approximation_policy=ApproximationPolicy.ALLOW_DECLARED,
+                ),
+            ),
+            approximations=(_approximation(adapter_version="3.1.4"),),
+        )
+    )
+    assert baseline.outcome is restamped.outcome
+    assert baseline.reasons == restamped.reasons == ()
+    assert restamped.approximations[0].adapter_version == "3.1.4"
+    assert canonical_json_bytes(baseline) != canonical_json_bytes(restamped)
+
+
+def test_only_the_observation_version_governs_runtime_identity() -> None:
+    """The contrast that proves the correction did not weaken runtime identity.
+
+    Deliberately written as a *side-by-side* comparison rather than a second
+    availability case, because the parametrized unrunnable test above already
+    covers an observation-version mismatch on its own. What is asserted here is the
+    distinction the correction turns on: the very same version string, ``2.0.0``,
+    is inert on a declaration and decisive on an observation.
+
+    Section 11.3 makes the declaration's version provenance; section 17.2.1
+    requires an ``UNAVAILABLE`` observation to match "the same
+    adapter/executable/version identity", so the observation's version is evidence
+    about what is actually installed.
+    """
+    requirement = _requirement(
+        "execution.partial_fills",
+        approximation_policy=ApproximationPolicy.ALLOW_DECLARED,
+    )
+    on_the_declaration = _succeeded(
+        _resolve(
+            (requirement,),
             approximations=(_approximation(adapter_version="2.0.0"),),
         )
     )
-    assert result.outcome is CompatibilityOutcome.UNAVAILABLE
-    assert _codes(result) == (("execution.partial_fills", DECLARATION_OVERLAP),)
+    on_the_observation = _succeeded(
+        _resolve(
+            (requirement,),
+            availability=_observation(adapter_version="2.0.0"),
+            approximations=(_approximation(),),
+        )
+    )
+    assert on_the_declaration.outcome is (
+        CompatibilityOutcome.SUPPORTED_WITH_APPROXIMATION
+    )
+    assert on_the_declaration.reasons == ()
+    assert on_the_observation.outcome is CompatibilityOutcome.UNAVAILABLE
+    assert _codes(on_the_observation) == (("", RUNTIME_UNAVAILABLE),)
 
 
 def test_an_orphan_declaration_for_an_optional_capability_is_ignored() -> None:

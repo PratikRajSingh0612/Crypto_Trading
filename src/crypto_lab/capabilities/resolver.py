@@ -111,11 +111,12 @@ def _recognition_reasons(
     the declared vocabulary can never be satisfied by *any* conforming descriptor,
     so that incompatibility is unconditional and belongs to the strategy. A
     descriptor defect -- an unrecognized declared name, a vocabulary-version
-    mismatch, or a declaration set contradicting the descriptor's own partition or
-    adapter version -- is conditional on this adapter: section 13.2 says such a
-    descriptor is invalidated and section 11.3 says a failed negotiation "makes the
-    adapter unavailable", which section 13.4 records as ``UNAVAILABLE`` rather than
-    as a strategy failure.
+    mismatch, or a declaration set contradicting the descriptor's own partition --
+    is conditional on this adapter: section 13.2 says such a descriptor is
+    invalidated and section 11.3 says a failed negotiation "makes the adapter
+    unavailable", which section 13.4 records as ``UNAVAILABLE`` rather than as a
+    strategy failure. A declaration's *authoring* version is not part of that set;
+    see the note at the end of this function.
 
     Both lists are returned, and the caller emits their union when the
     strategy-side list is non-empty. That is *not* the same as every finding
@@ -163,17 +164,18 @@ def _recognition_reasons(
         seen.add(declaration.capability)
         if declaration.capability not in approximated:
             adapter_side.append(_reason(DECLARATION_OVERLAP, declaration.capability))
-            continue
-        # A declaration naming a different adapter version is not a declaration
-        # *about this descriptor*, so the declaration set and the descriptor
-        # disagree -- the same class of contradiction the overlap code already
-        # reports. Section 13.3 step 1 requires the inputs to be "internally
-        # consistent", and section 11.3 puts the declaration version into run
-        # provenance, so applying a stale record would attach provenance for an
-        # adapter version that was never resolved.
-        if declaration.adapter_version != descriptor.adapter_version:
-            adapter_side.append(_reason(DECLARATION_OVERLAP, declaration.capability))
 
+    # `declaration.adapter_version` is deliberately **not** compared with
+    # `descriptor.adapter_version`. Specification section 11.3 says only that the
+    # "declaration version is included in run provenance" -- it records which
+    # adapter version authored the declaration and imposes no equality on the
+    # descriptor being resolved -- and section 13.2 closes descriptor invalidity to
+    # exactly "unknown capability names or overlapping declarations", which a
+    # differing authoring version is not. The specification's one same-identity
+    # requirement is section 17.2.1's, and it governs the availability observation;
+    # `_is_runnable` enforces it. Treating a version difference as an overlap would
+    # invent a provenance-equality constraint no normative source imposes and would
+    # make a legitimate declaration unusable the moment an adapter version bumps.
     return strategy_side, adapter_side
 
 
