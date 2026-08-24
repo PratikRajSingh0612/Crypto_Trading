@@ -174,7 +174,18 @@ class CapabilityDeclaration(CanonicalModel):
     capability: CapabilityName
     support_kind: CapabilitySupportKind
     evidence_note: BoundedText
-    limitations: tuple[BoundedText, ...] = Field(max_length=MAX_CAPABILITY_LIMITATIONS)
+    limitations: tuple[BoundedText, ...] = Field(
+        max_length=MAX_CAPABILITY_LIMITATIONS,
+        # Plan section 3.1 requires `json_schema_extra` to supply the `uniqueItems`
+        # Pydantic does not emit for a tuple field; it names callables because that
+        # is the form `domain/descriptors.py` uses, and a literal mapping is the
+        # same mechanism. Without it the generated schema accepts duplicate members
+        # that `validate_limitations` rejects, and Task 8 publishes this record.
+        # Field-level rather than a model-level hook because it is additive -- every
+        # other emitted keyword survives, which the focused schema tests assert
+        # keyword by keyword in both render modes.
+        json_schema_extra={"uniqueItems": True},
+    )
 
     @field_validator("limitations")
     @classmethod
@@ -203,7 +214,19 @@ class ApproximationDeclaration(CanonicalModel):
     method: BoundedText
     expected_impact: BoundedText
     prevented_comparison_levels: tuple[ComparisonLevel, ...] = Field(
-        max_length=MAX_PREVENTED_COMPARISON_LEVELS
+        max_length=MAX_PREVENTED_COMPARISON_LEVELS,
+        # Section 11.3 calls this "an ordered unique set", and
+        # `validate_prevented_levels` enforces both halves at runtime. The generated
+        # schema declared neither, so an external Draft 2020-12 consumer accepted
+        # duplicates the runtime rejects; see the note on
+        # `CapabilityDeclaration.limitations` for why this is field-level.
+        #
+        # Only the uniqueness half is closed here. Draft 2020-12 has no ordering
+        # keyword, so `["LEVEL_2", "LEVEL_1"]` still validates against the schema
+        # and is still rejected at runtime. That residue is inexpressible rather
+        # than overlooked, and it is systemic across every sorted-validated field
+        # in the repository; it is recorded in the task ledger.
+        json_schema_extra={"uniqueItems": True},
     )
     adapter_version: SemanticVersion
 

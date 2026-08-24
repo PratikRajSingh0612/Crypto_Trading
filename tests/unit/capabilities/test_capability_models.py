@@ -14,12 +14,15 @@ than a copy per test module.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 import pytest
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic.experimental.missing_sentinel import MISSING
 
@@ -30,8 +33,10 @@ from crypto_lab.capabilities.models import (
     COMPATIBILITY_REASON_CODES,
     DECLARATION_OVERLAP,
     LEVEL_PREVENTED,
+    MAX_CAPABILITY_LIMITATIONS,
     MAX_COMPATIBILITY_APPROXIMATIONS,
     MAX_COMPATIBILITY_REASONS,
+    MAX_PREVENTED_COMPARISON_LEVELS,
     REQUIREMENT_UNMET,
     RUNTIME_UNAVAILABLE,
     UNKNOWN_NAME,
@@ -50,6 +55,7 @@ from crypto_lab.capabilities.policy import (
 )
 from crypto_lab.capabilities.vocabulary import CapabilityVocabulary
 from crypto_lab.domain import capability_requirements
+from crypto_lab.domain.base import CanonicalModel
 from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.comparison_levels import ComparisonLevel
 from crypto_lab.domain.descriptors import (
@@ -786,3 +792,312 @@ def test_the_generated_result_schema_keeps_its_shape_and_bounds() -> None:
     assert reason_schema["required"] == ["error_code"]
     assert "capability" in reason_schema["properties"]
     assert reason_schema["additionalProperties"] is False
+
+
+# --------------------------------------------------------------------------
+# Runtime/schema uniqueness agreement -- pre-Task-8 parity correction
+# --------------------------------------------------------------------------
+#
+# Plan section 3.1 requires ``json_schema_extra`` callables to add the
+# ``uniqueItems`` constraints Pydantic does not emit, and
+# ``domain/descriptors.py`` already does exactly that for every unique-validated
+# tuple it owns. Two fields in this module were left without one, so a
+# standards-compliant Draft 2020-12 validator accepted arrays that ordinary
+# Pydantic validation rejects. Task 8 registers both records for canonical schema
+# generation, so the disagreement had to be closed before publication.
+
+_UNIQUE_ITEM_FIELDS: tuple[tuple[str, str], ...] = (
+    ("ApproximationDeclaration", "prevented_comparison_levels"),
+    ("CapabilityDeclaration", "limitations"),
+)
+_SCHEMA_MODES: tuple[Literal["validation", "serialization"], ...] = (
+    "validation",
+    "serialization",
+)
+
+
+def _model_for(name: str) -> type[CanonicalModel]:
+    models: dict[str, type[CanonicalModel]] = {
+        "ApproximationDeclaration": ApproximationDeclaration,
+        "CapabilityDeclaration": CapabilityDeclaration,
+    }
+    return models[name]
+
+
+def _payload_for(name: str, *, duplicate: bool) -> dict[str, Any]:
+    """Return a **complete** valid JSON document for one model.
+
+    A hand-built property node would not prove that a real document is rejected;
+    these payloads go through ``Draft202012Validator`` against the generated model
+    schema exactly as an external consumer would validate them.
+    """
+    if name == "ApproximationDeclaration":
+        levels = ["LEVEL_1", "LEVEL_1"] if duplicate else ["LEVEL_1", "LEVEL_2"]
+        return {
+            "schema_version": "1.0.0",
+            "approximation_id": _APPROXIMATION_ID,
+            "capability": "execution.partial_fills",
+            "method": "Fills are modelled as all-or-nothing at the bar close.",
+            "expected_impact": "Overstates fill certainty for large orders.",
+            "prevented_comparison_levels": levels,
+            "adapter_version": "1.0.0",
+        }
+    limitations = (
+        ["Bar granularity only.", "Bar granularity only."]
+        if duplicate
+        else ["Bar granularity only.", "No intra-bar ordering."]
+    )
+    return {
+        "schema_version": "1.0.0",
+        "capability": "execution.bar_market",
+        "support_kind": "NATIVE",
+        "evidence_note": "Engine models bar market orders natively.",
+        "limitations": limitations,
+    }
+
+
+@pytest.mark.parametrize(("model_name", "field"), _UNIQUE_ITEM_FIELDS)
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_a_unique_validated_tuple_emits_unique_items_in_both_modes(
+    model_name: str,
+    field: str,
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """The published contract must not be weaker than the runtime one."""
+    schema = _model_for(model_name).model_json_schema(mode=mode)
+
+    assert schema["properties"][field]["uniqueItems"] is True
+
+
+@pytest.mark.parametrize(("model_name", "field"), _UNIQUE_ITEM_FIELDS)
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_generated_schema_rejects_a_duplicate_bearing_document(
+    model_name: str,
+    field: str,
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """An external Draft 2020-12 consumer must reach the runtime's verdict.
+
+    This is the defect stated as an executable fact: before the correction the
+    duplicate document below was **accepted** by the generated schema and
+    **rejected** by Pydantic.
+    """
+    schema = _model_for(model_name).model_json_schema(mode=mode)
+    Draft202012Validator.check_schema(schema)
+    validator = Draft202012Validator(schema)
+
+    with pytest.raises(JsonSchemaValidationError):
+        validator.validate(_payload_for(model_name, duplicate=True))
+    assert field in schema["properties"]
+
+
+@pytest.mark.parametrize(("model_name", "field"), _UNIQUE_ITEM_FIELDS)
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_generated_schema_still_accepts_distinct_members(
+    model_name: str,
+    field: str,
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """The correction must not narrow anything beyond uniqueness."""
+    schema = _model_for(model_name).model_json_schema(mode=mode)
+    validator = Draft202012Validator(schema)
+    document = _payload_for(model_name, duplicate=False)
+
+    validator.validate(document)
+    assert len(document[field]) == 2
+
+
+@pytest.mark.parametrize(("model_name", "field"), _UNIQUE_ITEM_FIELDS)
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_unique_items_addition_preserves_every_other_keyword(
+    model_name: str,
+    field: str,
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """Exactly one keyword is added; the emitted node is otherwise identical.
+
+    The keyword set below is the one the pre-correction schemas emitted,
+    transcribed from captured evidence rather than from the current code, so this
+    fails if the fix replaced the node instead of extending it.
+    """
+    schema = _model_for(model_name).model_json_schema(mode=mode)
+    node = schema["properties"][field]
+
+    assert set(node) == {"type", "items", "maxItems", "title", "uniqueItems"}
+    assert node["type"] == "array"
+    if model_name == "ApproximationDeclaration":
+        assert node["items"] == {"$ref": "#/$defs/ComparisonLevel"}
+        assert node["maxItems"] == MAX_PREVENTED_COMPARISON_LEVELS
+        assert node["title"] == "Prevented Comparison Levels"
+        assert set(schema["$defs"]["ComparisonLevel"]["enum"]) == {
+            level.value for level in ComparisonLevel
+        }
+    else:
+        assert node["items"] == {"type": "string", "minLength": 1, "maxLength": 1024}
+        assert node["maxItems"] == MAX_CAPABILITY_LIMITATIONS
+        assert node["title"] == "Limitations"
+
+
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_no_unrelated_capability_schema_node_gained_unique_items(
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """The constraint must land on the intended fields only.
+
+    ``CompatibilityResult`` keeps exactly the two ``uniqueItems`` its own hook has
+    always set, and each corrected model marks exactly its one field.
+    """
+    result_schema = CompatibilityResult.model_json_schema(mode=mode)
+    annotated = {
+        name
+        for name, node in result_schema["properties"].items()
+        if isinstance(node, dict) and node.get("uniqueItems") is True
+    }
+    assert annotated == {"reasons", "approximations"}
+
+    for model_name, field in _UNIQUE_ITEM_FIELDS:
+        schema = _model_for(model_name).model_json_schema(mode=mode)
+        marked = {
+            name
+            for name, node in schema["properties"].items()
+            if isinstance(node, dict) and node.get("uniqueItems") is True
+        }
+        assert marked == {field}
+
+
+@pytest.mark.parametrize("mode", _SCHEMA_MODES)
+def test_the_constraint_survives_into_the_nested_definition(
+    mode: Literal["validation", "serialization"],
+) -> None:
+    """The `$defs` path is the one Task 8 actually publishes for this record.
+
+    ``CompatibilityResult.approximations`` is a tuple of ``ApproximationDeclaration``,
+    so the corrected field reaches
+    ``capabilities/compatibility-result-v1.schema.json`` through ``$defs`` rather
+    than through a top-level property. An independent review found that no test
+    asserted that path: a future refactor moving the constraint to a model-level
+    hook that fires only for the outermost schema would keep the standalone tests
+    green while the published ``$defs`` silently lost the keyword.
+
+    A duplicate-bearing nested document is validated end to end, so this proves the
+    constraint is *enforced* there rather than merely present.
+    """
+    schema = CompatibilityResult.model_json_schema(mode=mode)
+    nested = schema["$defs"]["ApproximationDeclaration"]["properties"]
+
+    assert nested["prevented_comparison_levels"]["uniqueItems"] is True
+
+    Draft202012Validator.check_schema(schema)
+    document = {
+        "schema_version": "1.0.0",
+        "outcome": "SUPPORTED_WITH_APPROXIMATION",
+        "capability_vocabulary_version": "capabilities/v1",
+        "requested_comparison_level": "LEVEL_1",
+        "adapter_name": "adapter.alpha",
+        "adapter_version": "1.0.0",
+        "availability_observation_id": _OBSERVATION_ID,
+        "reasons": [],
+        "approximations": [_payload_for("ApproximationDeclaration", duplicate=True)],
+    }
+    with pytest.raises(JsonSchemaValidationError):
+        Draft202012Validator(schema).validate(document)
+
+    document["approximations"] = [
+        _payload_for("ApproximationDeclaration", duplicate=False)
+    ]
+    Draft202012Validator(schema).validate(document)
+
+
+# Preventive runtime evidence. These begin GREEN: runtime uniqueness already
+# exists and is unchanged by this correction. They are declared so the agreement
+# is guarded from both sides rather than only from the schema side.
+
+
+@pytest.mark.parametrize(("model_name", "field"), _UNIQUE_ITEM_FIELDS)
+def test_pydantic_still_rejects_duplicate_members(
+    model_name: str,
+    field: str,
+) -> None:
+    """Preventive: the runtime half of the agreement.
+
+    Routed through ``model_validate_json`` so it is the **same JSON document** the
+    schema tests above validate. Python mode would reject a JSON array outright --
+    ``CanonicalModel`` is ``strict=True``, so a ``list`` is not a valid ``tuple``
+    input -- and the test would then pass for a reason unrelated to uniqueness.
+    """
+    with pytest.raises(ValidationError) as caught:
+        _model_for(model_name).model_validate_json(
+            json.dumps(_payload_for(model_name, duplicate=True))
+        )
+
+    assert "unique" in str(caught.value).lower()
+    assert field in _model_for(model_name).model_fields
+
+
+@pytest.mark.parametrize(("model_name", "field"), _UNIQUE_ITEM_FIELDS)
+def test_pydantic_still_accepts_distinct_members_as_a_tuple(
+    model_name: str,
+    field: str,
+) -> None:
+    """Preventive: normalization, ordering, tuple identity, and frozenness."""
+    record = _model_for(model_name).model_validate_json(
+        json.dumps(_payload_for(model_name, duplicate=False))
+    )
+    value = getattr(record, field)
+
+    assert isinstance(value, tuple)
+    assert len(value) == 2
+    # The committed ordering rules are unchanged by this correction.
+    assert list(value) == sorted(value, key=str)
+    assert record.model_config["frozen"] is True
+    with pytest.raises(ValidationError):
+        setattr(record, field, ())
+
+
+def test_the_correction_changes_no_canonical_byte() -> None:
+    """Recorded before the edit and compared after: schema shape is not hash material.
+
+    ``uniqueItems`` is a JSON Schema keyword, not a model field, so no valid
+    instance's canonical serialization may move. These literals were captured from
+    the pre-correction tree.
+    """
+    assert canonical_json_bytes(_approximation()) == (
+        b'{"adapter_version":"1.0.0",'
+        b'"approximation_id":"appx_5b1c3d7e-2f4a-4c6b-8d9e-1a2b3c4d5e6f",'
+        b'"capability":"execution.partial_fills",'
+        b'"expected_impact":"Overstates fill certainty for large orders.",'
+        b'"method":"Fills are modelled as all-or-nothing at the bar close.",'
+        b'"prevented_comparison_levels":["LEVEL_1"],'
+        b'"schema_version":"1.0.0"}'
+    )
+    assert canonical_json_bytes(
+        _declaration(limitations=("Bar granularity only.",))
+    ) == (
+        b'{"capability":"execution.bar_market",'
+        b'"evidence_note":"Engine models bar market orders natively.",'
+        b'"limitations":["Bar granularity only."],'
+        b'"schema_version":"1.0.0","support_kind":"NATIVE"}'
+    )
+
+
+def test_the_affected_models_keep_their_exact_field_order() -> None:
+    """Preventive: the correction adds metadata, never a field."""
+    assert (
+        tuple(ApproximationDeclaration.model_fields) == _EXPECTED_APPROXIMATION_FIELDS
+    )
+    assert tuple(CapabilityDeclaration.model_fields) == _EXPECTED_DECLARATION_FIELDS
+
+
+@pytest.mark.parametrize(("model_name", "field"), _UNIQUE_ITEM_FIELDS)
+def test_both_dump_modes_keep_their_shape(model_name: str, field: str) -> None:
+    """Preventive: a schema keyword must not alter either serialized form."""
+    record = _model_for(model_name).model_validate_json(
+        json.dumps(_payload_for(model_name, duplicate=False))
+    )
+    python_mode = record.model_dump(mode="python")
+    json_mode = record.model_dump(mode="json")
+
+    assert set(python_mode) == set(json_mode) == set(type(record).model_fields)
+    assert isinstance(python_mode[field], tuple)
+    assert isinstance(json_mode[field], list)
+    assert [str(item) for item in python_mode[field]] == json_mode[field]
