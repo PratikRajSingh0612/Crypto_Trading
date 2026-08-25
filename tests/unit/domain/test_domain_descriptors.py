@@ -12,10 +12,14 @@ classifies it as a canonical domain record.
 from __future__ import annotations
 
 import hashlib
+import json
+import sys
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
 from crypto_lab.adapters import descriptors as adapter_descriptors
@@ -399,3 +403,192 @@ def test_canonical_bytes_are_deterministic_and_key_ordered() -> None:
     second = canonical_json_bytes(_observation())
     assert first == second
     assert first.startswith(b'{"adapter_name":"adapter.alpha"')
+
+
+# ---------------------------------------------------------------------------
+# `executable_path` runtime/schema parity
+#
+# `_validate_executable_path` enforces two rules that `StringConstraints` never
+# renders, so the generated schema published a contract weaker than the runtime:
+# a document with edge whitespace or an interior control character was accepted
+# by `Draft202012Validator` and rejected by ordinary validated construction.
+# `ExecutablePath` was the only annotated type in the Stage 4 schema set with no
+# `WithJsonSchema` at all, against a repository convention that publishes every
+# expressible validator rule -- `SourceName`, `SemanticVersion`, every
+# identifier, `PositiveDecimal`, and `InstrumentId` all do.
+#
+# The runtime validator is deliberately unchanged. Only the published schema
+# gains the rule it was missing.
+# ---------------------------------------------------------------------------
+
+#: Python 3.12 `str.isspace()`, frozen as an explicit finite contract. This is
+#: the classifier `value != value.strip()` actually uses, and it is **not**
+#: ECMA `\s`: `\s` omits U+001C-U+001F and U+0085, so using it would leave the
+#: published pattern accepting values the runtime rejects. Proven equal to the
+#: computed set by `test_the_frozen_whitespace_set_is_exactly_cpython_isspace`.
+_PYTHON_WHITESPACE_CODEPOINTS = frozenset(
+    {0x09, 0x0A, 0x0B, 0x0C, 0x0D}
+    | {0x1C, 0x1D, 0x1E, 0x1F, 0x20}
+    | {0x85, 0xA0, 0x1680}
+    | set(range(0x2000, 0x200B))
+    | {0x2028, 0x2029, 0x202F, 0x205F, 0x3000}
+)
+#: Rejected anywhere by `_validate_executable_path`'s `character < " "` and
+#: `character == "\x7f"` tests.
+_CONTROL_CODEPOINTS = frozenset(set(range(0x00, 0x20)) | {0x7F})
+#: Neither is Python whitespace, so the runtime accepts both at an edge. U+200B
+#: is the reason the published range stops at U+200A rather than U+200B.
+_NOT_PYTHON_WHITESPACE = ("\ufeff", "\u200b")
+
+_VALID_EXECUTABLE_PATHS = (
+    r"C:\adapters\alpha\adapter.exe",
+    "C:/adapters/alpha/adapter.exe",
+    "C:/Program Files/alpha/adapter.exe",
+    "C:/adapters/alpha\u00a0beta/adapter.exe",
+    "C:/adapters/alpha\u0085beta/adapter.exe",
+    "\ufeffC:/adapters/alpha/adapter.exe",
+    "C:/adapters/alpha/adapter.exe\u200b",
+)
+
+
+def _observation_document(**updates: object) -> dict[str, Any]:
+    """A complete valid JSON-mode document, so no unrelated field can fail."""
+    document: dict[str, Any] = _observation().model_dump(mode="json")
+    document.update(updates)
+    return document
+
+
+def _observation_schema(mode: str) -> dict[str, Any]:
+    schema: dict[str, Any] = RuntimeAvailabilityObservation.model_json_schema(
+        mode=mode  # type: ignore[arg-type]
+    )
+    return schema
+
+
+def _executable_path_node(mode: str) -> dict[str, Any]:
+    node: dict[str, Any] = _observation_schema(mode)["properties"]["executable_path"]
+    return node
+
+
+def _rejects(document: dict[str, Any]) -> bool:
+    """True when ordinary validated construction rejects exactly this field."""
+    try:
+        RuntimeAvailabilityObservation.model_validate_json(json.dumps(document))
+    except ValidationError as failure:
+        return [error["loc"] for error in failure.errors()] == [("executable_path",)]
+    return False
+
+
+def test_the_frozen_whitespace_set_is_exactly_cpython_isspace() -> None:
+    """A finite contract test, not environment discovery.
+
+    `_validate_executable_path` classifies edge whitespace with
+    `str.strip()`, whose character set is `str.isspace()`. The published pattern
+    enumerates that set literally, so this proves the enumeration is complete
+    and has no surplus member under the project's pinned CPython 3.12.
+    """
+    computed = {
+        codepoint for codepoint in range(sys.maxunicode + 1) if chr(codepoint).isspace()
+    }
+    assert computed == _PYTHON_WHITESPACE_CODEPOINTS
+    assert len(_PYTHON_WHITESPACE_CODEPOINTS) == 29
+    for character in _NOT_PYTHON_WHITESPACE:
+        assert not character.isspace()
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_executable_path_schema_publishes_a_pattern(mode: str) -> None:
+    node = _executable_path_node(mode)
+    assert "pattern" in node, "published schema must carry the runtime rule"
+    assert node["type"] == "string"
+    assert node["minLength"] == 1
+    assert node["maxLength"] == MAX_EXECUTABLE_PATH_CHARACTERS
+
+
+def test_both_schema_modes_publish_the_identical_pattern() -> None:
+    validation = _executable_path_node("validation")["pattern"]
+    serialization = _executable_path_node("serialization")["pattern"]
+    assert validation == serialization
+
+
+def test_the_published_pattern_uses_no_whitespace_shorthand() -> None:
+    """`\\s` is not the contract: it omits U+001C-U+001F and U+0085.
+
+    The `[\\s\\S]` pair in the project's absolute end assertion means "any
+    character" and does not classify whitespace, so it is excluded from this
+    check rather than exempted by hand-waving.
+    """
+    pattern = _executable_path_node("serialization")["pattern"]
+    assert pattern.endswith(r"(?![\s\S])")
+    assert not pattern.endswith("$")
+    assert r"\s" not in pattern.removesuffix(r"(?![\s\S])")
+
+
+@pytest.mark.parametrize("codepoint", sorted(_PYTHON_WHITESPACE_CODEPOINTS))
+def test_every_edge_whitespace_codepoint_is_rejected_at_both_edges(
+    codepoint: int,
+) -> None:
+    character = chr(codepoint)
+    body = "C:/adapters/alpha/adapter.exe"
+    validator = Draft202012Validator(_observation_schema("serialization"))
+    for value in (character + body, body + character):
+        document = _observation_document(executable_path=value)
+        assert _rejects(document), f"runtime must reject U+{codepoint:04X} at an edge"
+        assert not validator.is_valid(document), (
+            f"schema must reject U+{codepoint:04X} at an edge"
+        )
+
+
+@pytest.mark.parametrize("codepoint", sorted(_CONTROL_CODEPOINTS))
+def test_every_control_codepoint_is_rejected_at_start_middle_and_end(
+    codepoint: int,
+) -> None:
+    character = chr(codepoint)
+    validator = Draft202012Validator(_observation_schema("serialization"))
+    values = (
+        character + "C:/adapters/adapter.exe",
+        "C:/adapters/" + character + "adapter.exe",
+        "C:/adapters/adapter.exe" + character,
+    )
+    for value in values:
+        document = _observation_document(executable_path=value)
+        assert _rejects(document), f"runtime must reject U+{codepoint:04X}"
+        assert not validator.is_valid(document), f"schema must reject U+{codepoint:04X}"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        " C:/adapters/alpha/adapter.exe",
+        "C:/adapters/alpha/adapter.exe ",
+        "\u00a0C:/adapters/alpha/adapter.exe",
+        "C:/adapters/alpha/adapter.exe\u3000",
+        "C:/adapters/alpha/\u001fadapter.exe",
+        "C:/adapters/alpha/adapter.exe\n",
+    ],
+)
+def test_the_six_reported_gap_documents_are_rejected_on_both_sides(value: str) -> None:
+    """The exact documents the blocker report demonstrated the gap with."""
+    document = _observation_document(executable_path=value)
+    assert _rejects(document)
+    validator = Draft202012Validator(_observation_schema("serialization"))
+    assert not validator.is_valid(document)
+
+
+@pytest.mark.parametrize("value", _VALID_EXECUTABLE_PATHS)
+def test_an_accepted_path_is_accepted_by_runtime_and_schema_alike(value: str) -> None:
+    """Over-rejection is a defect too: interior non-control whitespace,
+    U+FEFF, and U+200B must all survive."""
+    document = _observation_document(executable_path=value)
+    RuntimeAvailabilityObservation.model_validate_json(json.dumps(document))
+    for mode in ("validation", "serialization"):
+        Draft202012Validator(_observation_schema(mode)).validate(document)
+
+
+def test_the_baseline_observation_document_is_valid_on_both_sides() -> None:
+    document = _observation_document()
+    RuntimeAvailabilityObservation.model_validate_json(json.dumps(document))
+    for mode in ("validation", "serialization"):
+        schema = _observation_schema(mode)
+        Draft202012Validator.check_schema(schema)
+        Draft202012Validator(schema).validate(document)

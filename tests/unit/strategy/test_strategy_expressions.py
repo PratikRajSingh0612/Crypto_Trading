@@ -35,6 +35,8 @@ from crypto_lab.strategy.expressions import (
     LiteralValueType,
     RefExpression,
 )
+from crypto_lab.strategy.models import StrategySpec
+from crypto_lab.strategy.versioning import StrategyVersion
 from crypto_lab.strategy.yaml_source import (
     MAX_INTEGER_VALUE,
     MAX_SCALAR_CHARACTERS,
@@ -207,6 +209,84 @@ def test_a_non_integer_offset_is_rejected() -> None:
     for offset in ("0", 0.0, True, None):
         with pytest.raises(ValidationError):
             _load({"op": "ref", "id": "fast_sma", "bars_ago": offset})
+
+
+# --- `bars_ago` runtime/schema parity --------------------------------------
+#
+# `Field(le=MAX_BARS_AGO)` renders `maximum`, but the lower bound lives in
+# `validate_offset_is_not_negative`, which `Field` never renders -- so the
+# generated schema accepted `bars_ago: -1` while the runtime rejected it. The
+# bound is published through `json_schema_extra` rather than by adding `ge=0`
+# **on purpose**: `ge=0` would make pydantic-core reject a negative value before
+# the field validator runs, replacing the plan-mandated
+# `STRATEGY.REFERENCE_NEGATIVE_OFFSET` diagnostic with a generic
+# `greater_than_equal` error. Plan Task 3 step 3 depends on that exact code, so
+# `test_the_negative_offset_error_is_the_project_code_and_not_a_pydantic_bound`
+# below pins the error's `type` as well as its message.
+
+
+def test_the_reference_offset_schema_publishes_its_lower_bound() -> None:
+    for mode in ("validation", "serialization"):
+        schema = EXPRESSION_ADAPTER.json_schema(mode=mode)
+        node = schema["$defs"]["RefExpression"]["properties"]["bars_ago"]
+        assert node["type"] == "integer"
+        assert node["minimum"] == 0, f"{mode} mode must publish the lower bound"
+        assert node["maximum"] == MAX_BARS_AGO
+
+
+def test_the_reference_offset_lower_bound_reaches_both_strategy_schemas() -> None:
+    """`RefExpression` is republished through `$defs` by both records."""
+    for adapter in (TypeAdapter(StrategySpec), TypeAdapter(StrategyVersion)):
+        for mode in ("validation", "serialization"):
+            schema = adapter.json_schema(mode=mode)
+            node = schema["$defs"]["RefExpression"]["properties"]["bars_ago"]
+            assert node["minimum"] == 0
+            assert node["maximum"] == MAX_BARS_AGO
+
+
+def test_the_generated_schema_agrees_with_the_runtime_on_every_offset() -> None:
+    for mode in ("validation", "serialization"):
+        schema = EXPRESSION_ADAPTER.json_schema(mode=mode)
+        Draft202012Validator.check_schema(schema)
+        validator = Draft202012Validator(schema)
+        for accepted in (0, 1, MAX_BARS_AGO):
+            document = {"op": "ref", "id": "fast_sma", "bars_ago": accepted}
+            assert _load(document) is not None
+            validator.validate(document)
+        for rejected in (-1, MAX_BARS_AGO + 1):
+            document = {"op": "ref", "id": "fast_sma", "bars_ago": rejected}
+            with pytest.raises(ValidationError):
+                _load(document)
+            with pytest.raises(JsonSchemaValidationError):
+                validator.validate(document)
+
+
+def test_the_negative_offset_error_is_the_project_code_and_not_a_pydantic_bound() -> (
+    None
+):
+    """Kills the `ge=0` shortcut, which would silently change the diagnostic.
+
+    A `field_validator` raising `ValueError` surfaces as pydantic type
+    ``value_error``; a `Field(ge=0)` constraint surfaces as
+    ``greater_than_equal`` and never reaches the validator. Asserting the type
+    is what makes the distinction executable rather than a comment.
+    """
+    with pytest.raises(ValidationError) as failure:
+        _load({"op": "ref", "id": "fast_sma", "bars_ago": -1})
+
+    errors = failure.value.errors()
+    assert [error["type"] for error in errors] == ["value_error"]
+    assert [error["loc"] for error in errors] == [("ref", "bars_ago")]
+    assert "STRATEGY.REFERENCE_NEGATIVE_OFFSET" in str(failure.value)
+    assert "greater_than_equal" not in str(failure.value)
+
+
+def test_publishing_the_offset_bound_changed_no_canonical_byte() -> None:
+    """The correction is schema metadata only, so hash material is untouched."""
+    reference = _load({"op": "ref", "id": "fast_sma", "bars_ago": 3})
+    assert canonical_json_bytes(reference) == (
+        b'{"bars_ago":3,"id":"fast_sma","op":"ref"}'
+    )
 
 
 # --- Model-level depth bound ----------------------------------------------

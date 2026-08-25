@@ -30,6 +30,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    WithJsonSchema,
     field_validator,
     model_validator,
 )
@@ -43,6 +44,7 @@ from crypto_lab.domain.identifiers import (
     AvailabilityObservationId,
     NormalizedIdentifier,
     Sha256,
+    exact_string_schema,
 )
 from crypto_lab.domain.time import UtcDateTime
 from crypto_lab.domain.versioning import SemanticVersion, parse_semantic_version
@@ -79,6 +81,37 @@ def _validate_executable_path(value: str) -> str:
     return value
 
 
+# `_validate_executable_path`'s two rules restated for the generated schema.
+# `StringConstraints` renders only the length bounds, so without this the
+# published contract accepted edge whitespace and interior control characters
+# that ordinary validated construction rejects -- proven with complete documents
+# in `tests/unit/domain/test_domain_descriptors.py`. This is the same
+# `WithJsonSchema(exact_string_schema(...))` mechanism `SourceName`,
+# `SemanticVersion`, and every identifier already use; `ExecutablePath` was the
+# only annotated type in the Stage 4 schema set carrying none.
+#
+# The **edge** class excludes U+0000-U+0020 plus every non-ASCII member of
+# `str.isspace()`, because `value != value.strip()` rejects exactly Python
+# whitespace there and the control rule rejects the rest of that range. The
+# **interior** class excludes only U+0000-U+001F and U+007F, so an interior
+# ASCII space -- or U+00A0, or U+0085 -- still validates, exactly as the runtime
+# allows. `\s` is deliberately not used: ECMA `\s` omits U+001C-U+001F and
+# U+0085, so it would publish a weaker rule than `str.strip()` enforces. The
+# range stops at U+200A rather than U+200B because U+200B is not Python
+# whitespace and the runtime accepts it at an edge.
+#
+# `ExecutablePath` is reached only by `RuntimeAvailabilityObservation`, so the
+# annotation lives on the alias without touching any frozen Stage 3 schema;
+# `application-config-v1`'s same-named field is a different type with its own
+# published Windows-path pattern.
+_EXECUTABLE_PATH_SCHEMA_PATTERN = (
+    r"^[^\u0000-\u0020\u007f\u0085\u00a0\u1680\u2000-\u200a"
+    r"\u2028-\u2029\u202f\u205f\u3000]"
+    r"(?:[^\u0000-\u001f\u007f]*"
+    r"[^\u0000-\u0020\u007f\u0085\u00a0\u1680\u2000-\u200a"
+    r"\u2028-\u2029\u202f\u205f\u3000])?$"
+)
+
 ExecutablePath = Annotated[
     str,
     StringConstraints(
@@ -87,6 +120,16 @@ ExecutablePath = Annotated[
         max_length=MAX_EXECUTABLE_PATH_CHARACTERS,
     ),
     AfterValidator(_validate_executable_path),
+    # The trailing `$` is permitted only because `exact_string_schema` replaces
+    # it with the project's absolute `(?![\s\S])` ending; the published pattern
+    # never relies on `$` as its final assertion.
+    WithJsonSchema(
+        exact_string_schema(
+            _EXECUTABLE_PATH_SCHEMA_PATTERN,
+            min_length=1,
+            max_length=MAX_EXECUTABLE_PATH_CHARACTERS,
+        )
+    ),
 ]
 
 

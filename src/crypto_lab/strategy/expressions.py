@@ -221,7 +221,32 @@ class RefExpression(CanonicalModel):
 
     op: Literal["ref"]
     id: NormalizedIdentifier
-    bars_ago: Annotated[int, Field(strict=True, le=MAX_BARS_AGO)]
+    bars_ago: Annotated[
+        int,
+        Field(
+            strict=True,
+            le=MAX_BARS_AGO,
+            # The lower bound restated for the generated schema. `le` renders
+            # `maximum`, but the non-negativity below lives in a
+            # `field_validator`, which `Field` never renders -- so the published
+            # schema accepted `bars_ago: -1` that ordinary validated
+            # construction rejects, in three of the nine Task 8 schemas
+            # (`expression-v1` directly, `strategy-spec-v1` and
+            # `strategy-version-v1` through `$defs`).
+            #
+            # Deliberately `json_schema_extra` rather than `ge=0`. A `ge`
+            # constraint is enforced by pydantic-core *before* the field
+            # validator runs, so a negative offset would surface as a generic
+            # `greater_than_equal` error and never reach the line below --
+            # silently replacing the `STRATEGY.REFERENCE_NEGATIVE_OFFSET`
+            # diagnostic that plan Task 3 step 3 depends on this node emitting.
+            # This form publishes the identical constraint while leaving runtime
+            # error semantics byte-for-byte unchanged; a test pins the error's
+            # pydantic `type` as `value_error` so the shortcut cannot be
+            # reintroduced unnoticed.
+            json_schema_extra={"minimum": 0},
+        ),
+    ]
 
     @field_validator("bars_ago")
     @classmethod
