@@ -15,6 +15,7 @@ below pin the two definitions against each other for exactly that reason.
 from __future__ import annotations
 
 import json
+from enum import StrEnum
 from typing import Any, Literal
 
 import pytest
@@ -429,7 +430,12 @@ def test_the_unique_items_addition_preserves_every_other_keyword(
     schema = CapabilityRequirement.model_json_schema(mode=mode)
     node = schema["properties"]["comparison_levels"]
 
-    assert set(node) == {"type", "items", "maxItems", "title", "uniqueItems"}
+    # `enum` was added by the later runtime/schema parity closure, which published
+    # the sortedness half of `validate_levels_are_unique_and_sorted` as the eight
+    # sorted subsets of the closed three-member vocabulary. It is listed here
+    # rather than replacing the set, so the original claim -- that `uniqueItems`
+    # *extended* the node instead of replacing it -- is still what this asserts.
+    assert set(node) == {"type", "items", "maxItems", "title", "uniqueItems", "enum"}
     assert node["type"] == "array"
     assert node["items"] == {"$ref": "#/$defs/ComparisonLevel"}
     assert node["maxItems"] == MAX_REQUIREMENT_COMPARISON_LEVELS
@@ -471,22 +477,30 @@ def test_no_other_requirement_property_gained_unique_items(
 
 
 @pytest.mark.parametrize("mode", _SCHEMA_MODES)
-def test_sortedness_stays_an_inexpressible_residual(
+def test_sortedness_is_no_longer_a_residual_for_this_closed_vocabulary(
     mode: Literal["validation", "serialization"],
 ) -> None:
-    """Only the expressible half of the divergence is closed, and that is stated.
+    """**This test replaces an earlier one that asserted the opposite, and the
+    earlier assertion was wrong.**
 
-    `validate_levels_are_unique_and_sorted` rejects an unsorted array too, and
-    Draft 2020-12 has no ordering keyword. So `["LEVEL_2", "LEVEL_1"]` still
-    passes the published schema and still fails at runtime. Recorded as an
-    executable fact rather than as a comment, so a later reader cannot mistake
-    "runtime/schema agreement" for "absolute equivalence", and so that the day a
-    dialect can express ordering this test is the one that has to change.
+    It read: "Draft 2020-12 has no ordering keyword, so `["LEVEL_2", "LEVEL_1"]`
+    still passes the published schema" -- and it closed by saying that the day a
+    dialect could express ordering, this is the test that would have to change.
+    No dialect change was needed. The general premise is true and the specific
+    conclusion did not follow from it: ordering over a **closed finite** element
+    domain is expressible by enumerating the accepted arrays, which needs no
+    ordering keyword at all. `ComparisonLevel` has three members and this field is
+    bounded at three with `uniqueItems`, so the accepted set is the eight sorted
+    unique subsets of a three-element set.
+
+    The general claim still holds where the element domain is unbounded, and
+    `CapabilityDeclaration.limitations` is pinned as that residual in
+    `tests/unit/capabilities/test_capability_models.py`.
     """
     schema = CapabilityRequirement.model_json_schema(mode=mode)
     unsorted = _requirement_document(["LEVEL_2", "LEVEL_1"])
 
-    Draft202012Validator(schema).validate(unsorted)
+    assert not Draft202012Validator(schema).is_valid(unsorted)
     with pytest.raises(ValidationError, match="sorted"):
         _REQUIREMENT_ADAPTER.validate_json(json.dumps(unsorted))
 
@@ -556,3 +570,197 @@ def test_the_correction_changes_no_requirement_canonical_byte() -> None:
         b'"comparison_levels":[],"minimum_semantics":"capabilities/v1",'
         b'"required":true,"schema_version":"1.0.0"}'
     )
+
+
+# --------------------------------------------------------------------------
+# Stage 4 runtime/schema parity closure -- clause CQ-A1, sortedness over a
+# closed three-member domain
+#
+# `validate_levels_are_unique_and_sorted` **rejects** an unsorted array, and the
+# previous correction recorded that residue as "inexpressible rather than
+# overlooked". For this field that was wrong, and the arithmetic is small enough
+# to check by hand: `ComparisonLevel` has exactly three members, the field bound
+# is `max_length=3`, and the published node already carries `uniqueItems`. The
+# accepted set is therefore the unique subsets of a three-element set, of which
+# exactly eight are sorted -- so an `enum` of those eight arrays is *exact*, not
+# an approximation.
+#
+# The general claim those comments made ("Draft 2020-12 has no ordering keyword")
+# is still true, and still governs `CapabilityDeclaration.limitations`, whose
+# element domain is unbounded `BoundedText`. What was false was the specific
+# conclusion for a three-member closed vocabulary.
+# --------------------------------------------------------------------------
+
+
+def _requirement_schema(mode: str) -> dict[str, Any]:
+    schema: dict[str, Any] = CapabilityRequirement.model_json_schema(
+        mode=mode  # type: ignore[arg-type]
+    )
+    return schema
+
+
+def _levels_node(mode: str) -> dict[str, Any]:
+    node: dict[str, Any] = _requirement_schema(mode)["properties"]["comparison_levels"]
+    return node
+
+
+# Transcribed from the emitted schema, in the order it publishes: by subset size,
+# then lexicographically. The order is part of the published bytes, so pinning it
+# literally is what makes a reordering visible rather than silent.
+_SORTED_LEVEL_SETS: list[list[str]] = [
+    [],
+    ["LEVEL_1"],
+    ["LEVEL_2"],
+    ["LEVEL_3"],
+    ["LEVEL_1", "LEVEL_2"],
+    ["LEVEL_1", "LEVEL_3"],
+    ["LEVEL_2", "LEVEL_3"],
+    ["LEVEL_1", "LEVEL_2", "LEVEL_3"],
+]
+_UNSORTED_LEVEL_SETS: list[list[str]] = [
+    ["LEVEL_2", "LEVEL_1"],
+    ["LEVEL_3", "LEVEL_1"],
+    ["LEVEL_3", "LEVEL_2"],
+    ["LEVEL_2", "LEVEL_1", "LEVEL_3"],
+    ["LEVEL_3", "LEVEL_2", "LEVEL_1"],
+]
+
+
+def test_the_sorted_subset_helper_refuses_an_out_of_order_vocabulary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The declaration-order guard is asserted, not merely written.
+
+    Every consumer sorts with `key=str`, and the enumeration below relies on the
+    members already being in that order: it walks bitmasks over the declaration
+    sequence, so a member declared out of order would emit arrays this project's
+    own validators reject and the published `enum` would silently disagree with
+    the runtime.
+
+    An independent review found this branch untested and it was first marked
+    `# pragma: no cover`. Substituting a deliberately out-of-order vocabulary
+    exercises it directly, which is strictly better than excusing it.
+    """
+    import crypto_lab.domain.comparison_levels as levels_module
+
+    class Descending(StrEnum):
+        LEVEL_3 = "LEVEL_3"
+        LEVEL_1 = "LEVEL_1"
+
+    monkeypatch.setattr(levels_module, "ComparisonLevel", Descending)
+    with pytest.raises(RuntimeError, match="declared in sorted order"):
+        levels_module._sorted_level_sets()
+
+
+def test_the_real_vocabulary_satisfies_that_guard() -> None:
+    """The invariant the guard protects, stated positively."""
+    values = [level.value for level in ComparisonLevel]
+    assert values == sorted(values, key=str)
+    assert values == ["LEVEL_1", "LEVEL_2", "LEVEL_3"]
+
+
+def _accepts_levels(levels: list[str]) -> bool:
+    try:
+        _REQUIREMENT_ADAPTER.validate_json(json.dumps(_requirement_document(levels)))
+    except ValidationError:
+        return False
+    return True
+
+
+def test_the_eight_sorted_level_sets_are_exactly_the_runtime_accepted_set() -> None:
+    """A literal enumeration, transcribed rather than re-derived from the source.
+
+    Re-deriving it with `itertools.combinations` here would re-run the production
+    helper's own computation and prove nothing about its result. The candidate set
+    below is every sorted *and* every unsorted arrangement, so this establishes
+    both that the eight are accepted and that nothing else is.
+    """
+    candidates = _SORTED_LEVEL_SETS + _UNSORTED_LEVEL_SETS
+    accepted = [levels for levels in candidates if _accepts_levels(list(levels))]
+    assert accepted == _SORTED_LEVEL_SETS
+    assert len(_SORTED_LEVEL_SETS) == 8
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("levels", _SORTED_LEVEL_SETS)
+def test_cq_a1_every_sorted_level_set_is_accepted_on_both_sides(
+    mode: str, levels: list[str]
+) -> None:
+    """Over-rejection is the failure mode an `enum` invites, so all eight are pinned."""
+    document = _requirement_document(list(levels))
+    _REQUIREMENT_ADAPTER.validate_json(json.dumps(document))
+    Draft202012Validator(_requirement_schema(mode)).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("levels", _UNSORTED_LEVEL_SETS)
+def test_cq_a1_every_unsorted_level_set_is_rejected_on_both_sides(
+    mode: str, levels: list[str]
+) -> None:
+    """Clause CQ-A1: the published schema now rejects what the validator rejects."""
+    document = _requirement_document(list(levels))
+    assert not _accepts_levels(list(levels))
+    assert not Draft202012Validator(_requirement_schema(mode)).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_level_enum_is_published_at_the_field_and_nowhere_else(mode: str) -> None:
+    """The shared `ComparisonLevel` `$defs` entry must stay untouched.
+
+    `ComparisonLevel` reaches no Stage 3 schema today, but narrowing the *type*
+    rather than the field would still be wrong: `ApproximationDeclaration`,
+    `ComparisonRequirements`, and `CompatibilityResult` all reference the same
+    definition for a value that is a single level, not a sorted set.
+    """
+    schema = _requirement_schema(mode)
+    assert schema["$defs"]["ComparisonLevel"] == {
+        "description": schema["$defs"]["ComparisonLevel"]["description"],
+        "enum": ["LEVEL_1", "LEVEL_2", "LEVEL_3"],
+        "title": "ComparisonLevel",
+        "type": "string",
+    }
+    assert "enum" in _levels_node(mode)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_level_enum_addition_preserves_every_other_keyword(mode: str) -> None:
+    """Additive: the previous correction's `uniqueItems` and the bound survive."""
+    node = _levels_node(mode)
+    assert node["type"] == "array"
+    assert node["items"] == {"$ref": "#/$defs/ComparisonLevel"}
+    assert node["maxItems"] == MAX_REQUIREMENT_COMPARISON_LEVELS
+    assert node["uniqueItems"] is True
+    assert node["enum"] == _SORTED_LEVEL_SETS
+    assert node["title"] == "Comparison Levels"
+    assert "minItems" not in node
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_no_other_requirement_property_gained_an_enum_of_arrays(mode: str) -> None:
+    """The constraint lands on exactly one node."""
+    properties = _requirement_schema(mode)["properties"]
+    with_array_enum = [
+        name
+        for name, node in properties.items()
+        if isinstance(node.get("enum"), list)
+        and any(isinstance(item, list) for item in node["enum"])
+    ]
+    assert with_array_enum == ["comparison_levels"]
+
+
+def test_the_level_enum_correction_changes_no_canonical_byte() -> None:
+    """Schema metadata only: the pinned canonical bytes above are unchanged."""
+    assert canonical_json_bytes(_requirement()) == (
+        b'{"approximation_policy":"REJECT","capability":"market.spot",'
+        b'"comparison_levels":["LEVEL_1","LEVEL_2"],'
+        b'"minimum_semantics":"capabilities/v1","required":true,'
+        b'"schema_version":"1.0.0"}'
+    )
+    assert list(CapabilityRequirement.model_fields) == [
+        "schema_version",
+        "capability",
+        "required",
+        "minimum_semantics",
+        "approximation_policy",
+        "comparison_levels",
+    ]

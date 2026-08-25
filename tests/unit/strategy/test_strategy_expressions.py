@@ -672,3 +672,93 @@ def test_a_frozen_node_rejects_mutation() -> None:
 
     with pytest.raises(ValidationError):
         reference.bars_ago = 1
+
+
+# --------------------------------------------------------------------------
+# Stage 4 runtime/schema parity closure -- the shared literal branch table and
+# clause EXPR-C1
+#
+# `literal_value_branches` exists so `ParameterDefinition` can publish the same
+# per-`value_type` dispatch this module already publishes for `LiteralExpression`
+# without restating the table. A restated copy would drift, and the drift would
+# be invisible: both nodes would still validate their own documents correctly
+# while disagreeing with each other.
+# --------------------------------------------------------------------------
+
+
+def test_the_public_branch_table_is_exactly_what_the_literal_node_publishes() -> None:
+    """The accessor and the emitted schema are the same table, not two copies."""
+    from crypto_lab.strategy.expressions import literal_value_branches
+
+    branches = literal_value_branches()
+    assert set(branches) == set(LiteralValueType)
+    schema = LiteralExpression.model_json_schema()
+    emitted = {
+        clause["if"]["properties"]["value_type"]["const"]: clause["then"]["properties"][
+            "value"
+        ]
+        for clause in schema["allOf"]
+    }
+    assert {member.value: branch for member, branch in branches.items()} == emitted
+
+
+def test_the_public_branch_table_hands_out_an_independent_copy() -> None:
+    """A shared mutable table would let one consumer's schema mutate another's."""
+    from crypto_lab.strategy.expressions import literal_value_branches
+
+    first = literal_value_branches()
+    first[LiteralValueType.INTEGER]["minimum"] = 0
+    second = literal_value_branches()
+    assert second[LiteralValueType.INTEGER]["minimum"] == MIN_LITERAL_INTEGER
+    assert (
+        LiteralExpression.model_json_schema()["allOf"][1]["then"]["properties"][
+            "value"
+        ]["minimum"]
+        == MIN_LITERAL_INTEGER
+    )
+
+
+def test_the_literal_node_still_publishes_its_five_branches_unchanged() -> None:
+    """Preservation: exposing the table must not alter what this module emits."""
+    for mode in ("validation", "serialization"):
+        schema = LiteralExpression.model_json_schema(mode=mode)
+        assert len(schema["allOf"]) == 5
+        assert [
+            clause["if"]["properties"]["value_type"]["const"]
+            for clause in schema["allOf"]
+        ] == [member.value for member in LiteralValueType]
+        assert schema["allOf"][0]["then"]["properties"]["value"] == {"type": "boolean"}
+        assert schema["allOf"][1]["then"]["properties"]["value"] == {
+            "type": "integer",
+            "minimum": MIN_LITERAL_INTEGER,
+            "maximum": MAX_LITERAL_INTEGER,
+        }
+        assert schema["allOf"][3]["then"]["properties"]["value"] == {
+            "type": "string",
+            "maxLength": MAX_LITERAL_STRING_CHARACTERS,
+        }
+
+
+def test_the_expression_depth_bound_stays_a_runtime_only_residual() -> None:
+    """Clause EXPR-C1, recorded rather than published.
+
+    `_bound_expression_depth` caps nesting at `MAX_EXPRESSION_DEPTH`, and
+    `expression-v1` is a recursive schema whose nodes `$ref` `Expression` back.
+    Draft 2020-12 has no recursion-depth keyword. The only exact encoding
+    **replaces** the recursive reference graph with twenty-four numbered
+    non-recursive tiers -- which is a different schema shape rather than an
+    additive annotation, cannot be produced by a model-level `json_schema_extra`
+    hook, and would multiply the published bytes by roughly the depth bound.
+    There is also no sound weaker subset: any shallower bound would reject valid
+    expressions. So the published schema deliberately does not claim this rule and
+    runtime validation stays authoritative for it.
+    """
+    node: dict[str, Any] = {"op": "literal", "value_type": "BOOLEAN", "value": True}
+    for _ in range(MAX_EXPRESSION_DEPTH + 6):
+        node = {"op": "not", "operand": node}
+    with pytest.raises(ValidationError):
+        EXPRESSION_ADAPTER.validate_json(json.dumps(node))
+    for mode in ("validation", "serialization"):
+        schema = EXPRESSION_ADAPTER.json_schema(mode=mode)
+        assert Draft202012Validator(schema).is_valid(node)
+        assert "maxDepth" not in json.dumps(schema)

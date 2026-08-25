@@ -177,6 +177,51 @@ def _engine_schema_extra(schema: JsonSchemaValue) -> None:
     _set_unique_items(schema, ("known_limitations",))
 
 
+def _observation_schema_extra(schema: JsonSchemaValue) -> None:
+    """Publish the ``available`` <-> ``reason_code`` biconditional.
+
+    ``validate_observation`` enforces both directions, and Pydantic emits
+    neither: ``reason_code`` is correctly absent from ``required``, but that
+    permits its absence *unconditionally* rather than exactly in the state that
+    permits it, so the published schema accepted two documents ordinary
+    validated construction rejects.
+
+    Plan section 3.1 names ``dependentRequired`` and ``oneOf`` at the same
+    authority as the ``uniqueItems`` this module already supplies through
+    ``_set_unique_items``, and Stage 3 publishes this exact shape by hand in
+    three places: ``_diagnostic_schema_extra`` (``domain/diagnostics.py``) and
+    both artifact-owner hooks (``artifacts/ownership.py``).
+
+    Two separable ``if``/``then`` branches rather than one ``oneOf``, so removing
+    either direction is caught by its own test. ``dependentRequired`` cannot
+    express this pair: it keys on a property's *presence*, and the governing
+    state here is a boolean's *value*.
+
+    Deliberately a model hook on this record alone. ``EngineDescriptor`` and
+    ``AdapterDescriptor`` share this module and render the already-published
+    ``engine-descriptor-v1`` and ``adapter-descriptor-v1``, so routing this
+    through ``_set_unique_items``' shared helper would move frozen Stage 3 bytes.
+    """
+    schema.setdefault("allOf", []).extend(
+        (
+            {
+                "if": {
+                    "properties": {"available": {"const": True}},
+                    "required": ["available"],
+                },
+                "then": {"not": {"required": ["reason_code"]}},
+            },
+            {
+                "if": {
+                    "properties": {"available": {"const": False}},
+                    "required": ["available"],
+                },
+                "then": {"required": ["reason_code"]},
+            },
+        )
+    )
+
+
 def _descriptor_schema_extra(schema: JsonSchemaValue) -> None:
     _set_unique_items(
         schema,
@@ -334,7 +379,16 @@ class RuntimeAvailabilityObservation(CanonicalModel):
     record Task 8 schema-generates. ``ErrorCode | MISSING`` under a biconditional
     is therefore the narrowest option that invents nothing, and the biconditional
     makes the state governing absence explicit rather than incidental.
+
+    The biconditional is **published** as well as enforced, through
+    ``_observation_schema_extra``: before that hook the generated schema accepted
+    an available observation carrying an unavailability code and an unavailable
+    one carrying none, both of which this validator rejects.
     """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        json_schema_extra=_observation_schema_extra
+    )
 
     schema_version: Literal["1.0.0"]
     availability_observation_id: AvailabilityObservationId

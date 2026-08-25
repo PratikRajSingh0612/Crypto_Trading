@@ -923,7 +923,16 @@ def test_the_unique_items_addition_preserves_every_other_keyword(
     schema = _model_for(model_name).model_json_schema(mode=mode)
     node = schema["properties"][field]
 
-    assert set(node) == {"type", "items", "maxItems", "title", "uniqueItems"}
+    # `ApproximationDeclaration` gained `enum` in the later runtime/schema parity
+    # closure, which published the sortedness half of `validate_prevented_levels`
+    # as the eight sorted subsets of the closed three-member level vocabulary.
+    # `CapabilityDeclaration.limitations` did **not**: its items are `BoundedText`
+    # over an unbounded domain, so no finite enumeration exists there. The
+    # asymmetry is asserted rather than smoothed over.
+    expected = {"type", "items", "maxItems", "title", "uniqueItems"}
+    if model_name == "ApproximationDeclaration":
+        expected |= {"enum"}
+    assert set(node) == expected
     assert node["type"] == "array"
     if model_name == "ApproximationDeclaration":
         assert node["items"] == {"$ref": "#/$defs/ComparisonLevel"}
@@ -1101,3 +1110,482 @@ def test_both_dump_modes_keep_their_shape(model_name: str, field: str) -> None:
     assert isinstance(python_mode[field], tuple)
     assert isinstance(json_mode[field], list)
     assert [str(item) for item in python_mode[field]] == json_mode[field]
+
+
+# --------------------------------------------------------------------------
+# Stage 4 runtime/schema parity closure -- clauses AD-A1, CR-A1..A4,
+# CRSN-A1..A4
+#
+# Every clause below is a rule ordinary validated construction enforces and the
+# generated schema omitted. Plan section 3.1 names `dependentRequired` and
+# `oneOf` at the same authority as the `uniqueItems` this module already
+# supplies, and Stage 3 publishes this class by hand in three places
+# (`domain/diagnostics.py`, both `artifacts/ownership.py` hooks) with committed
+# tests asserting the *published* enforcement. These nine schemas are still
+# uncommitted, so closing the gap now costs zero released bytes.
+# --------------------------------------------------------------------------
+
+# Transcribed from the emitted schema, in the order it publishes: by subset size,
+# then lexicographically. The order is part of the published bytes.
+_SORTED_LEVEL_SETS: list[list[str]] = [
+    [],
+    ["LEVEL_1"],
+    ["LEVEL_2"],
+    ["LEVEL_3"],
+    ["LEVEL_1", "LEVEL_2"],
+    ["LEVEL_1", "LEVEL_3"],
+    ["LEVEL_2", "LEVEL_3"],
+    ["LEVEL_1", "LEVEL_2", "LEVEL_3"],
+]
+_UNSORTED_LEVEL_SETS: list[list[str]] = [
+    ["LEVEL_2", "LEVEL_1"],
+    ["LEVEL_3", "LEVEL_1"],
+    ["LEVEL_3", "LEVEL_2"],
+    ["LEVEL_3", "LEVEL_2", "LEVEL_1"],
+]
+_UNSCOPED_CODES = sorted({UNKNOWN_NAME, VOCABULARY_VERSION, RUNTIME_UNAVAILABLE})
+_SCOPED_CODES = sorted(COMPATIBILITY_REASON_CODES - set(_UNSCOPED_CODES))
+
+
+def _schema_of(model: type[CanonicalModel], mode: str) -> dict[str, Any]:
+    schema: dict[str, Any] = model.model_json_schema(mode=mode)  # type: ignore[arg-type]
+    return schema
+
+
+def _nested(parent: dict[str, Any], name: str) -> dict[str, Any]:
+    return {"$defs": parent["$defs"], "$ref": f"#/$defs/{name}"}
+
+
+def _accepts(model: type[CanonicalModel], document: dict[str, Any]) -> bool:
+    try:
+        model.model_validate_json(json.dumps(document))
+    except ValidationError:
+        return False
+    return True
+
+
+def _approximation_document(levels: list[str]) -> dict[str, Any]:
+    document = _approximation().model_dump(mode="json")
+    document["prevented_comparison_levels"] = levels
+    return document
+
+
+def _result_document(**updates: Any) -> dict[str, Any]:
+    document: dict[str, Any] = _result().model_dump(mode="json")
+    document.update(updates)
+    return document
+
+
+def _reason_document(code: str, capability: str | None = None) -> dict[str, Any]:
+    document: dict[str, Any] = {"error_code": code}
+    if capability is not None:
+        document["capability"] = capability
+    return document
+
+
+# --- AD-A1: prevented level sortedness over the closed three-member domain ---
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("levels", _SORTED_LEVEL_SETS)
+def test_ad_a1_every_sorted_prevented_level_set_is_accepted(
+    mode: str, levels: list[str]
+) -> None:
+    document = _approximation_document(list(levels))
+    assert _accepts(ApproximationDeclaration, document)
+    Draft202012Validator(_schema_of(ApproximationDeclaration, mode)).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("levels", _UNSORTED_LEVEL_SETS)
+def test_ad_a1_every_unsorted_prevented_level_set_is_rejected(
+    mode: str, levels: list[str]
+) -> None:
+    """The residue the source comment called inexpressible. For three closed
+    members with `maxItems: 3` and `uniqueItems`, an eight-member `enum` is exact."""
+    document = _approximation_document(list(levels))
+    assert not _accepts(ApproximationDeclaration, document)
+    schema = _schema_of(ApproximationDeclaration, mode)
+    assert not Draft202012Validator(schema).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_prevented_level_enum_preserves_every_other_keyword(mode: str) -> None:
+    node = _schema_of(ApproximationDeclaration, mode)["properties"][
+        "prevented_comparison_levels"
+    ]
+    assert node["type"] == "array"
+    assert node["items"] == {"$ref": "#/$defs/ComparisonLevel"}
+    assert node["maxItems"] == MAX_PREVENTED_COMPARISON_LEVELS
+    assert node["uniqueItems"] is True
+    assert node["enum"] == _SORTED_LEVEL_SETS
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_prevented_level_enum_survives_into_the_result_definition(
+    mode: str,
+) -> None:
+    """`CompatibilityResult.approximations` is a tuple of this record, so the
+    constraint must reach `compatibility-result-v1` through `$defs` too."""
+    parent = _schema_of(CompatibilityResult, mode)
+    node = parent["$defs"]["ApproximationDeclaration"]["properties"][
+        "prevented_comparison_levels"
+    ]
+    assert node["enum"] == _SORTED_LEVEL_SETS
+    document = _result_document(
+        outcome=CompatibilityOutcome.SUPPORTED_WITH_APPROXIMATION.value,
+        approximations=[_approximation_document(["LEVEL_2", "LEVEL_1"])],
+    )
+    assert not _accepts(CompatibilityResult, document)
+    assert not Draft202012Validator(parent).is_valid(document)
+
+
+def test_the_unbounded_text_sortedness_residue_is_still_inexpressible() -> None:
+    """Clause CD-C1. `limitations` items are `BoundedText`, so the element domain
+    is unbounded and no finite `enum` exists. Escalation 8 stands here."""
+    document = _declaration().model_dump(mode="json")
+    document["limitations"] = ["B text.", "A text."]
+    assert not _accepts(CapabilityDeclaration, document)
+    for mode in ("validation", "serialization"):
+        assert Draft202012Validator(_schema_of(CapabilityDeclaration, mode)).is_valid(
+            document
+        )
+
+
+# --- CR-A1..A4: the outcome-governed cardinalities ---
+
+
+def _result_baseline(outcome: str) -> dict[str, Any]:
+    document = _result_document(outcome=outcome)
+    if outcome == "SUPPORTED_WITH_APPROXIMATION":
+        document["approximations"] = [_approximation_document([])]
+    elif outcome in ("NOT_APPLICABLE", "UNAVAILABLE"):
+        document["reasons"] = [_reason_document(REQUIREMENT_UNMET, "market.spot")]
+    return document
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize(
+    "outcome",
+    ["SUPPORTED", "SUPPORTED_WITH_APPROXIMATION", "NOT_APPLICABLE", "UNAVAILABLE"],
+)
+def test_every_outcome_baseline_agrees_before_any_mutation(
+    mode: str, outcome: str
+) -> None:
+    """Non-vacuity for the four CR clauses: one complete valid document each."""
+    document = _result_baseline(outcome)
+    assert _accepts(CompatibilityResult, document)
+    schema = _schema_of(CompatibilityResult, mode)
+    Draft202012Validator.check_schema(schema)
+    Draft202012Validator(schema).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_cr_a1_a_supported_outcome_publishes_no_reason(mode: str) -> None:
+    document = _result_baseline("SUPPORTED")
+    document["reasons"] = [_reason_document(REQUIREMENT_UNMET, "market.spot")]
+    assert not _accepts(CompatibilityResult, document)
+    assert not Draft202012Validator(_schema_of(CompatibilityResult, mode)).is_valid(
+        document
+    )
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_cr_a2_a_natively_supported_outcome_publishes_no_approximation(
+    mode: str,
+) -> None:
+    document = _result_baseline("SUPPORTED")
+    document["approximations"] = [_approximation_document([])]
+    assert not _accepts(CompatibilityResult, document)
+    assert not Draft202012Validator(_schema_of(CompatibilityResult, mode)).is_valid(
+        document
+    )
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_cr_a3_an_approximated_outcome_requires_at_least_one_record(
+    mode: str,
+) -> None:
+    document = _result_baseline("SUPPORTED_WITH_APPROXIMATION")
+    document["approximations"] = []
+    assert not _accepts(CompatibilityResult, document)
+    assert not Draft202012Validator(_schema_of(CompatibilityResult, mode)).is_valid(
+        document
+    )
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("outcome", ["NOT_APPLICABLE", "UNAVAILABLE"])
+def test_cr_a4_a_negative_outcome_requires_a_reason_and_forbids_approximations(
+    mode: str, outcome: str
+) -> None:
+    """One parametrized test, two independent mutations, both named by outcome."""
+    schema = _schema_of(CompatibilityResult, mode)
+    without_reason = _result_baseline(outcome)
+    without_reason["reasons"] = []
+    assert not _accepts(CompatibilityResult, without_reason)
+    assert not Draft202012Validator(schema).is_valid(without_reason)
+
+    with_approximation = _result_baseline(outcome)
+    with_approximation["approximations"] = [_approximation_document([])]
+    assert not _accepts(CompatibilityResult, with_approximation)
+    assert not Draft202012Validator(schema).is_valid(with_approximation)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_outcome_conditions_are_three_separable_branches(mode: str) -> None:
+    """Structural, so a mutation removing one branch cannot hide behind another."""
+    schema = _schema_of(CompatibilityResult, mode)
+    branches = schema["allOf"]
+    assert len(branches) == 3
+    guards = [
+        branch["if"]["properties"]["outcome"].get("const")
+        or branch["if"]["properties"]["outcome"]["enum"]
+        for branch in branches
+    ]
+    assert guards == [
+        "SUPPORTED",
+        "SUPPORTED_WITH_APPROXIMATION",
+        ["NOT_APPLICABLE", "UNAVAILABLE"],
+    ]
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_result_hook_preserves_the_unique_items_it_already_published(
+    mode: str,
+) -> None:
+    """The previous correction's keywords must survive the extension."""
+    properties = _schema_of(CompatibilityResult, mode)["properties"]
+    assert properties["reasons"]["uniqueItems"] is True
+    assert properties["approximations"]["uniqueItems"] is True
+    assert properties["reasons"]["maxItems"] == MAX_COMPATIBILITY_REASONS
+    assert properties["approximations"]["maxItems"] == MAX_COMPATIBILITY_APPROXIMATIONS
+    assert _schema_of(CompatibilityResult, mode)["required"] == list(
+        CompatibilityResult.model_fields
+    )
+
+
+# --- CRSN-A1..A4: the reason's closed sets and its scope biconditional ---
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_reason_baselines_agree_before_any_mutation(mode: str) -> None:
+    root = _nested(_schema_of(CompatibilityResult, mode), "CompatibilityReason")
+    for document in (
+        _reason_document(REQUIREMENT_UNMET, "market.spot"),
+        _reason_document(RUNTIME_UNAVAILABLE),
+    ):
+        assert _accepts(CompatibilityReason, document)
+        Draft202012Validator(root).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_crsn_a1_the_error_code_is_published_as_the_closed_eight(mode: str) -> None:
+    """Clause CRSN-A1, published **at the field**.
+
+    `ErrorCode` is shared with the frozen `domain/diagnostic-v1.schema.json`, so
+    the `enum` must never reach the type. A separate assertion below proves the
+    shared `$defs` entry is unchanged.
+    """
+    parent = _schema_of(CompatibilityResult, mode)
+    node = parent["$defs"]["CompatibilityReason"]["properties"]["error_code"]
+    assert sorted(node["enum"]) == sorted(COMPATIBILITY_REASON_CODES)
+    assert len(node["enum"]) == 8
+    document = _reason_document("CONFIG.LAYER_INVALID")
+    assert not _accepts(CompatibilityReason, document)
+    assert not Draft202012Validator(_nested(parent, "CompatibilityReason")).is_valid(
+        document
+    )
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_shared_error_code_definition_is_not_narrowed(mode: str) -> None:
+    """The scoping trap: `ErrorCode` reaches a released Stage 3 `$id`."""
+    parent = _schema_of(CompatibilityResult, mode)
+    assert "enum" not in parent["$defs"]["ErrorCode"]
+    assert parent["$defs"]["ErrorCode"]["type"] == "string"
+    assert "pattern" in parent["$defs"]["ErrorCode"]
+    # the field still references the shared type, so the pattern still applies
+    node = parent["$defs"]["CompatibilityReason"]["properties"]["error_code"]
+    assert node["$ref"] == "#/$defs/ErrorCode"
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_crsn_a2_the_capability_is_published_as_the_closed_vocabulary(
+    mode: str,
+) -> None:
+    """Clause CRSN-A2. The record pins `capability_vocabulary_version` to the
+    literal `capabilities/v1`, so the vocabulary is frozen for this schema
+    version and publishing it duplicates nothing that can drift underneath."""
+    parent = _schema_of(CompatibilityResult, mode)
+    node = parent["$defs"]["CompatibilityReason"]["properties"]["capability"]
+    assert node["enum"] == list(CapabilityVocabulary.names)
+    assert len(node["enum"]) == 26
+    document = _reason_document(REQUIREMENT_UNMET, "not.a.member")
+    assert not _accepts(CompatibilityReason, document)
+    assert not Draft202012Validator(_nested(parent, "CompatibilityReason")).is_valid(
+        document
+    )
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_every_vocabulary_member_is_still_accepted(mode: str) -> None:
+    """26 positive samples: an `enum` with one wrong member silently over-rejects."""
+    root = _nested(_schema_of(CompatibilityResult, mode), "CompatibilityReason")
+    for name in CapabilityVocabulary.names:
+        document = _reason_document(REQUIREMENT_UNMET, name)
+        assert _accepts(CompatibilityReason, document), name
+        Draft202012Validator(root).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("code", _SCOPED_CODES)
+def test_crsn_a3_a_scoped_code_must_name_its_capability(mode: str, code: str) -> None:
+    root = _nested(_schema_of(CompatibilityResult, mode), "CompatibilityReason")
+    assert _accepts(CompatibilityReason, _reason_document(code, "market.spot"))
+    Draft202012Validator(root).validate(_reason_document(code, "market.spot"))
+    assert not _accepts(CompatibilityReason, _reason_document(code))
+    assert not Draft202012Validator(root).is_valid(_reason_document(code))
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("code", _UNSCOPED_CODES)
+def test_crsn_a4_an_unscoped_code_must_not_name_a_capability(
+    mode: str, code: str
+) -> None:
+    root = _nested(_schema_of(CompatibilityResult, mode), "CompatibilityReason")
+    assert _accepts(CompatibilityReason, _reason_document(code))
+    Draft202012Validator(root).validate(_reason_document(code))
+    assert not _accepts(CompatibilityReason, _reason_document(code, "market.spot"))
+    scoped_document = _reason_document(code, "market.spot")
+    assert not Draft202012Validator(root).is_valid(scoped_document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_reason_scope_conditions_are_two_separable_branches(mode: str) -> None:
+    node = _schema_of(CompatibilityResult, mode)["$defs"]["CompatibilityReason"]
+    branches = node["allOf"]
+    assert len(branches) == 2
+    assert branches[0]["if"]["properties"]["error_code"]["enum"] == _UNSCOPED_CODES
+    assert branches[0]["then"] == {"not": {"required": ["capability"]}}
+    assert branches[1]["if"]["properties"]["error_code"]["enum"] == _SCOPED_CODES
+    assert branches[1]["then"] == {"required": ["capability"]}
+    assert "capability" not in node["required"]
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_reason_capability_keeps_its_inherited_string_contract(mode: str) -> None:
+    """The `enum` is added beside the pattern, not in place of it."""
+    node = _schema_of(CompatibilityResult, mode)["$defs"]["CompatibilityReason"][
+        "properties"
+    ]["capability"]
+    assert node["type"] == "string"
+    assert node["minLength"] == 3
+    assert node["maxLength"] == 128
+    assert node["pattern"].startswith("^[a-z]")
+    assert isinstance(node["enum"], list)
+
+
+def test_the_reason_hook_refuses_a_shape_it_cannot_annotate() -> None:
+    """The hook fails loudly rather than silently skipping the annotation.
+
+    Task 8 generates a published schema from this model, so a hook that shrugged
+    when it could not find its fields would quietly publish a contract weaker
+    than the runtime enforces -- which is the whole defect class this correction
+    exists to close. Same discipline as `_set_unique_items` and `_mark_unique`.
+    """
+    with pytest.raises(TypeError, match="properties must be an object"):
+        capability_models._reason_schema_extra({})
+    with pytest.raises(TypeError, match="scope fields must be objects"):
+        capability_models._reason_schema_extra({"properties": {"error_code": {}}})
+    with pytest.raises(TypeError, match="scope fields must be objects"):
+        capability_models._reason_schema_extra(
+            {"properties": {"error_code": "not an object", "capability": {}}}
+        )
+
+
+def test_the_result_hook_still_refuses_a_shape_it_cannot_annotate() -> None:
+    """Extending `_result_schema_extra` must not have weakened its own guard."""
+    with pytest.raises(TypeError, match="properties must be an object"):
+        capability_models._result_schema_extra({})
+    with pytest.raises(TypeError, match="must be an object"):
+        capability_models._result_schema_extra({"properties": {"reasons": {}}})
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_result_approximation_key_rules_stay_runtime_only(mode: str) -> None:
+    """Two residuals an independent review found missing from this record's ledger.
+
+    `CompatibilityResult.validate_approximations` routes through
+    `_unique_sorted_text`, which **rejects** both a duplicate capability and an
+    unsorted sequence. That is the opposite of `ComparisonInput.approximations`,
+    whose validator *normalizes* by returning a sorted tuple -- so the
+    "normalizing validators need no published order" argument that correctly
+    clears the comparison record does **not** transfer here, and the two rules
+    below are genuine runtime-only residuals rather than non-divergences.
+
+    Both are inexpressible for the same reason: the key is `capability`, typed
+    `CapabilityName`, and this record applies **no** vocabulary-membership
+    validator to a nested `ApproximationDeclaration` -- so the key domain is an
+    open pattern, not a closed set, and there is no finite `contains`
+    enumeration. The published flat `uniqueItems` is sound but strictly weaker:
+    every whole-object duplicate is also a key duplicate, so it never rejects a
+    runtime-valid document, but it cannot catch two distinct declarations sharing
+    one capability.
+    """
+    schema = _schema_of(CompatibilityResult, mode)
+    base = _result_document(
+        outcome=CompatibilityOutcome.SUPPORTED_WITH_APPROXIMATION.value
+    )
+
+    unsorted_by_capability = dict(base)
+    unsorted_by_capability["approximations"] = [
+        _approximation(capability="execution.partial_fills").model_dump(mode="json"),
+        _approximation(capability="data.ohlcv").model_dump(mode="json"),
+    ]
+    assert not _accepts(CompatibilityResult, unsorted_by_capability)
+    assert Draft202012Validator(schema).is_valid(unsorted_by_capability)
+
+    duplicate_capability = dict(base)
+    first = _approximation(capability="data.ohlcv").model_dump(mode="json")
+    second = dict(first) | {"method": "A materially different method."}
+    duplicate_capability["approximations"] = [first, second]
+    assert not _accepts(CompatibilityResult, duplicate_capability)
+    assert Draft202012Validator(schema).is_valid(duplicate_capability)
+
+    # the key domain really is open: an off-vocabulary capability is accepted, so
+    # no closed enumeration exists to key a `contains` table on.
+    off_vocabulary = _approximation(capability="not.a_vocabulary_member")
+    assert off_vocabulary.capability == "not.a_vocabulary_member"
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_reason_ordering_rule_stays_runtime_only(mode: str) -> None:
+    """Clause CR-C1. `validate_reasons` rejects an uncanonically ordered tuple.
+
+    The key domain here *is* closed and finite -- 26 capabilities x 8 codes -- so
+    the discriminating criterion is not "closed versus open" but whether the
+    accepted array space is small enough to enumerate. Over a 208-member key
+    space it is not, so this stays a residual while the three-member
+    `ComparisonLevel` sortedness rules are published as an eight-member `enum`.
+    """
+    schema = _schema_of(CompatibilityResult, mode)
+    document = _result_document(outcome=CompatibilityOutcome.NOT_APPLICABLE.value)
+    document["reasons"] = [
+        _reason_document(REQUIREMENT_UNMET, "market.spot"),
+        _reason_document(REQUIREMENT_UNMET, "data.ohlcv"),
+    ]
+    assert not _accepts(CompatibilityResult, document)
+    assert Draft202012Validator(schema).is_valid(document)
+
+
+def test_the_capability_parity_correction_changes_no_canonical_byte() -> None:
+    """Every pinned canonical value is unchanged by schema metadata."""
+    assert canonical_json_bytes(_result()) == canonical_json_bytes(
+        CompatibilityResult.model_validate_json(json.dumps(_result_document()))
+    )
+    assert list(CompatibilityReason.model_fields) == ["error_code", "capability"]
+    assert list(ApproximationDeclaration.model_fields) == list(
+        _EXPECTED_APPROXIMATION_FIELDS
+    )
+    assert list(CompatibilityResult.model_fields) == list(_EXPECTED_RESULT_FIELDS)

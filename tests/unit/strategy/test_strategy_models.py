@@ -1323,3 +1323,519 @@ def test_the_strategy_content_hash_is_unchanged_for_the_same_semantic_input() ->
         "strv_14f59d87-9338-436a-91f6-39e932567dba"
     )
     assert _version(spec).content_hash == content_hash
+
+
+# --------------------------------------------------------------------------
+# Stage 4 runtime/schema parity closure -- clauses SPEC-A1, SPEC-A2, RISK-A1,
+# RISK-A2, SIZE-A1, EXT-A1, PARAM-A1..A3
+#
+# Each clause is a rule ordinary validated construction enforces and the
+# generated schema omitted. Two are safety boundaries: `validate_market_type_policy`
+# accepts SPOT only and `validate_direction_policy` accepts LONG only, while the
+# published `$defs` emitted the full four-member `MarketType` and two-member
+# `Direction` -- so `FUTURES` and `SHORT` validated against a schema whose own
+# `Direction` description already said "Initial policy accepts only `LONG`".
+#
+# Every narrowing here is published **at the field**, never on the shared type.
+# `MarketType` is a `$defs` entry in the frozen `domain/instrument-ref-v1` and
+# `datasets/dataset-descriptor-v1`, and `PositiveDecimal` is one in the frozen
+# `domain/price-v1`: narrowing either type would move released Stage 3 bytes.
+# --------------------------------------------------------------------------
+
+_STRATEGY_SPEC_ADAPTER: TypeAdapter[StrategySpec] = TypeAdapter(StrategySpec)
+_PARAMETER_ADAPTER: TypeAdapter[ParameterDefinition] = TypeAdapter(ParameterDefinition)
+
+
+def _spec_schema(mode: str) -> dict[str, Any]:
+    schema: dict[str, Any] = StrategySpec.model_json_schema(
+        mode=mode  # type: ignore[arg-type]
+    )
+    return schema
+
+
+def _spec_json(**overrides: Any) -> dict[str, Any]:
+    document = _document()
+    document.update(overrides)
+    return document
+
+
+def _spec_section(section: str, **overrides: Any) -> dict[str, Any]:
+    document = _document()
+    block = document[section]
+    assert isinstance(block, dict)
+    document[section] = block | overrides
+    return document
+
+
+def _spec_accepts(document: dict[str, Any]) -> bool:
+    try:
+        _STRATEGY_SPEC_ADAPTER.validate_json(canonical_json_bytes(document))
+    except ValidationError:
+        return False
+    return True
+
+
+def _param_accepts(document: dict[str, Any]) -> bool:
+    try:
+        _PARAMETER_ADAPTER.validate_json(json.dumps(document))
+    except ValidationError:
+        return False
+    return True
+
+
+def _nested_root(parent: dict[str, Any], name: str) -> dict[str, Any]:
+    return {"$defs": parent["$defs"], "$ref": f"#/$defs/{name}"}
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_spec_baseline_document_agrees_on_every_side(mode: str) -> None:
+    """Non-vacuity for every clause below: one complete valid document."""
+    document = _document()
+    assert _spec_accepts(document)
+    schema = _spec_schema(mode)
+    Draft202012Validator.check_schema(schema)
+    Draft202012Validator(schema).validate(document)
+
+
+# --- SPEC-A1 and SPEC-A2: the two safety boundaries ---
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("market_type", ["MARGIN", "FUTURES", "EQUITIES"])
+def test_spec_a1_a_forbidden_market_type_is_rejected_by_the_published_schema(
+    mode: str, market_type: str
+) -> None:
+    """Clause SPEC-A1. Every non-SPOT member is named in the failure output."""
+    document = _spec_json(market_type=market_type)
+    assert not _spec_accepts(document)
+    assert not Draft202012Validator(_spec_schema(mode)).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_spec_a2_a_forbidden_direction_is_rejected_by_the_published_schema(
+    mode: str,
+) -> None:
+    """Clause SPEC-A2."""
+    document = _spec_json(direction="SHORT")
+    assert not _spec_accepts(document)
+    assert not Draft202012Validator(_spec_schema(mode)).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_policy_constants_are_published_at_the_field_not_on_the_type(
+    mode: str,
+) -> None:
+    """The scoping trap, asserted in both directions.
+
+    `MarketType` is a `$defs` entry in two already-released Stage 3 schemas, so
+    the full four-member enum must survive on the type while the field publishes
+    `const`. `Direction` reaches no Stage 3 schema but is treated identically:
+    the type is the domain vocabulary and the field is this version's policy.
+    """
+    schema = _spec_schema(mode)
+    assert schema["$defs"]["MarketType"]["enum"] == [
+        "SPOT",
+        "MARGIN",
+        "FUTURES",
+        "EQUITIES",
+    ]
+    assert schema["$defs"]["Direction"]["enum"] == ["LONG", "SHORT"]
+    assert "const" not in schema["$defs"]["MarketType"]
+    assert "const" not in schema["$defs"]["Direction"]
+    assert schema["properties"]["market_type"]["const"] == "SPOT"
+    assert schema["properties"]["direction"]["const"] == "LONG"
+    # the field still references the shared type, so the enum still applies
+    assert "$ref" in json.dumps(schema["properties"]["market_type"])
+    assert "$ref" in json.dumps(schema["properties"]["direction"])
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_two_policy_fields_stay_required_in_their_declared_position(
+    mode: str,
+) -> None:
+    schema = _spec_schema(mode)
+    assert "market_type" in schema["required"]
+    assert "direction" in schema["required"]
+    assert list(schema["properties"]) == list(StrategySpec.model_fields)
+
+
+# --- RISK-A1 and RISK-A2 ---
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_risk_a1_shorting_allowed_is_published_as_a_constant_false(mode: str) -> None:
+    """Clause RISK-A1: a single-field constant a validator enforced and the
+    schema published as a bare `{"type": "boolean"}`."""
+    document = _spec_section("risk_assumptions", shorting_allowed=True)
+    assert not _spec_accepts(document)
+    schema = _spec_schema(mode)
+    assert not Draft202012Validator(schema).is_valid(document)
+    node = schema["$defs"]["RiskAssumptions"]["properties"]["shorting_allowed"]
+    assert node["const"] is False
+    assert node["type"] == "boolean"
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("leverage", ["2", "0.5", "1.000000001", "10"])
+def test_risk_a2_a_leverage_other_than_one_is_rejected(
+    mode: str, leverage: str
+) -> None:
+    """Clause RISK-A2. The JSON-accepted set is exactly `{"1"}`.
+
+    `POSITIVE_DECIMAL_PATTERN` requires any fractional part to end in `[1-9]` and
+    forbids a leading zero, so `"1.0"`, `"1.00"`, `"01"`, and `"1E+0"` never reach
+    the validator at all -- they are rejected by the pattern on both sides
+    already. `const: "1"` therefore over-rejects nothing.
+    """
+    document = _spec_section("risk_assumptions", leverage=leverage)
+    assert not _spec_accepts(document)
+    assert not Draft202012Validator(_spec_schema(mode)).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("leverage", ["1.0", "1.00", "01", "1E+0"])
+def test_the_non_canonical_spellings_of_one_were_already_rejected_on_both_sides(
+    mode: str, leverage: str
+) -> None:
+    """The measurement that settles the `const: "1"` classification.
+
+    These four are rejected by the *pattern*, before and after this correction, by
+    runtime and schema alike. That is what proves the JSON-accepted set of
+    `leverage` is the single string `"1"` rather than every spelling of one.
+    """
+    document = _spec_section("risk_assumptions", leverage=leverage)
+    assert not _spec_accepts(document)
+    assert not Draft202012Validator(_spec_schema(mode)).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_leverage_constant_is_a_json_string_and_preserves_the_shared_pattern(
+    mode: str,
+) -> None:
+    """`const: "1"`, never `const: "1.0"` and never a JSON number.
+
+    `PositiveDecimal` is a `$defs` entry in the frozen `domain/price-v1`, so the
+    `const` is published at the field and the shared definition keeps its pattern.
+    """
+    schema = _spec_schema(mode)
+    node = schema["$defs"]["RiskAssumptions"]["properties"]["leverage"]
+    assert node["const"] == "1"
+    assert node["const"] != "1.0"
+    assert not isinstance(node["const"], (int, float))
+    shared = schema["$defs"]["PositiveDecimal"]
+    assert shared["type"] == "string"
+    assert "const" not in shared
+    assert (
+        shared["pattern"]
+        == r"^(?:[1-9][0-9]*(?:\.[0-9]*[1-9])?|0\.[0-9]*[1-9])(?![\s\S])"
+    )
+    assert shared["maxLength"] == 256
+
+
+# --- SIZE-A1 ---
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("fraction", ["2", "1.5", "10", "1.000000001"])
+def test_size_a1_a_sizing_fraction_above_one_is_rejected(
+    mode: str, fraction: str
+) -> None:
+    """Clause SIZE-A1: `validate_fraction_is_a_fraction` rejects it."""
+    document = _spec_section("sizing_intent", fraction=fraction)
+    assert not _spec_accepts(document)
+    assert not Draft202012Validator(_spec_schema(mode)).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize(
+    "fraction",
+    ["1", "0.5", "0.1", "0.01", "0.999999999", "0.0000000001"],
+)
+def test_size_a1_every_legal_fraction_including_the_boundary_is_accepted(
+    mode: str, fraction: str
+) -> None:
+    """Over-rejection is the failure mode a pattern invites; `"1"` is the exact
+    inclusive boundary and must survive."""
+    document = _spec_section("sizing_intent", fraction=fraction)
+    assert _spec_accepts(document)
+    Draft202012Validator(_spec_schema(mode)).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_fraction_bound_is_added_beside_the_shared_pattern(mode: str) -> None:
+    """Additive: a second `pattern` cannot sit beside the first in one object, so
+    the narrowing goes in an `allOf` and the inherited `$ref` keeps its own."""
+    schema = _spec_schema(mode)
+    node = schema["$defs"]["SizingIntent"]["properties"]["fraction"]
+    assert node["allOf"] == [{"pattern": r"^(?:1|0\.[0-9]*[1-9])(?![\s\S])"}]
+    assert "$ref" in json.dumps(node)
+    assert "const" not in schema["$defs"]["PositiveDecimal"]
+
+
+# --- EXT-A1 ---
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("effect", ["PREVENTS_LEVEL_2", "PREVENTS_LEVEL_1_AND_LEVEL_2"])
+def test_ext_a1_a_lifecycle_only_extension_requires_economic_effect_none(
+    mode: str, effect: str
+) -> None:
+    """Clause EXT-A1, measured on the standalone record."""
+    document = _DECLARATION | {"economic_effect": effect}
+    with pytest.raises(ValidationError):
+        _DECLARATION_ADAPTER.validate_json(json.dumps(document))
+    schema = EngineExtensionDeclaration.model_json_schema(mode=mode)  # type: ignore[arg-type]
+    assert not Draft202012Validator(schema).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_ext_a1_every_effect_pair_the_runtime_accepts_is_still_accepted(
+    mode: str,
+) -> None:
+    """Four positive pairs: the lifecycle-only row plus all three altering rows."""
+    schema = EngineExtensionDeclaration.model_json_schema(mode=mode)  # type: ignore[arg-type]
+    Draft202012Validator.check_schema(schema)
+    accepted = [
+        ("LIFECYCLE_HOOKS_ONLY", "NONE"),
+        ("ALTERS_EXECUTION_BEHAVIOR", "NONE"),
+        ("ALTERS_EXECUTION_BEHAVIOR", "PREVENTS_LEVEL_2"),
+        ("ALTERS_EXECUTION_BEHAVIOR", "PREVENTS_LEVEL_1_AND_LEVEL_2"),
+    ]
+    for lifecycle, economic in accepted:
+        document = _DECLARATION | {
+            "lifecycle_effect": lifecycle,
+            "economic_effect": economic,
+        }
+        _DECLARATION_ADAPTER.validate_json(json.dumps(document))
+        Draft202012Validator(schema).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_extension_condition_survives_into_both_container_definitions(
+    mode: str,
+) -> None:
+    """`strategy-spec-v1` and `strategy-version-v1` both publish this record."""
+    schema = _spec_schema(mode)
+    node = schema["$defs"]["EngineExtensionDeclaration"]
+    assert len(node["allOf"]) == 1
+    assert (
+        node["allOf"][0]["if"]["properties"]["lifecycle_effect"]["const"]
+        == "LIFECYCLE_HOOKS_ONLY"
+    )
+    assert node["allOf"][0]["then"]["properties"]["economic_effect"]["const"] == "NONE"
+    assert node["required"] == list(EngineExtensionDeclaration.model_fields)
+
+
+# --- PARAM-A1..A3 ---
+
+_PARAMETER_POSITIVES: list[dict[str, Any]] = [
+    {"value_type": "BOOLEAN", "value": True},
+    {"value_type": "BOOLEAN", "value": False},
+    {"value_type": "INTEGER", "value": 0},
+    {"value_type": "INTEGER", "value": -(2**63)},
+    {"value_type": "INTEGER", "value": 2**63 - 1},
+    {"value_type": "INTEGER", "value": 5, "minimum": 5, "maximum": 5},
+    {"value_type": "INTEGER", "value": 5, "minimum": 1},
+    {"value_type": "INTEGER", "value": 5, "maximum": 9},
+    {"value_type": "INTEGER", "value": 5, "unit": "bars"},
+    {"value_type": "DECIMAL", "value": "0.5"},
+    {"value_type": "DECIMAL", "value": "1", "minimum": "0.1", "maximum": "2"},
+    {"value_type": "DECIMAL", "value": "-1.5"},
+    {"value_type": "STRING", "value": ""},
+    {"value_type": "STRING", "value": "x" * 8192},
+    {"value_type": "IDENTIFIER", "value": "a"},
+    {"value_type": "IDENTIFIER", "value": "some.dotted_name"},
+]
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("document", _PARAMETER_POSITIVES)
+def test_every_runtime_valid_parameter_definition_is_still_accepted(
+    mode: str, document: dict[str, Any]
+) -> None:
+    """Sixteen positive samples across all five literal types and every bound
+    combination, because five conditional branches invite over-rejection."""
+    root = _nested_root(_spec_schema(mode), "ParameterDefinition")
+    assert _param_accepts(document), document
+    Draft202012Validator(root).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"value_type": "INTEGER", "value": "5"},
+        {"value_type": "BOOLEAN", "value": 1},
+        {"value_type": "DECIMAL", "value": 1},
+        {"value_type": "STRING", "value": 5},
+        {"value_type": "IDENTIFIER", "value": "Not_An_Identifier"},
+    ],
+)
+def test_param_a1_the_value_must_match_its_declared_value_type(
+    mode: str, document: dict[str, Any]
+) -> None:
+    """Clause PARAM-A1. The same exact-identity invariant `LiteralExpression`
+    already publishes as five `if`/`then` pairs in this same package -- the
+    source comment on `validate_bounds` names it in exactly those words."""
+    root = _nested_root(_spec_schema(mode), "ParameterDefinition")
+    assert not _param_accepts(document), document
+    assert not Draft202012Validator(root).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"value_type": "INTEGER", "value": 5, "minimum": "1"},
+        {"value_type": "INTEGER", "value": 5, "maximum": "9"},
+        {"value_type": "DECIMAL", "value": "1.5", "minimum": 1},
+        {"value_type": "DECIMAL", "value": "1.5", "maximum": 2},
+    ],
+)
+def test_param_a2_each_bound_must_match_the_declared_value_type_too(
+    mode: str, document: dict[str, Any]
+) -> None:
+    """Clause PARAM-A2: `validate_bounds` dispatches all three of `value`,
+    `minimum`, and `maximum` through the same table, so all three are published."""
+    root = _nested_root(_spec_schema(mode), "ParameterDefinition")
+    assert not _param_accepts(document), document
+    assert not Draft202012Validator(root).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("value_type", ["BOOLEAN", "STRING", "IDENTIFIER"])
+@pytest.mark.parametrize("bound", ["minimum", "maximum"])
+def test_param_a3_only_numeric_parameters_accept_bounds(
+    mode: str, value_type: str, bound: str
+) -> None:
+    """Clause PARAM-A3, six independent cases named by type and bound."""
+    values = {"BOOLEAN": True, "STRING": "text", "IDENTIFIER": "some.name"}
+    document = {
+        "value_type": value_type,
+        "value": values[value_type],
+        bound: values[value_type],
+    }
+    root = _nested_root(_spec_schema(mode), "ParameterDefinition")
+    assert not _param_accepts(document)
+    assert not Draft202012Validator(root).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_parameter_branches_are_derived_from_the_literal_contract(
+    mode: str,
+) -> None:
+    """One source of truth: the branch table is the expression module's own.
+
+    Hand-copying it would let `ParameterDefinition`'s published bounds drift from
+    `LiteralExpression`'s, which is the drift this clause exists because of.
+    """
+    schema = _spec_schema(mode)
+    parameter = schema["$defs"]["ParameterDefinition"]
+    literal = schema["$defs"]["LiteralExpression"]
+    assert len(parameter["allOf"]) == len(LiteralValueType) + 1
+    literal_values = {
+        clause["if"]["properties"]["value_type"]["const"]: clause["then"]["properties"][
+            "value"
+        ]
+        for clause in literal["allOf"]
+    }
+    for clause in parameter["allOf"][: len(LiteralValueType)]:
+        member = clause["if"]["properties"]["value_type"]["const"]
+        branch = clause["then"]["properties"]
+        assert branch["value"] == literal_values[member], member
+        assert branch["minimum"] == literal_values[member], member
+        assert branch["maximum"] == literal_values[member], member
+    guard = parameter["allOf"][-1]["if"]["properties"]["value_type"]["enum"]
+    assert guard == ["BOOLEAN", "STRING", "IDENTIFIER"]
+    assert parameter["allOf"][-1]["then"] == {
+        "allOf": [
+            {"not": {"required": ["minimum"]}},
+            {"not": {"required": ["maximum"]}},
+        ]
+    }
+    assert parameter["required"] == ["value_type", "value"]
+
+
+def test_the_bound_comparison_rules_stay_runtime_only() -> None:
+    """Clause PARAM-C1 and PARAM-C2, pinned as executable facts.
+
+    `minimum <= maximum` and `minimum <= value <= maximum` compare two numbers
+    over an unbounded domain. Draft 2020-12 has no keyword relating two sibling
+    values, so the published schema deliberately does not claim either rule.
+    """
+    documents: list[dict[str, Any]] = [
+        {"value_type": "INTEGER", "value": 5, "minimum": 9, "maximum": 10},
+        {"value_type": "INTEGER", "value": 5, "minimum": 10, "maximum": 1},
+        {"value_type": "DECIMAL", "value": "5", "minimum": "9"},
+    ]
+    for mode in ("validation", "serialization"):
+        root = _nested_root(_spec_schema(mode), "ParameterDefinition")
+        for document in documents:
+            assert not _param_accepts(document), document
+            assert Draft202012Validator(root).is_valid(document), document
+
+
+def test_the_key_based_uniqueness_rules_stay_runtime_only() -> None:
+    """Clauses SPEC-C1 and SPEC-C2.
+
+    `required_capabilities` is unique by `capability` and `engine_extensions` by
+    `(adapter_name, extension_id, version)`. Neither key domain is closed --
+    `CapabilityName`, `NormalizedIdentifier`, and `SemanticVersion` are all
+    pattern-constrained strings -- so there is no finite `contains` enumeration
+    and a flat `uniqueItems` would be strictly weaker than the runtime rule.
+    """
+    document = _document()
+    capabilities = document["required_capabilities"]
+    assert isinstance(capabilities, list)
+    document["required_capabilities"] = [
+        capabilities[0],
+        dict(capabilities[0]) | {"required": False},
+    ]
+    assert not _spec_accepts(document)
+    for mode in ("validation", "serialization"):
+        assert Draft202012Validator(_spec_schema(mode)).is_valid(document)
+
+
+def test_the_strategy_parity_correction_changes_no_canonical_byte() -> None:
+    """Schema metadata only. The content hash is the permanent identity, so it is
+    pinned literally rather than recomputed on both sides of a comparison."""
+    spec = _spec()
+    assert strategy_version_hash(spec) == (
+        "14f59d879338f36a91f639e932567dba35cc17b835cfb16d7a4362c05b23c29e"
+    )
+    assert strategy_version_identifier(strategy_version_hash(spec)) == (
+        "strv_14f59d87-9338-436a-91f6-39e932567dba"
+    )
+    assert len(canonical_json_bytes(spec)) == 2583
+    assert list(StrategySpec.model_fields) == [
+        "schema_version",
+        "strategy_id",
+        "display_name",
+        "description",
+        "strategy_family",
+        "market_type",
+        "direction",
+        "timeframe",
+        "universe",
+        "required_capabilities",
+        "parameters",
+        "features",
+        "entry_rules",
+        "exit_rules",
+        "sizing_intent",
+        "risk_assumptions",
+        "warm_up_requirements",
+        "comparison_requirements",
+        "supported_approximation_policy",
+        "engine_extensions",
+        "authoring_metadata",
+    ]
+    assert spec.market_type is MarketType.SPOT
+    assert spec.direction is Direction.LONG
+    assert list(ParameterDefinition.model_fields) == [
+        "value_type",
+        "value",
+        "minimum",
+        "maximum",
+        "unit",
+    ]

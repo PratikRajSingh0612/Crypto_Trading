@@ -11,6 +11,7 @@ assertions. They are not presented as behavioural RED.
 from __future__ import annotations
 
 import ast
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -18,6 +19,7 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from pydantic.experimental.missing_sentinel import MISSING
 
@@ -2044,3 +2046,612 @@ def test_the_generated_result_schema_keeps_its_shape_and_bounds(
         ("ComparisonLevel", ComparisonLevel),
     ):
         assert set(definitions[enum_name]["enum"]) == {item.value for item in members}
+
+
+# --------------------------------------------------------------------------
+# Stage 4 runtime/schema parity closure -- clauses CIR-A1..A4, CER-A1..A6,
+# CI-A1, CI-A2
+#
+# Every clause is a rule `validate_scope` or `validate_outcome_shape` enforces
+# and the generated schema omitted. `achieved_level`, `material`, and
+# `approximation_id` were correctly absent from `required` -- what was missing is
+# the *governing condition*, which is a different assertion: absence was
+# permitted unconditionally rather than exactly in the state that permits it.
+# --------------------------------------------------------------------------
+
+_UNSCOPED_COMPARISON_CODES = sorted(
+    COMPARISON_REASON_CODES - {ASSUMPTION_MISMATCH, APPROXIMATION_EXCLUDES_LEVEL}
+)
+_ELIGIBLE_OUTCOMES = ["ELIGIBLE", "ELIGIBLE_WITH_DECLARED_DIFFERENCES"]
+
+
+def _cmp_schema(model: type[Any], mode: str) -> dict[str, Any]:
+    schema: dict[str, Any] = model.model_json_schema(mode=mode)
+    return schema
+
+
+def _cmp_nested(parent: dict[str, Any], name: str) -> dict[str, Any]:
+    return {"$defs": parent["$defs"], "$ref": f"#/$defs/{name}"}
+
+
+def _cmp_accepts(model: type[Any], document: dict[str, Any]) -> bool:
+    try:
+        model.model_validate_json(json.dumps(document))
+    except ValidationError:
+        return False
+    return True
+
+
+def _cir_document(code: str, **scope: Any) -> dict[str, Any]:
+    document: dict[str, Any] = {"error_code": code}
+    document.update(scope)
+    return document
+
+
+def _result_json(**overrides: Any) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "schema_version": "1.0.0",
+        "outcome": ComparisonEligibilityOutcome.ELIGIBLE,
+        "requested_level": ComparisonLevel.LEVEL_1,
+        "achieved_level": ComparisonLevel.LEVEL_1,
+        "left": _input(),
+        "right": _input(),
+        "reasons": (),
+        "declared_differences": (),
+    }
+    fields.update(overrides)
+    record = ComparisonEligibilityResult(**fields)
+    document: dict[str, Any] = record.model_dump(mode="json")
+    return document
+
+
+def _input_json(**overrides: Any) -> dict[str, Any]:
+    document: dict[str, Any] = _input(**overrides).model_dump(mode="json")
+    return document
+
+
+# --- CIR-A1..A4: the ineligibility reason's closed set and scope table ---
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_three_reason_scope_baselines_agree_before_any_mutation(
+    mode: str,
+) -> None:
+    root = _cmp_nested(
+        _cmp_schema(ComparisonEligibilityResult, mode), "ComparisonIneligibilityReason"
+    )
+    for document in (
+        _cir_document(ASSUMPTION_MISMATCH, material="UNIVERSE"),
+        _cir_document(APPROXIMATION_EXCLUDES_LEVEL, approximation_id=_APPROXIMATION_ID),
+        _cir_document(LEVEL_UNSUPPORTED),
+    ):
+        assert _cmp_accepts(ComparisonIneligibilityReason, document)
+        Draft202012Validator(root).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_cir_a1_the_comparison_error_code_is_published_as_the_closed_seven(
+    mode: str,
+) -> None:
+    """Clause CIR-A1, published **at the field**: `ErrorCode` reaches the frozen
+    `domain/diagnostic-v1.schema.json`, so the type must not be narrowed."""
+    parent = _cmp_schema(ComparisonEligibilityResult, mode)
+    node = parent["$defs"]["ComparisonIneligibilityReason"]["properties"]["error_code"]
+    assert sorted(node["enum"]) == sorted(COMPARISON_REASON_CODES)
+    assert len(node["enum"]) == 7
+    assert "enum" not in parent["$defs"]["ErrorCode"]
+    document = _cir_document("CONFIG.LAYER_INVALID")
+    assert not _cmp_accepts(ComparisonIneligibilityReason, document)
+    assert not Draft202012Validator(
+        _cmp_nested(parent, "ComparisonIneligibilityReason")
+    ).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_cir_a2_an_assumption_mismatch_names_exactly_its_material(mode: str) -> None:
+    root = _cmp_nested(
+        _cmp_schema(ComparisonEligibilityResult, mode), "ComparisonIneligibilityReason"
+    )
+    missing = _cir_document(ASSUMPTION_MISMATCH)
+    both = _cir_document(
+        ASSUMPTION_MISMATCH,
+        material="UNIVERSE",
+        approximation_id=_APPROXIMATION_ID,
+    )
+    for document in (missing, both):
+        assert not _cmp_accepts(ComparisonIneligibilityReason, document)
+        assert not Draft202012Validator(root).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_cir_a3_an_approximation_exclusion_names_exactly_its_approximation(
+    mode: str,
+) -> None:
+    root = _cmp_nested(
+        _cmp_schema(ComparisonEligibilityResult, mode), "ComparisonIneligibilityReason"
+    )
+    missing = _cir_document(APPROXIMATION_EXCLUDES_LEVEL)
+    wrong_scope = _cir_document(APPROXIMATION_EXCLUDES_LEVEL, material="UNIVERSE")
+    for document in (missing, wrong_scope):
+        assert not _cmp_accepts(ComparisonIneligibilityReason, document)
+        assert not Draft202012Validator(root).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("code", _UNSCOPED_COMPARISON_CODES)
+def test_cir_a4_an_unscoped_comparison_reason_carries_no_scope(
+    mode: str, code: str
+) -> None:
+    """Five codes, each named in the failure output by its parameter."""
+    root = _cmp_nested(
+        _cmp_schema(ComparisonEligibilityResult, mode), "ComparisonIneligibilityReason"
+    )
+    assert _cmp_accepts(ComparisonIneligibilityReason, _cir_document(code))
+    Draft202012Validator(root).validate(_cir_document(code))
+    for scope in ({"material": "UNIVERSE"}, {"approximation_id": _APPROXIMATION_ID}):
+        document = _cir_document(code, **scope)
+        assert not _cmp_accepts(ComparisonIneligibilityReason, document)
+        assert not Draft202012Validator(root).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_every_comparison_material_is_still_an_accepted_scope(mode: str) -> None:
+    """Fourteen positive samples, so a mistyped branch cannot over-reject silently."""
+    root = _cmp_nested(
+        _cmp_schema(ComparisonEligibilityResult, mode), "ComparisonIneligibilityReason"
+    )
+    for material in ComparisonMaterial:
+        document = _cir_document(ASSUMPTION_MISMATCH, material=material.value)
+        assert _cmp_accepts(ComparisonIneligibilityReason, document), material
+        Draft202012Validator(root).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_reason_scope_table_is_three_separable_branches(mode: str) -> None:
+    node = _cmp_schema(ComparisonEligibilityResult, mode)["$defs"][
+        "ComparisonIneligibilityReason"
+    ]
+    branches = node["allOf"]
+    assert len(branches) == 3
+    assert branches[0]["if"]["properties"]["error_code"]["const"] == ASSUMPTION_MISMATCH
+    assert (
+        branches[1]["if"]["properties"]["error_code"]["const"]
+        == APPROXIMATION_EXCLUDES_LEVEL
+    )
+    assert (
+        branches[2]["if"]["properties"]["error_code"]["enum"]
+        == _UNSCOPED_COMPARISON_CODES
+    )
+    assert node["required"] == ["error_code"]
+
+
+# --- CER-A1..A6: the outcome-governed shape of the result ---
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_every_eligibility_baseline_agrees_before_any_mutation(mode: str) -> None:
+    """Non-vacuity across all three outcomes and all three levels."""
+    schema = _cmp_schema(ComparisonEligibilityResult, mode)
+    Draft202012Validator.check_schema(schema)
+    for level in ComparisonLevel:
+        documents = [
+            _result_json(requested_level=level, achieved_level=level),
+            _result_json(
+                outcome=(
+                    ComparisonEligibilityOutcome.ELIGIBLE_WITH_DECLARED_DIFFERENCES
+                ),
+                requested_level=level,
+                achieved_level=level,
+                declared_differences=(_difference(),),
+            ),
+            _result_json(
+                outcome=ComparisonEligibilityOutcome.INELIGIBLE,
+                requested_level=level,
+                achieved_level=MISSING,
+                reasons=(_reason(LEVEL_UNSUPPORTED),),
+            ),
+        ]
+        for document in documents:
+            assert _cmp_accepts(ComparisonEligibilityResult, document)
+            Draft202012Validator(schema).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_cer_a1_an_ineligible_outcome_requires_at_least_one_reason(mode: str) -> None:
+    document = _result_json(
+        outcome=ComparisonEligibilityOutcome.INELIGIBLE,
+        achieved_level=MISSING,
+        reasons=(_reason(LEVEL_UNSUPPORTED),),
+    )
+    document["reasons"] = []
+    assert not _cmp_accepts(ComparisonEligibilityResult, document)
+    assert not Draft202012Validator(
+        _cmp_schema(ComparisonEligibilityResult, mode)
+    ).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_cer_a2_an_ineligible_outcome_achieves_no_level(mode: str) -> None:
+    document = _result_json(
+        outcome=ComparisonEligibilityOutcome.INELIGIBLE,
+        achieved_level=MISSING,
+        reasons=(_reason(LEVEL_UNSUPPORTED),),
+    )
+    document["achieved_level"] = "LEVEL_1"
+    assert not _cmp_accepts(ComparisonEligibilityResult, document)
+    assert not Draft202012Validator(
+        _cmp_schema(ComparisonEligibilityResult, mode)
+    ).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_cer_a3_an_eligible_outcome_carries_no_reason(mode: str) -> None:
+    document = _result_json()
+    document["reasons"] = [_cir_document(LEVEL_UNSUPPORTED)]
+    assert not _cmp_accepts(ComparisonEligibilityResult, document)
+    assert not Draft202012Validator(
+        _cmp_schema(ComparisonEligibilityResult, mode)
+    ).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("level", list(ComparisonLevel))
+def test_cer_a4_an_eligible_outcome_achieves_exactly_the_requested_level(
+    mode: str, level: ComparisonLevel
+) -> None:
+    """Clause CER-A4. Both halves: the field is required, and it must *equal* the
+    requested level. The earlier matrix tested only its absence, never a
+    mismatch, which is why the equality half went unrecorded."""
+    schema = _cmp_schema(ComparisonEligibilityResult, mode)
+    absent = _result_json(requested_level=level, achieved_level=level)
+    del absent["achieved_level"]
+    assert not _cmp_accepts(ComparisonEligibilityResult, absent)
+    assert not Draft202012Validator(schema).is_valid(absent)
+
+    others = [other for other in ComparisonLevel if other is not level]
+    for other in others:
+        mismatched = _result_json(requested_level=level, achieved_level=level)
+        mismatched["achieved_level"] = other.value
+        assert not _cmp_accepts(ComparisonEligibilityResult, mismatched)
+        assert not Draft202012Validator(schema).is_valid(mismatched), (level, other)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_cer_a5_a_plain_eligible_outcome_declares_nothing_on_either_side(
+    mode: str,
+) -> None:
+    """Clause CER-A5 reaches *into* the two nested `ComparisonInput` records, so
+    the branch constrains `left` and `right` alongside the schema's own
+    `properties.left.$ref`."""
+    schema = _cmp_schema(ComparisonEligibilityResult, mode)
+    with_difference = _result_json()
+    with_difference["declared_differences"] = [_difference().model_dump(mode="json")]
+    with_left_approximation = _result_json()
+    with_left_approximation["left"] = _input_json(approximations=(_approximation(),))
+    with_right_approximation = _result_json()
+    with_right_approximation["right"] = _input_json(approximations=(_approximation(),))
+    for document in (
+        with_difference,
+        with_left_approximation,
+        with_right_approximation,
+    ):
+        assert not _cmp_accepts(ComparisonEligibilityResult, document)
+        assert not Draft202012Validator(schema).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_cer_a6_an_eligible_with_differences_outcome_declares_something(
+    mode: str,
+) -> None:
+    """Clause CER-A6, and its three independent satisfiers must each be accepted."""
+    schema = _cmp_schema(ComparisonEligibilityResult, mode)
+    empty = _result_json(
+        outcome=ComparisonEligibilityOutcome.ELIGIBLE_WITH_DECLARED_DIFFERENCES,
+        declared_differences=(_difference(),),
+    )
+    empty["declared_differences"] = []
+    assert not _cmp_accepts(ComparisonEligibilityResult, empty)
+    assert not Draft202012Validator(schema).is_valid(empty)
+
+    justified = [
+        _result_json(
+            outcome=ComparisonEligibilityOutcome.ELIGIBLE_WITH_DECLARED_DIFFERENCES,
+            declared_differences=(_difference(),),
+        ),
+        _result_json(
+            outcome=ComparisonEligibilityOutcome.ELIGIBLE_WITH_DECLARED_DIFFERENCES,
+            left=_input(approximations=(_approximation(),)),
+        ),
+        _result_json(
+            outcome=ComparisonEligibilityOutcome.ELIGIBLE_WITH_DECLARED_DIFFERENCES,
+            right=_input(approximations=(_approximation(),)),
+        ),
+    ]
+    for document in justified:
+        assert _cmp_accepts(ComparisonEligibilityResult, document)
+        Draft202012Validator(schema).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_eligibility_conditions_are_seven_separable_branches(mode: str) -> None:
+    """Four state branches plus one level-equality branch per level."""
+    schema = _cmp_schema(ComparisonEligibilityResult, mode)
+    branches = schema["allOf"]
+    assert len(branches) == 4 + len(ComparisonLevel)
+    assert branches[0]["if"]["properties"]["outcome"]["const"] == "INELIGIBLE"
+    assert branches[1]["if"]["properties"]["outcome"]["enum"] == _ELIGIBLE_OUTCOMES
+    assert branches[2]["if"]["properties"]["outcome"]["const"] == "ELIGIBLE"
+    assert (
+        branches[3]["if"]["properties"]["outcome"]["const"]
+        == "ELIGIBLE_WITH_DECLARED_DIFFERENCES"
+    )
+    pinned = [
+        branch["if"]["properties"]["requested_level"]["const"]
+        for branch in branches[4:]
+    ]
+    assert pinned == [level.value for level in ComparisonLevel]
+    assert "achieved_level" not in schema["required"]
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_eligibility_hook_preserves_the_unique_items_it_already_published(
+    mode: str,
+) -> None:
+    properties = _cmp_schema(ComparisonEligibilityResult, mode)["properties"]
+    assert properties["reasons"]["uniqueItems"] is True
+    assert properties["declared_differences"]["uniqueItems"] is True
+    assert properties["reasons"]["maxItems"] == MAX_COMPARISON_REASONS
+    assert (
+        properties["declared_differences"]["maxItems"]
+        == MAX_RESULT_DECLARED_DIFFERENCES
+    )
+    assert properties["left"] == {"$ref": "#/$defs/ComparisonInput"}
+    assert properties["right"] == {"$ref": "#/$defs/ComparisonInput"}
+
+
+# --- CI-A1 and CI-A2: assumption totality and the per-category cap ---
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_ci_a1_the_assumption_set_must_name_every_material_exactly_once(
+    mode: str,
+) -> None:
+    """Clause CI-A1. `minItems`/`maxItems` of 14 with `uniqueItems` still admitted
+    a document that repeats one material and omits another; fourteen
+    `contains` clauses with `minContains`/`maxContains` of one close it exactly."""
+    root = _cmp_nested(
+        _cmp_schema(ComparisonEligibilityResult, mode), "ComparisonInput"
+    )
+    document = _input_json()
+    assert _cmp_accepts(ComparisonInput, document)
+    Draft202012Validator(root).validate(document)
+
+    duplicated = _input_json()
+    duplicated["assumptions"] = list(duplicated["assumptions"])
+    duplicated["assumptions"][1] = dict(duplicated["assumptions"][0]) | {
+        "value_hash": _OTHER_HASH
+    }
+    assert not _cmp_accepts(ComparisonInput, duplicated)
+    assert not Draft202012Validator(root).is_valid(duplicated)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("omitted", list(ComparisonMaterial))
+def test_ci_a1_every_single_material_is_individually_required(
+    mode: str, omitted: ComparisonMaterial
+) -> None:
+    """Each of the fourteen `contains` clauses must be load-bearing on its own.
+
+    **This test exists because a mutation survived without it.** The test above
+    omits one *fixed* material, so deleting any other entry from the published
+    table left it green -- thirteen clauses still rejected that one document. A
+    shared table needs one case per entry, not one case for the table.
+    """
+    parent = _cmp_schema(ComparisonEligibilityResult, mode)
+    root = _cmp_nested(parent, "ComparisonInput")
+    filler = next(other for other in ComparisonMaterial if other is not omitted)
+    document = _input_json()
+    document["assumptions"] = [
+        {
+            "material": (filler if material is omitted else material).value,
+            "value_hash": _OTHER_HASH if material is omitted else _ASSUMPTION_HASH,
+        }
+        for material in ComparisonMaterial
+    ]
+    assert len(document["assumptions"]) == MAX_COMPARISON_ASSUMPTIONS
+    assert not _cmp_accepts(ComparisonInput, document), omitted
+    assert not Draft202012Validator(root).is_valid(document), omitted
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_ci_a2_an_input_declares_at_most_one_difference_per_category(
+    mode: str,
+) -> None:
+    """Clause CI-A2. The key domain is the closed fourteen-member
+    `DifferenceCategory`, which is what makes a key-based uniqueness rule exactly
+    expressible here while `approximations` (keyed on an open `CapabilityName`
+    pattern) stays a residual."""
+    root = _cmp_nested(
+        _cmp_schema(ComparisonEligibilityResult, mode), "ComparisonInput"
+    )
+    document = _input_json()
+    document["declared_differences"] = [
+        {"category": "FEE_MODELING", "detail": "One."},
+        {"category": "FEE_MODELING", "detail": "Two."},
+    ]
+    assert not _cmp_accepts(ComparisonInput, document)
+    assert not Draft202012Validator(root).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("category", list(DifferenceCategory))
+def test_ci_a2_every_single_category_is_individually_capped(
+    mode: str, category: DifferenceCategory
+) -> None:
+    """Each of the fourteen per-category `contains` clauses is load-bearing.
+
+    **This test exists because three mutations survived without it.** The test
+    above duplicates one *fixed* category, so deleting any other entry from the
+    published table left it green. Unlike the totality table -- where
+    `minItems: 14` makes any single entry redundant by pigeonhole -- this table has
+    no length floor, so every entry really is independently necessary and every
+    deletion is observable.
+    """
+    parent = _cmp_schema(ComparisonEligibilityResult, mode)
+    root = _cmp_nested(parent, "ComparisonInput")
+    document = _input_json()
+    document["declared_differences"] = [
+        {"category": category.value, "detail": "First explanation."},
+        {"category": category.value, "detail": "Second explanation."},
+    ]
+    assert not _cmp_accepts(ComparisonInput, document), category
+    assert not Draft202012Validator(root).is_valid(document), category
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_every_single_category_and_the_full_set_stay_accepted(mode: str) -> None:
+    """Fifteen positive samples: fourteen singletons plus the complete set."""
+    root = _cmp_nested(
+        _cmp_schema(ComparisonEligibilityResult, mode), "ComparisonInput"
+    )
+    for category in DifferenceCategory:
+        document = _input_json(
+            declared_differences=(_difference(category=category, detail="One."),)
+        )
+        assert _cmp_accepts(ComparisonInput, document), category
+        Draft202012Validator(root).validate(document)
+    complete = _input_json(
+        declared_differences=tuple(
+            _difference(category=category, detail=f"{category.value} detail.")
+            for category in DifferenceCategory
+        )
+    )
+    assert _cmp_accepts(ComparisonInput, complete)
+    Draft202012Validator(root).validate(complete)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_input_hook_preserves_the_unique_items_it_already_published(
+    mode: str,
+) -> None:
+    node = _cmp_schema(ComparisonEligibilityResult, mode)["$defs"]["ComparisonInput"]
+    properties = node["properties"]
+    assert properties["assumptions"]["uniqueItems"] is True
+    assert properties["assumptions"]["minItems"] == MAX_COMPARISON_ASSUMPTIONS
+    assert properties["assumptions"]["maxItems"] == MAX_COMPARISON_ASSUMPTIONS
+    assert properties["approximations"]["uniqueItems"] is True
+    assert properties["approximations"]["maxItems"] == MAX_COMPARISON_APPROXIMATIONS
+    assert properties["declared_differences"]["uniqueItems"] is True
+    assert (
+        properties["declared_differences"]["maxItems"] == MAX_INPUT_DECLARED_DIFFERENCES
+    )
+    assert node["required"] == list(ComparisonInput.model_fields)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_open_key_domain_uniqueness_rules_stay_runtime_only(mode: str) -> None:
+    """Clauses CI-C1 and CI-C2, pinned as executable facts.
+
+    `approximations` is unique by `capability` and by `approximation_id`, both of
+    which are pattern-constrained strings over an unbounded domain. There is no
+    finite `contains` enumeration, so the published schema deliberately does not
+    claim either rule."""
+    root = _cmp_nested(
+        _cmp_schema(ComparisonEligibilityResult, mode), "ComparisonInput"
+    )
+    document = _input_json()
+    document["approximations"] = [
+        _approximation().model_dump(mode="json"),
+        _approximation(approximation_id=_OTHER_APPROXIMATION_ID).model_dump(
+            mode="json"
+        ),
+    ]
+    assert not _cmp_accepts(ComparisonInput, document)
+    assert Draft202012Validator(root).is_valid(document)
+
+
+def test_the_comparison_reason_hook_refuses_a_shape_it_cannot_annotate() -> None:
+    """The hook fails loudly rather than silently skipping the annotation."""
+    with pytest.raises(TypeError, match="properties must be an object"):
+        comparison_module._reason_schema_extra({})
+    with pytest.raises(TypeError, match="error_code must be an object"):
+        comparison_module._reason_schema_extra({"properties": {}})
+    with pytest.raises(TypeError, match="error_code must be an object"):
+        comparison_module._reason_schema_extra(
+            {"properties": {"error_code": "not an object"}}
+        )
+
+
+def test_the_input_and_result_hooks_still_refuse_a_shape_they_cannot_annotate() -> None:
+    """Extending both hooks must not have weakened their existing guards."""
+    with pytest.raises(TypeError, match="properties must be an object"):
+        comparison_module._input_schema_extra({})
+    with pytest.raises(TypeError, match="properties must be an object"):
+        comparison_module._result_schema_extra({})
+    with pytest.raises(TypeError, match="must be an object"):
+        comparison_module._result_schema_extra({"properties": {"reasons": {}}})
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_result_ordering_rules_stay_runtime_only(mode: str) -> None:
+    """Clauses CER-C1 and CER-C2, pinned as executable facts.
+
+    `validate_reasons` and `validate_declared_differences` both **reject** an
+    uncanonically ordered tuple. Neither array space is enumerable: the reason key
+    includes an open `ApproximationId`, and the difference key includes free-text
+    `detail`. So the published schema deliberately claims neither ordering, while
+    the deduplication half of both rules is published as `uniqueItems` -- exact
+    there, because each key is total over its record's whole content.
+    """
+    schema = _cmp_schema(ComparisonEligibilityResult, mode)
+
+    reasons_unsorted = _result_json(
+        outcome=ComparisonEligibilityOutcome.INELIGIBLE,
+        achieved_level=MISSING,
+        reasons=(_reason(LEVEL_UNSUPPORTED),),
+    )
+    reasons_unsorted["reasons"] = [
+        _cir_document(METHODOLOGY_MISMATCH),
+        _cir_document(DATASET_HASH_MISMATCH),
+    ]
+    assert not _cmp_accepts(ComparisonEligibilityResult, reasons_unsorted)
+    assert Draft202012Validator(schema).is_valid(reasons_unsorted)
+
+    differences_unsorted = _result_json(
+        outcome=ComparisonEligibilityOutcome.ELIGIBLE_WITH_DECLARED_DIFFERENCES,
+        declared_differences=(_difference(),),
+    )
+    differences_unsorted["declared_differences"] = [
+        {"category": "SLIPPAGE_MODELING", "detail": "Second."},
+        {"category": "FEE_MODELING", "detail": "First."},
+    ]
+    assert not _cmp_accepts(ComparisonEligibilityResult, differences_unsorted)
+    assert Draft202012Validator(schema).is_valid(differences_unsorted)
+
+
+def test_the_comparison_parity_correction_changes_no_canonical_byte() -> None:
+    """Schema metadata only: field order, dumps, and canonical bytes are fixed."""
+    assert list(ComparisonIneligibilityReason.model_fields) == [
+        "error_code",
+        "material",
+        "approximation_id",
+    ]
+    assert list(ComparisonEligibilityResult.model_fields) == [
+        "schema_version",
+        "outcome",
+        "requested_level",
+        "achieved_level",
+        "left",
+        "right",
+        "reasons",
+        "declared_differences",
+    ]
+    assert (
+        canonical_json_bytes(
+            _reason(ASSUMPTION_MISMATCH, material=ComparisonMaterial.UNIVERSE)
+        )
+        == b'{"error_code":"COMPARISON.ASSUMPTION_MISMATCH","material":"UNIVERSE"}'
+    )
+    assert canonical_json_bytes(_reason(LEVEL_UNSUPPORTED)) == (
+        b'{"error_code":"COMPARISON.LEVEL_UNSUPPORTED"}'
+    )

@@ -40,7 +40,10 @@ from crypto_lab.domain.capability_requirements import (
     ApproximationPolicy,
     CapabilityRequirement,
 )
-from crypto_lab.domain.comparison_levels import ComparisonLevel
+from crypto_lab.domain.comparison_levels import (
+    ComparisonLevel,
+    sorted_comparison_level_enum,
+)
 from crypto_lab.domain.diagnostics import ErrorCode
 from crypto_lab.domain.identifiers import (
     ApproximationId,
@@ -146,6 +149,134 @@ def _result_schema_extra(schema: JsonSchemaValue) -> None:
         if not isinstance(field_schema, dict):
             raise TypeError(f"compatibility result field {field!r} must be an object")
         field_schema["uniqueItems"] = True
+    _publish_outcome_shape(schema)
+
+
+def _publish_outcome_shape(schema: JsonSchemaValue) -> None:
+    """Publish ``validate_outcome_shape``'s four outcome-governed cardinalities.
+
+    Neither collection is optional -- specification section 11.5 keeps both
+    required -- so what varies is whether each is *empty*, and the outcome fixes
+    that. Pydantic emits no conditional at all, so the generated schema accepted
+    an ``UNAVAILABLE`` result carrying an approximation record, which section 13.4
+    forbids and which reads as a partially successful resolution.
+
+    Three ``if``/``then`` branches rather than four: the two negative outcomes take
+    the identical shape, so one ``enum`` guard covers both and there is no branch
+    that can drift from its twin. Each branch is separately removable, which is
+    what lets the mutation battery kill them one at a time.
+
+    ``maxItems: 0`` rather than ``const: []``: the sibling ``uniqueItems`` and
+    ``maxItems`` bounds stay in force either way, and an emptiness bound composes
+    with them instead of replacing the node.
+    """
+    schema.setdefault("allOf", []).extend(
+        (
+            {
+                "if": {
+                    "properties": {
+                        "outcome": {"const": CompatibilityOutcome.SUPPORTED.value}
+                    },
+                    "required": ["outcome"],
+                },
+                "then": {
+                    "properties": {
+                        "reasons": {"maxItems": 0},
+                        "approximations": {"maxItems": 0},
+                    }
+                },
+            },
+            {
+                "if": {
+                    "properties": {
+                        "outcome": {
+                            "const": (
+                                CompatibilityOutcome.SUPPORTED_WITH_APPROXIMATION.value
+                            )
+                        }
+                    },
+                    "required": ["outcome"],
+                },
+                "then": {
+                    "properties": {
+                        "reasons": {"maxItems": 0},
+                        "approximations": {"minItems": 1},
+                    }
+                },
+            },
+            {
+                "if": {
+                    "properties": {
+                        "outcome": {
+                            "enum": [
+                                CompatibilityOutcome.NOT_APPLICABLE.value,
+                                CompatibilityOutcome.UNAVAILABLE.value,
+                            ]
+                        }
+                    },
+                    "required": ["outcome"],
+                },
+                "then": {
+                    "properties": {
+                        "reasons": {"minItems": 1},
+                        "approximations": {"maxItems": 0},
+                    }
+                },
+            },
+        )
+    )
+
+
+def _reason_schema_extra(schema: JsonSchemaValue) -> None:
+    """Publish ``CompatibilityReason``'s two closed sets and its scope rule.
+
+    Three separate omissions are closed here, and all three are published **at
+    the field** rather than on the shared type. ``ErrorCode`` reaches the frozen
+    ``domain/diagnostic-v1.schema.json`` and ``CapabilityName`` reaches the frozen
+    ``protocol/adapter-descriptor-v1.schema.json``; ``capability_names.py`` carries
+    a docstring warning about exactly this hazard. Narrowing either type would
+    change already-released bytes.
+
+    The vocabulary enum duplicates a closed Python constant into permanently
+    published bytes, which is a real cost. It is taken because this record pins
+    ``capability_vocabulary_version`` to the literal ``capabilities/v1``: the
+    vocabulary is frozen *for this schema version* by the record's own field, and
+    a new version requires the reviewed migration section 13.1 mandates. So the
+    duplicated set cannot drift underneath the published contract.
+
+    Two ``if``/``then`` branches for the scope biconditional rather than
+    ``dependentRequired``, which keys on a property's presence and cannot express
+    "required exactly when a *sibling's value* falls in a set".
+    """
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        raise TypeError("compatibility reason schema properties must be an object")
+    error_code = properties.get("error_code")
+    capability = properties.get("capability")
+    if not isinstance(error_code, dict) or not isinstance(capability, dict):
+        raise TypeError("compatibility reason scope fields must be objects")
+    unscoped = sorted(_UNSCOPED_REASON_CODES)
+    scoped = sorted(COMPATIBILITY_REASON_CODES - _UNSCOPED_REASON_CODES)
+    error_code["enum"] = sorted(COMPATIBILITY_REASON_CODES)
+    capability["enum"] = list(CapabilityVocabulary.names)
+    schema.setdefault("allOf", []).extend(
+        (
+            {
+                "if": {
+                    "properties": {"error_code": {"enum": unscoped}},
+                    "required": ["error_code"],
+                },
+                "then": {"not": {"required": ["capability"]}},
+            },
+            {
+                "if": {
+                    "properties": {"error_code": {"enum": scoped}},
+                    "required": ["error_code"],
+                },
+                "then": {"required": ["capability"]},
+            },
+        )
+    )
 
 
 class CapabilitySupportKind(StrEnum):
@@ -221,12 +352,23 @@ class ApproximationDeclaration(CanonicalModel):
         # duplicates the runtime rejects; see the note on
         # `CapabilityDeclaration.limitations` for why this is field-level.
         #
-        # Only the uniqueness half is closed here. Draft 2020-12 has no ordering
-        # keyword, so `["LEVEL_2", "LEVEL_1"]` still validates against the schema
-        # and is still rejected at runtime. That residue is inexpressible rather
-        # than overlooked, and it is systemic across every sorted-validated field
-        # in the repository; it is recorded in the task ledger.
-        json_schema_extra={"uniqueItems": True},
+        # The sortedness half is closed by the `enum` beside it. The earlier comment
+        # here called that residue "inexpressible rather than overlooked" and was
+        # **wrong for this field**. Draft 2020-12 genuinely has no ordering keyword,
+        # but ordering over a *closed finite* element domain does not need one:
+        # `ComparisonLevel` has three members and this field is bounded at three with
+        # `uniqueItems`, so the runtime-accepted set is exactly the eight sorted
+        # unique subsets of a three-element set, and enumerating them is exact.
+        # `sorted_comparison_level_enum` derives those eight from the vocabulary, so
+        # the published set cannot drift from `validate_prevented_levels`.
+        #
+        # The claim was also not "systemic": it holds only where the element domain
+        # is unbounded. `CapabilityDeclaration.limitations` below holds `BoundedText`
+        # and remains a genuine runtime-only residual.
+        json_schema_extra={
+            "uniqueItems": True,
+            "enum": sorted_comparison_level_enum(),
+        },
     )
     adapter_version: SemanticVersion
 
@@ -273,7 +415,16 @@ class CompatibilityReason(CanonicalModel):
     ``error_code`` is closed to the eight outcome-reason rows of plan section 5.9.
     ``capability`` is state-governed in both directions: present exactly when the
     code is a property of one vocabulary member.
+
+    All three rules are **published** as well as enforced, through
+    ``_reason_schema_extra``. Before that hook the generated schema accepted any
+    ``ErrorCode``-shaped string, any capability-shaped name, and either scope in
+    either state.
     """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        json_schema_extra=_reason_schema_extra
+    )
 
     error_code: ErrorCode
     capability: CapabilityName | MISSING = MISSING  # type: ignore[valid-type]

@@ -351,12 +351,253 @@ def _mark_unique(schema: JsonSchemaValue, fields: tuple[str, ...]) -> None:
         field_schema["uniqueItems"] = True
 
 
+def _one_per_key(
+    field: str, key: str, values: tuple[str, ...], *, total: bool
+) -> JsonSchemaValue:
+    """Bound a collection to at most -- or exactly -- one entry per closed key.
+
+    A key-based cardinality rule is exactly expressible when the key domain is
+    closed, finite, **and small enough to enumerate**. All three conditions are
+    load-bearing: ``CompatibilityResult.reasons`` has a closed, finite key domain
+    (26 capabilities x 8 codes) and its *sortedness* is still inexpressible,
+    because enumerating the accepted arrays over a 208-member key space is not
+    tractable. ``ComparisonMaterial`` and ``DifferenceCategory`` have fourteen
+    members each, so one ``contains`` clause per member with its own
+    ``minContains``/``maxContains`` is both exact and small.
+
+    ``minContains`` is stated explicitly even where it takes its default of one:
+    the "at most one" form *needs* ``minContains: 0``, because the default would
+    otherwise make every category mandatory, and writing both forms the same way
+    keeps that difference visible rather than hidden in a default.
+
+    The open-key-domain siblings are deliberately not covered. ``approximations``
+    is unique by ``capability`` and by ``approximation_id``, both pattern-
+    constrained strings over an unbounded domain, so no finite enumeration exists
+    and the published schema does not claim those rules.
+    """
+    return {
+        "properties": {
+            field: {
+                "allOf": [
+                    {
+                        "contains": {
+                            "properties": {key: {"const": value}},
+                            "required": [key],
+                        },
+                        "minContains": 1 if total else 0,
+                        "maxContains": 1,
+                    }
+                    for value in values
+                ]
+            }
+        }
+    }
+
+
 def _input_schema_extra(schema: JsonSchemaValue) -> None:
     _mark_unique(schema, ("assumptions", "approximations", "declared_differences"))
+    # `validate_assumptions` requires every material exactly once, which is what
+    # makes the level check total: a missing material could otherwise skip a
+    # required comparison and fail open. `minItems`/`maxItems` of fourteen with
+    # `uniqueItems` did **not** express that -- two entries naming one material
+    # with different digests are distinct whole values, so a document repeating one
+    # material and omitting another passed the published schema and was rejected at
+    # runtime.
+    #
+    # Sortedness is deliberately absent from all three. These validators
+    # *normalize* by returning a sorted tuple rather than rejecting, so an unsorted
+    # array is legal input and a schema pinning the order would over-reject. That
+    # is the `Universe.instruments` asymmetry, not the `comparison_levels` one.
+    schema.setdefault("allOf", []).extend(
+        (
+            _one_per_key(
+                "assumptions",
+                "material",
+                tuple(member.value for member in ComparisonMaterial),
+                total=True,
+            ),
+            _one_per_key(
+                "declared_differences",
+                "category",
+                tuple(member.value for member in DifferenceCategory),
+                total=False,
+            ),
+        )
+    )
+
+
+def _reason_schema_extra(schema: JsonSchemaValue) -> None:
+    """Publish ``ComparisonIneligibilityReason``'s closed set and scope table.
+
+    ``error_code`` is published **at the field**: ``ErrorCode`` reaches the frozen
+    ``domain/diagnostic-v1.schema.json``, so narrowing the shared type would
+    change already-released bytes.
+
+    Three branches, one per row of ``validate_scope``'s table, each separately
+    removable so the mutation battery can kill them individually. The two scoped
+    rows are ``const`` guards on a single code; the third is an ``enum`` over the
+    remaining five, which together with the field ``enum`` partitions the closed
+    seven exhaustively.
+    """
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        raise TypeError("comparison reason schema properties must be an object")
+    error_code = properties.get("error_code")
+    if not isinstance(error_code, dict):
+        raise TypeError("comparison reason error_code must be an object")
+    error_code["enum"] = sorted(COMPARISON_REASON_CODES)
+    unscoped = sorted(
+        COMPARISON_REASON_CODES - {ASSUMPTION_MISMATCH, APPROXIMATION_EXCLUDES_LEVEL}
+    )
+    schema.setdefault("allOf", []).extend(
+        (
+            {
+                "if": {
+                    "properties": {"error_code": {"const": ASSUMPTION_MISMATCH}},
+                    "required": ["error_code"],
+                },
+                "then": {
+                    "required": ["material"],
+                    "not": {"required": ["approximation_id"]},
+                },
+            },
+            {
+                "if": {
+                    "properties": {
+                        "error_code": {"const": APPROXIMATION_EXCLUDES_LEVEL}
+                    },
+                    "required": ["error_code"],
+                },
+                "then": {
+                    "required": ["approximation_id"],
+                    "not": {"required": ["material"]},
+                },
+            },
+            {
+                "if": {
+                    "properties": {"error_code": {"enum": unscoped}},
+                    "required": ["error_code"],
+                },
+                "then": {
+                    "allOf": [
+                        {"not": {"required": ["material"]}},
+                        {"not": {"required": ["approximation_id"]}},
+                    ]
+                },
+            },
+        )
+    )
 
 
 def _result_schema_extra(schema: JsonSchemaValue) -> None:
     _mark_unique(schema, ("reasons", "declared_differences"))
+    _publish_eligibility_shape(schema)
+
+
+def _publish_eligibility_shape(schema: JsonSchemaValue) -> None:
+    """Publish ``validate_outcome_shape``'s state-governed shape.
+
+    ``achieved_level`` was correctly absent from ``required`` -- absence is legal
+    on ``INELIGIBLE`` -- but that permitted its absence *unconditionally* rather
+    than exactly in the state that permits it, and said nothing at all about its
+    *value*. The equality half matters on its own: an earlier sweep tested only
+    the field's absence and never a mismatch, so an eligible result claiming a
+    level it did not achieve validated against the published schema.
+
+    Level equality is expressible because ``ComparisonLevel`` is closed at three
+    members: one ``if``/``then`` per level pins ``achieved_level`` to the same
+    ``const`` the guard matched on ``requested_level``. Over an open domain this
+    would be the ``expires_at_utc``/``observed_at_utc`` case and inexpressible.
+
+    The ``ELIGIBLE`` branch reaches *into* the two nested ``ComparisonInput``
+    records, because ``declared`` in the validator is a disjunction over this
+    record's own ``declared_differences`` and both sides' ``approximations``. That
+    composes with the outer ``properties.left.$ref`` rather than replacing it:
+    JSON Schema keywords are conjunctive, so the reference's own contract still
+    applies. It is the one branch here that is not a plain sibling addition, and
+    it carries its own mutation for that reason.
+    """
+    eligible = [
+        ComparisonEligibilityOutcome.ELIGIBLE.value,
+        ComparisonEligibilityOutcome.ELIGIBLE_WITH_DECLARED_DIFFERENCES.value,
+    ]
+    no_approximations = {"properties": {"approximations": {"maxItems": 0}}}
+    an_approximation = {"properties": {"approximations": {"minItems": 1}}}
+    branches: list[JsonSchemaValue] = [
+        {
+            "if": {
+                "properties": {
+                    "outcome": {"const": ComparisonEligibilityOutcome.INELIGIBLE.value}
+                },
+                "required": ["outcome"],
+            },
+            "then": {
+                "properties": {"reasons": {"minItems": 1}},
+                "not": {"required": ["achieved_level"]},
+            },
+        },
+        {
+            "if": {
+                "properties": {"outcome": {"enum": eligible}},
+                "required": ["outcome"],
+            },
+            "then": {
+                "properties": {"reasons": {"maxItems": 0}},
+                "required": ["achieved_level"],
+            },
+        },
+        {
+            "if": {
+                "properties": {
+                    "outcome": {"const": ComparisonEligibilityOutcome.ELIGIBLE.value}
+                },
+                "required": ["outcome"],
+            },
+            "then": {
+                "properties": {
+                    "declared_differences": {"maxItems": 0},
+                    "left": no_approximations,
+                    "right": no_approximations,
+                }
+            },
+        },
+        {
+            "if": {
+                "properties": {
+                    "outcome": {
+                        "const": (
+                            ComparisonEligibilityOutcome.ELIGIBLE_WITH_DECLARED_DIFFERENCES.value
+                        )
+                    }
+                },
+                "required": ["outcome"],
+            },
+            "then": {
+                "anyOf": [
+                    {"properties": {"declared_differences": {"minItems": 1}}},
+                    {"properties": {"left": an_approximation}},
+                    {"properties": {"right": an_approximation}},
+                ]
+            },
+        },
+    ]
+    branches.extend(
+        {
+            "if": {
+                "properties": {
+                    "outcome": {"enum": eligible},
+                    "requested_level": {"const": level.value},
+                },
+                "required": ["outcome", "requested_level"],
+            },
+            "then": {
+                "required": ["achieved_level"],
+                "properties": {"achieved_level": {"const": level.value}},
+            },
+        }
+        for level in ComparisonLevel
+    )
+    schema.setdefault("allOf", []).extend(branches)
 
 
 class ComparisonAssumption(CanonicalModel):
@@ -632,7 +873,15 @@ class ComparisonIneligibilityReason(CanonicalModel):
     mismatch between two inputs is symmetric: recording "left" would make swapping
     the two arguments change the serialized reasons, which plan Task 6's
     permutation property and this task's item 6 both forbid.
+
+    Both rules are **published** as well as enforced, through
+    ``_reason_schema_extra``. Before that hook the generated schema accepted any
+    ``ErrorCode``-shaped string and either scope on any code.
     """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        json_schema_extra=_reason_schema_extra
+    )
 
     error_code: ErrorCode
     material: ComparisonMaterial | MISSING = MISSING  # type: ignore[valid-type]

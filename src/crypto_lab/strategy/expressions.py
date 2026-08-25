@@ -16,6 +16,7 @@ into a permanent ``content_hash``.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, ClassVar, Final, Literal, Self
@@ -169,6 +170,26 @@ _LITERAL_VALUE_BRANCHES: Final[dict[LiteralValueType, JsonSchemaValue]] = {
     },
     LiteralValueType.IDENTIFIER: _IDENTIFIER_SCHEMA,
 }
+
+
+def literal_value_branches() -> dict[LiteralValueType, JsonSchemaValue]:
+    """Return the exact per-``value_type`` value schema, as an independent copy.
+
+    Exposed so ``strategy/models.py`` can publish ``ParameterDefinition``'s
+    identical dispatch from this one table instead of restating it. The comment on
+    ``ParameterDefinition.validate_bounds`` already calls that rule "the same
+    exact-identity invariant ``LiteralExpression`` carries", so two copies would
+    be two statements of one contract -- and the drift would be invisible, because
+    each node would still validate its own documents correctly while disagreeing
+    with the other.
+
+    Copied rather than shared: the returned mapping is merged into a generated
+    schema, and handing out the module's own objects would let a caller that
+    mutates its schema in place reach ``LiteralExpression``'s published node.
+    """
+    return {
+        member: deepcopy(branch) for member, branch in _LITERAL_VALUE_BRANCHES.items()
+    }
 
 
 def _literal_schema_extra(schema: JsonSchemaValue) -> None:

@@ -592,3 +592,235 @@ def test_the_baseline_observation_document_is_valid_on_both_sides() -> None:
         schema = _observation_schema(mode)
         Draft202012Validator.check_schema(schema)
         Draft202012Validator(schema).validate(document)
+
+
+# --------------------------------------------------------------------------
+# Stage 4 runtime/schema parity closure -- the ``available`` <-> ``reason_code``
+# biconditional (clauses OBS-A1 and OBS-A2)
+#
+# `validate_observation` enforces the biconditional in both directions, and the
+# published schema declared neither direction: `reason_code` was correctly
+# absent from `required`, but its absence was permitted *unconditionally* rather
+# than exactly in the state that permits it. Stage 3 publishes this same shape by
+# hand -- `_diagnostic_schema_extra` (`domain/diagnostics.py:181-199`) and both
+# artifact-owner hooks (`artifacts/ownership.py:69-103`) -- so the mechanism and
+# the committed published-enforcement test both already exist here.
+#
+# `expires_at_utc > observed_at_utc` stays a runtime-only residual: it compares
+# two RFC-3339 instants drawn from an unbounded domain, and Draft 2020-12 has no
+# keyword relating two sibling values. Pinned below as an executable fact.
+# --------------------------------------------------------------------------
+
+_UNAVAILABLE_CODE = "CAPABILITY.RUNTIME_UNAVAILABLE"
+
+
+def _unavailable_document(**updates: object) -> dict[str, Any]:
+    """The complete valid *unavailable* baseline, the mirror of the available one."""
+    document = _observation_document(available=False, reason_code=_UNAVAILABLE_CODE)
+    document.update(updates)
+    return document
+
+
+def _observation_rejects(document: dict[str, Any]) -> bool:
+    """True when ordinary validated construction rejects the whole document."""
+    try:
+        RuntimeAvailabilityObservation.model_validate_json(json.dumps(document))
+    except ValidationError:
+        return True
+    return False
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_both_availability_baselines_are_accepted_on_every_side(mode: str) -> None:
+    """Non-vacuity: the two complete valid documents agree before any mutation."""
+    for document in (_observation_document(), _unavailable_document()):
+        RuntimeAvailabilityObservation.model_validate_json(json.dumps(document))
+        schema = _observation_schema(mode)
+        Draft202012Validator.check_schema(schema)
+        Draft202012Validator(schema).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_obs_a1_an_available_observation_may_not_carry_a_reason_code(
+    mode: str,
+) -> None:
+    """Clause OBS-A1. Runtime rejects it; the published schema must too."""
+    document = _observation_document(reason_code=_UNAVAILABLE_CODE)
+    assert _observation_rejects(document)
+    assert not Draft202012Validator(_observation_schema(mode)).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_obs_a2_an_unavailable_observation_must_carry_a_reason_code(
+    mode: str,
+) -> None:
+    """Clause OBS-A2. The other direction of the same biconditional."""
+    document = _observation_document(available=False)
+    assert "reason_code" not in document
+    assert _observation_rejects(document)
+    assert not Draft202012Validator(_observation_schema(mode)).is_valid(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_biconditional_is_published_as_two_separable_conditions(
+    mode: str,
+) -> None:
+    """Two branches, not one -- so removing either is caught on its own.
+
+    Asserted structurally as well as behaviourally: a single `oneOf` would pass
+    the two behaviour tests above while making the mutation battery unable to
+    kill one direction independently.
+    """
+    schema = _observation_schema(mode)
+    branches = schema["allOf"]
+    assert len(branches) == 2
+    conditions = [
+        branch["if"]["properties"]["available"]["const"] for branch in branches
+    ]
+    assert conditions == [True, False]
+    assert branches[0]["then"] == {"not": {"required": ["reason_code"]}}
+    assert branches[1]["then"] == {"required": ["reason_code"]}
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_reason_code_stays_optional_and_unnarrowed_at_the_property(mode: str) -> None:
+    """The condition is added; the property contract is untouched.
+
+    `reason_code` must stay out of `required` -- absence is legal in the
+    available state -- and its value schema must still be exactly the shared
+    `ErrorCode` reference, so nothing here narrows the frozen Stage 3 type.
+    """
+    schema = _observation_schema(mode)
+    assert "reason_code" not in schema["required"]
+    assert schema["properties"]["reason_code"] == {
+        "$ref": "#/$defs/ErrorCode",
+        "title": "Reason Code",
+    }
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_observation_hook_preserves_every_previously_emitted_keyword(
+    mode: str,
+) -> None:
+    """Additive, asserted keyword by keyword rather than by absence of failure."""
+    schema = _observation_schema(mode)
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["title"] == "RuntimeAvailabilityObservation"
+    assert schema["required"] == [
+        name for name in _EXPECTED_OBSERVATION_FIELDS if name != "reason_code"
+    ]
+    assert list(schema["properties"]) == list(_EXPECTED_OBSERVATION_FIELDS)
+    # the executable-path contract the previous correction published is intact
+    node = _executable_path_node(mode)
+    assert node["type"] == "string"
+    assert node["maxLength"] == MAX_EXECUTABLE_PATH_CHARACTERS
+
+
+def test_the_two_sibling_descriptor_schemas_gain_no_conditional() -> None:
+    """The hook is owned by one model; its two frozen Stage 3 housemates are not.
+
+    `EngineDescriptor` and `AdapterDescriptor` live in this module and render the
+    already-published `engine-descriptor-v1` and `adapter-descriptor-v1`. A hook
+    reached through a shared helper would move their bytes.
+    """
+    for model in (EngineDescriptor, AdapterDescriptor):
+        for mode in ("validation", "serialization"):
+            schema = model.model_json_schema(mode=mode)
+            for keyword in ("allOf", "if", "then", "else", "oneOf", "not"):
+                assert keyword not in schema, (model.__name__, mode, keyword)
+
+
+def test_the_temporal_ordering_rule_stays_a_runtime_only_residual() -> None:
+    """Clause OBS-C1, pinned as an executable fact rather than an assertion.
+
+    `expires_at_utc > observed_at_utc` relates two RFC-3339 instants over an
+    unbounded domain. Draft 2020-12 has no `$data` reference and no keyword that
+    compares two sibling values, so the published schema deliberately does not
+    claim this rule and runtime validation stays authoritative for it.
+    """
+    observed = _observation_document()["observed_at_utc"]
+    document = _observation_document(expires_at_utc=observed)
+    assert _observation_rejects(document)
+    for mode in ("validation", "serialization"):
+        assert Draft202012Validator(_observation_schema(mode)).is_valid(document)
+
+
+def test_the_observation_correction_changes_no_canonical_byte() -> None:
+    """Schema metadata only: every valid record dumps and hashes as before."""
+    available = _observation()
+    unavailable = RuntimeAvailabilityObservation.model_validate_json(
+        json.dumps(_unavailable_document())
+    )
+    assert canonical_json_bytes(available) == (
+        b'{"adapter_name":"adapter.alpha","adapter_version":"1.0.0",'
+        b'"availability_observation_id":'
+        b'"avail_2c4d6e80-1f3a-4b5c-9d8e-7f6a5b4c3d2e",'
+        b'"available":true,"credentials_required":false,'
+        b'"executable_hash":"' + b"a" * 64 + b'",'
+        b'"executable_path":"C:/adapters/alpha/adapter.exe",'
+        b'"expires_at_utc":"2026-08-24T13:00:00Z","network_required":false,'
+        b'"observed_at_utc":"2026-08-24T12:00:00Z","operating_system":"WINDOWS",'
+        b'"runtime_version":"3.12.13","schema_version":"1.0.0"}'
+    )
+    assert list(available.model_dump(mode="json")) == [
+        name for name in _EXPECTED_OBSERVATION_FIELDS if name != "reason_code"
+    ]
+    assert unavailable.model_dump(mode="json")["reason_code"] == _UNAVAILABLE_CODE
+    assert list(RuntimeAvailabilityObservation.model_fields) == list(
+        _EXPECTED_OBSERVATION_FIELDS
+    )
+
+
+def test_the_utc_calendar_validity_gap_is_a_frozen_stage_three_residual() -> None:
+    """A real *expressible* mismatch this correction deliberately does **not** close.
+
+    `parse_utc` rejects an impossible calendar date; the published `UtcDateTime`
+    pattern is `[0-9]{4}-[0-9]{2}-[0-9]{2}`, so `2026-02-30`, `2026-13-01`,
+    `2026-04-31`, and a non-leap `2025-02-29` all validate against the schema and
+    fail at runtime. A calendar-aware pattern would express it exactly, so this is
+    **not** an inexpressibility -- and it is recorded as an open item rather than
+    filed under one.
+
+    It is left open for two reasons, both stated so a later task cannot read this
+    as an oversight:
+
+    1. **The rule belongs to the shared type, and that type is already
+       released.** `$defs/UtcDateTime` appears in `datasets/dataset-descriptor-v1`,
+       `datasets/dataset-partition-v1`, and `domain/diagnostic-v1` -- three frozen
+       Stage 3 `$id`s. The natural fix is one `WithJsonSchema` in
+       `domain/time.py`, which would change released bytes for all three.
+    2. **A Stage-4-only field-local fix would fork the contract.** Publishing a
+       calendar-aware pattern on the five Stage 4 date fields while three released
+       schemas keep the loose one would give one type two published grammars, and
+       would restate Gregorian leap-year arithmetic as a regex in permanently
+       published bytes -- a second implementation of calendar logic whose only
+       possible failure mode is over-rejecting a valid instant.
+
+    That makes this the same class as the `ProcessConfig.validate_heartbeat_ratio`
+    residual: a finitely expressible rule absent from *already-committed* bytes,
+    needing its own reviewed versioned-schema decision rather than being folded
+    into this correction. Pinned here as an executable fact, so the day that
+    decision is taken this test is the one that has to change.
+    """
+    for impossible in (
+        "2026-02-30T00:00:00Z",
+        "2026-13-01T00:00:00Z",
+        "2026-04-31T00:00:00Z",
+        "2025-02-29T00:00:00Z",
+    ):
+        document = _observation_document(observed_at_utc=impossible)
+        assert _observation_rejects(document), impossible
+        for mode in ("validation", "serialization"):
+            assert Draft202012Validator(_observation_schema(mode)).is_valid(document), (
+                impossible
+            )
+    # A genuine leap day is accepted on both sides, so the gap is one-directional
+    # and the published contract is weaker rather than merely different.
+    leap = _observation_document(
+        observed_at_utc="2024-02-29T00:00:00Z",
+        expires_at_utc="2024-03-01T00:00:00Z",
+    )
+    RuntimeAvailabilityObservation.model_validate_json(json.dumps(leap))
+    for mode in ("validation", "serialization"):
+        Draft202012Validator(_observation_schema(mode)).validate(leap)

@@ -16,9 +16,10 @@ from collections.abc import Mapping
 from decimal import Decimal
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Annotated, Literal, Self, cast
+from typing import Annotated, ClassVar, Literal, Self, cast
 
 from pydantic import (
+    ConfigDict,
     Field,
     StringConstraints,
     WithJsonSchema,
@@ -27,6 +28,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic.experimental.missing_sentinel import MISSING
+from pydantic.json_schema import JsonSchemaValue
 
 from crypto_lab.domain.base import CanonicalModel
 from crypto_lab.domain.capability_names import CapabilityName
@@ -50,6 +52,7 @@ from crypto_lab.strategy.expressions import (
     Expression,
     LiteralValue,
     LiteralValueType,
+    literal_value_branches,
 )
 
 MAX_UNIVERSE_INSTRUMENTS = 256
@@ -146,10 +149,102 @@ def _extension_key(
 
 
 class Direction(StrEnum):
-    """Declared trade direction. Initial policy accepts only `LONG`."""
+    """Declared trade direction. Initial policy accepts only `LONG`.
+
+    Both members are retained on the *type* on purpose. The policy that narrows
+    the accepted set to `LONG` belongs to `StrategySpec.direction`, which
+    publishes `const: "LONG"` at the field, so the vocabulary stays available for
+    a future reviewed version rather than being deleted from the domain.
+    """
 
     LONG = "LONG"
     SHORT = "SHORT"
+
+
+_NUMERIC_PARAMETER_TYPES = (LiteralValueType.INTEGER, LiteralValueType.DECIMAL)
+
+
+def _extension_schema_extra(schema: JsonSchemaValue) -> None:
+    """Publish `validate_effects_agree`'s lifecycle-to-economic implication.
+
+    One `if`/`then` over two closed vocabularies. Pydantic emits no conditional,
+    so the generated schema accepted a lifecycle-hooks-only extension declaring
+    that it prevents parity -- a self-contradictory record that reaches both
+    `strategy-spec-v1` and `strategy-version-v1` through `$defs`.
+    """
+    schema.setdefault("allOf", []).append(
+        {
+            "if": {
+                "properties": {
+                    "lifecycle_effect": {
+                        "const": ExtensionLifecycleEffect.LIFECYCLE_HOOKS_ONLY.value
+                    }
+                },
+                "required": ["lifecycle_effect"],
+            },
+            "then": {
+                "properties": {
+                    "economic_effect": {"const": ExtensionEconomicEffect.NONE.value}
+                }
+            },
+        }
+    )
+
+
+def _parameter_schema_extra(schema: JsonSchemaValue) -> None:
+    """Publish `validate_bounds`' type dispatch and its bounds-only-for-numerics rule.
+
+    `LiteralExpression` publishes the identical dispatch as five `if`/`then` pairs
+    in `expressions.py`, and `validate_bounds`' own comment calls this "the same
+    exact-identity invariant `LiteralExpression` carries" -- yet
+    `ParameterDefinition` emitted no `allOf` at all, so a `STRING` parameter
+    carrying an integer value validated against the published schema.
+
+    The branch table is `literal_value_branches()`, the expression module's own,
+    rather than a copy. All three of `value`, `minimum`, and `maximum` are
+    constrained, because the validator dispatches all three through one table.
+
+    The bound comparisons themselves -- `minimum <= maximum` and
+    `minimum <= value <= maximum` -- are **not** published: they relate two
+    numbers over an unbounded domain and Draft 2020-12 has no keyword for that.
+    Recorded as a residual rather than approximated, because any weaker numeric
+    bound would reject valid parameters.
+    """
+    branches: list[JsonSchemaValue] = [
+        {
+            "if": {
+                "properties": {"value_type": {"const": member.value}},
+                "required": ["value_type"],
+            },
+            "then": {
+                "properties": {"value": branch, "minimum": branch, "maximum": branch}
+            },
+        }
+        for member, branch in literal_value_branches().items()
+    ]
+    branches.append(
+        {
+            "if": {
+                "properties": {
+                    "value_type": {
+                        "enum": [
+                            member.value
+                            for member in LiteralValueType
+                            if member not in _NUMERIC_PARAMETER_TYPES
+                        ]
+                    }
+                },
+                "required": ["value_type"],
+            },
+            "then": {
+                "allOf": [
+                    {"not": {"required": ["minimum"]}},
+                    {"not": {"required": ["maximum"]}},
+                ]
+            },
+        }
+    )
+    schema.setdefault("allOf", []).extend(branches)
 
 
 class ExtensionLifecycleEffect(StrEnum):
@@ -180,6 +275,10 @@ class EngineExtensionDeclaration(CanonicalModel):
 
     Exactly the seven fields of specification section 12.6, in that order.
     """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        json_schema_extra=_extension_schema_extra
+    )
 
     adapter_name: NormalizedIdentifier
     extension_id: NormalizedIdentifier
@@ -260,6 +359,10 @@ class ParameterDefinition(CanonicalModel):
     dispatch on it through the same literal contract, and `ValidationInfo.data`
     carries only the fields validated before them.
     """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        json_schema_extra=_parameter_schema_extra
+    )
 
     value_type: LiteralValueType
     value: LiteralValue
@@ -370,7 +473,29 @@ class RuleDefinition(CanonicalModel):
 
 class SizingIntent(CanonicalModel):
     method: SizingMethod
-    fraction: PositiveDecimal
+    fraction: Annotated[
+        PositiveDecimal,
+        Field(
+            # `validate_fraction_is_a_fraction` rejects anything above one, and the
+            # published node was the bare `PositiveDecimal` reference, so `"2"`
+            # validated against the schema. The JSON boundary makes this exactly
+            # expressible: `POSITIVE_DECIMAL_PATTERN` forbids a leading zero and
+            # requires any fractional part to end in `[1-9]`, so the canonical
+            # spellings of a value in `(0, 1]` are exactly `"1"` and `0.<digits
+            # ending in [1-9]>`. Nothing else the runtime accepts is excluded, and
+            # `"1"` -- the inclusive boundary -- is admitted by the first alternative.
+            #
+            # Inside `allOf` rather than as a sibling `pattern`: the inherited `$ref`
+            # already carries `POSITIVE_DECIMAL_PATTERN` and one object cannot hold
+            # two `pattern` keywords, so a sibling would silently replace the
+            # inherited one. `allOf` composes with it instead, and the `(?![\s\S])`
+            # terminator matches `exact_string_schema`'s idiom so `$` cannot match
+            # before a trailing newline.
+            json_schema_extra={
+                "allOf": [{"pattern": r"^(?:1|0\.[0-9]*[1-9])(?![\s\S])"}]
+            },
+        ),
+    ]
 
     @model_validator(mode="after")
     def validate_fraction_is_a_fraction(self) -> Self:
@@ -386,8 +511,35 @@ class RiskAssumptions(CanonicalModel):
     rejected here rather than merely described.
     """
 
-    leverage: PositiveDecimal
-    shorting_allowed: bool
+    leverage: Annotated[
+        PositiveDecimal,
+        Field(
+            # `validate_safety_boundaries` rejects any leverage other than one, and
+            # the published node was the bare `PositiveDecimal` reference. The
+            # JSON-accepted set is exactly the single string `"1"`: every other
+            # spelling of one -- `"1.0"`, `"1.00"`, `"01"`, `"1E+0"` -- is rejected by
+            # `POSITIVE_DECIMAL_PATTERN` before the validator runs, and
+            # `format_decimal` collapses every Python-mode spelling to `"1"` on
+            # serialization. So `const: "1"` over-rejects nothing.
+            #
+            # `"1"` and never `"1.0"`, and never a JSON number: the field is a
+            # canonical decimal *string*, and a numeric `const` would reject every
+            # document the runtime accepts. Published at the field because
+            # `PositiveDecimal` is a `$defs` entry in the already-released
+            # `domain/price-v1.schema.json`.
+            json_schema_extra={"const": "1"},
+        ),
+    ]
+    shorting_allowed: Annotated[
+        bool,
+        Field(
+            # A single-field constant a validator enforced and the schema published
+            # as a bare `{"type": "boolean"}` -- indistinguishable in kind from
+            # `RefExpression.bars_ago` lacking `minimum: 0`, which the previous
+            # correction closed the same way.
+            json_schema_extra={"const": False},
+        ),
+    ]
 
     @model_validator(mode="after")
     def validate_safety_boundaries(self) -> Self:
@@ -430,8 +582,36 @@ class StrategySpec(CanonicalModel):
     display_name: BoundedLabel
     description: BoundedText
     strategy_family: NormalizedIdentifier
-    market_type: MarketType
-    direction: Direction
+    market_type: Annotated[
+        MarketType,
+        Field(
+            # `validate_market_type_policy` accepts SPOT only, and the published
+            # field emitted the full four-member `MarketType`, so `FUTURES`
+            # validated against a schema whose runtime rejects it with
+            # `STRATEGY.POLICY_FORBIDDEN_MARKET`. This is a safety boundary, so the
+            # published contract is narrowed to match rather than the runtime widened.
+            #
+            # Published at the **field**, never on the type. `MarketType` is a
+            # `$defs` entry in the already-released
+            # `domain/instrument-ref-v1.schema.json` and
+            # `datasets/dataset-descriptor-v1.schema.json`; narrowing the type would
+            # change released bytes for two live `$id`s. The domain vocabulary also
+            # stays complete for a future reviewed version.
+            json_schema_extra={"const": MarketType.SPOT.value},
+        ),
+    ]
+    direction: Annotated[
+        Direction,
+        Field(
+            # `validate_direction_policy` accepts LONG only. `Direction`'s own
+            # published description already said "Initial policy accepts only
+            # `LONG`" while its `enum` contradicted it, so the schema asserted one
+            # thing in prose and the opposite in a keyword. Field-local for the same
+            # reason as `market_type`: the type is the domain vocabulary, the field
+            # is this version's policy.
+            json_schema_extra={"const": Direction.LONG.value},
+        ),
+    ]
     timeframe: Timeframe
     universe: Universe
     required_capabilities: tuple[CapabilityRequirement, ...] = Field(

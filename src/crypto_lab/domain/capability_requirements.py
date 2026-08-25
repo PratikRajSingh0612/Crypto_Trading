@@ -15,7 +15,10 @@ from pydantic import Field, field_validator
 
 from crypto_lab.domain.base import CanonicalModel
 from crypto_lab.domain.capability_names import CapabilityName
-from crypto_lab.domain.comparison_levels import ComparisonLevel
+from crypto_lab.domain.comparison_levels import (
+    ComparisonLevel,
+    sorted_comparison_level_enum,
+)
 
 MAX_REQUIREMENT_COMPARISON_LEVELS = 3
 
@@ -69,11 +72,25 @@ class CapabilityRequirement(CanonicalModel):
         # in both render modes. Same shape as the `capabilities/models.py`
         # correction it completes.
         #
-        # Only the uniqueness half is closed. Draft 2020-12 has no ordering keyword,
-        # so `["LEVEL_2", "LEVEL_1"]` still validates against the schema and is still
-        # rejected here. That residue is inexpressible rather than overlooked, and it
-        # is recorded in the task ledger.
-        json_schema_extra={"uniqueItems": True},
+        # The sortedness half is closed by the `enum` beside it, and the earlier
+        # comment here -- which called that residue "inexpressible rather than
+        # overlooked" -- was **wrong for this field**. The general claim it made is
+        # true: Draft 2020-12 has no ordering keyword. But ordering over a *closed
+        # finite* element domain does not need one. `ComparisonLevel` has exactly
+        # three members and this field is bounded at three with `uniqueItems`, so the
+        # runtime-accepted set is the sorted unique subsets of a three-element set --
+        # exactly eight arrays -- and enumerating them is exact rather than
+        # approximate. `sorted_comparison_level_enum` derives those eight from the
+        # vocabulary itself, so they cannot drift from it.
+        #
+        # The general claim still governs where the element domain is unbounded:
+        # `CapabilityDeclaration.limitations` holds `BoundedText` and stays a
+        # runtime-only residual. That asymmetry is the point, and it is why one
+        # sentence must not be written over both fields.
+        json_schema_extra={
+            "uniqueItems": True,
+            "enum": sorted_comparison_level_enum(),
+        },
     )
 
     @field_validator("comparison_levels")
