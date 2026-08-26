@@ -12,6 +12,10 @@ rather than routed through union validation. A ``STRING`` literal whose text is
 that tries decimal first, and a ``DECIMAL`` literal would validate as ``str``
 under one that tries ``str`` first -- either way putting the wrong Python type
 into a permanent ``content_hash``.
+
+The recursive union's *published* projection is dispatched explicitly too, for
+a different reason -- see ``_ConditionalDispatch``. Pydantic's runtime tagged
+union is untouched by that; only the emitted JSON Schema changes.
 """
 
 from __future__ import annotations
@@ -19,12 +23,13 @@ from __future__ import annotations
 from copy import deepcopy
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, ClassVar, Final, Literal, Self
+from typing import Annotated, Any, ClassVar, Final, Literal, Self, get_args
 
 from pydantic import (
     AfterValidator,
     ConfigDict,
     Field,
+    GetJsonSchemaHandler,
     PlainSerializer,
     PlainValidator,
     TypeAdapter,
@@ -422,6 +427,131 @@ def _bound_expression_depth[NodeT: CanonicalModel](node: NodeT) -> NodeT:
     return node
 
 
+def _operation_of(model: type[CanonicalModel]) -> str:
+    """Read a node's ``op`` constant off its own ``Literal`` annotation.
+
+    ``model_fields.get`` rather than indexing, so a node added without an ``op``
+    field fails with this function's own message instead of a bare ``KeyError``.
+    """
+    field = model.model_fields.get("op")
+    arguments = get_args(field.annotation) if field is not None else ()
+    if len(arguments) != 1 or type(arguments[0]) is not str:
+        raise TypeError(f"{model.__name__} must declare exactly one Literal op")
+    return arguments[0]
+
+
+class _ConditionalDispatch:
+    """Publish the recursive union as shallow ``if``/``then`` dispatch on ``op``.
+
+    Pydantic emits a tagged union as a 21-member ``oneOf`` beside an OpenAPI
+    ``discriminator``. ``discriminator`` is not a Draft 2020-12 keyword, so a
+    conformant validator ignores it and must evaluate the alternatives to decide
+    ``oneOf``'s exactly-one rule -- and fourteen of the twenty-one branches share
+    the recursive ``left``/``right`` shape, so a *rejected* alternative still
+    descends into the shared children before it can fail. Two independent
+    mechanisms make that exponential, and they govern different documents:
+
+    * Alternatives *before* the matching one are evaluated with ``iter_errors``,
+      which collects every error and therefore cannot short-circuit. Any
+      operator with earlier same-shape branches pays this whatever the key
+      order: ``crosses_below`` chains cost 0.64 s, 5.7 s, and over 20 s at
+      depths 3, 4, and 5 even against the unsorted emitted dict.
+    * Alternatives *after* it are scanned with short-circuiting ``is_valid``,
+      which is cheap only when ``op`` is reached before a recursive property.
+      The published bytes come from ``canonical_json_bytes``, which sorts keys
+      and so orders ``left`` ahead of ``op`` -- making that scan recurse too.
+      This is what catches ``add``, the first binary branch and the one operator
+      with no earlier same-shape alternative: 0.18 s at depth 3 and 2.6 s at
+      depth 4 against the published bytes, against 0.007 s unsorted.
+
+    ``MAX_EXPRESSION_DEPTH`` permits depth 24, which the published bytes cannot
+    decide at all, and an ordinary six-operator rule -- ``((a+b)*(c-d))/(e+f) >
+    1.5``, 250 bytes, nesting depth 5 -- takes 45 s. Specification section 12.4
+    makes the generated schema the normative union definition, so a projection a
+    consumer cannot evaluate does not discharge that role, and publishing it
+    invites a denial of service against anyone validating untrusted strategy
+    input against ``schemas/``, which ships in the wheel and the sdist.
+
+    The replacement publishes the identical closed contract: ``op`` is required
+    and drawn from the exact twenty-one operations, and each operation carries
+    one shallow condition selecting one branch. At most one condition can match,
+    only the matching ``then`` recurses, and no alternative ever visits a child
+    expression, so cost is linear in the document. Accept set, runtime tagged
+    union, and every canonical byte are unchanged.
+
+    Linear is not free: the measured constant is roughly 12 microseconds per
+    byte, so the exposure is reduced by about three orders of magnitude rather
+    than removed, and an external consumer of ``schemas/`` should still cap
+    input size. The in-project path is already capped -- ``yaml_source``'s
+    ``MAX_SOURCE_BYTES`` rejects a source over 262,144 bytes before any model
+    sees it.
+
+    ``additionalProperties`` is deliberately absent from the root: each branch
+    model already carries its own ``extra="forbid"`` closure, and closing the
+    root would reject the ``left``, ``right``, ``operand``, and ``operands``
+    fields the root itself does not enumerate. Unknown operations are stopped by
+    the exact root ``enum`` and missing ones by the exact root ``required``.
+
+    The table is derived, never restated: operations come from each node model's
+    own ``Literal``, and the branch references are the ones pydantic just
+    emitted. Reusing the emitted strings matters -- at hook time they are
+    internal defs-refs that pydantic remaps and garbage-collects afterwards, so a
+    hand-built ``#/$defs/...`` would dangle and its branch would be collected
+    away. ``discriminator`` is retained verbatim as a tooling annotation; nothing
+    about validation or tractability depends on it.
+    """
+
+    def __get_pydantic_json_schema__(
+        self,
+        # `Any` rather than `pydantic_core.CoreSchema`: `pydantic_core` is not
+        # one of the roots `test_stage3_boundaries` admits, and re-importing the
+        # name through `pydantic.json_schema` is an implicit re-export that
+        # strict mypy rejects. The value is passed straight to `handler`.
+        core_schema: Any,
+        handler: GetJsonSchemaHandler,
+    ) -> JsonSchemaValue:
+        emitted = handler(core_schema)
+        # Replacing a schema means discarding whatever the handler produced, so
+        # the shape being discarded is pinned first. Without this, a future
+        # pydantic that added a sibling keyword at the union node, or a
+        # constraint alongside a branch ``$ref`` -- which Draft 2020-12 does
+        # apply -- would have it silently dropped from a normative contract.
+        if (
+            set(emitted) != {"oneOf", "discriminator"}
+            or emitted["discriminator"].get("propertyName") != "op"
+            or any(set(branch) != {"$ref"} for branch in emitted["oneOf"])
+        ):
+            raise RuntimeError("the emitted expression union is not a bare oneOf")
+        mapping = emitted["discriminator"]["mapping"]
+        branches = [branch["$ref"] for branch in emitted["oneOf"]]
+        operations = [_operation_of(model) for model in _NODE_MODELS]
+        if len(set(operations)) != len(operations) or set(operations) != set(mapping):
+            raise RuntimeError("expression operations must map one to one onto ops")
+        references = [mapping[operation] for operation in operations]
+        if (
+            len(references) != len(branches)
+            or len(set(references)) != len(references)
+            or set(references) != set(branches)
+        ):
+            raise RuntimeError("expression branches must map one to one onto models")
+        return {
+            "type": "object",
+            "required": ["op"],
+            "properties": {"op": {"enum": operations}},
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"op": {"const": operation}},
+                        "required": ["op"],
+                    },
+                    "then": {"$ref": reference},
+                }
+                for operation, reference in zip(operations, references, strict=True)
+            ],
+            "discriminator": emitted["discriminator"],
+        }
+
+
 type ExpressionNode = (
     LiteralExpression
     | RefExpression
@@ -449,6 +579,10 @@ type Expression = Annotated[
     ExpressionNode,
     Field(discriminator="op"),
     AfterValidator(_bound_expression_depth),
+    # JSON-schema metadata only. It carries no ``__get_pydantic_core_schema__``,
+    # so the validator, the serializer, and every runtime diagnostic are the
+    # ones the three annotations above already define.
+    _ConditionalDispatch(),
 ]
 
 _NODE_MODELS: Final = (
