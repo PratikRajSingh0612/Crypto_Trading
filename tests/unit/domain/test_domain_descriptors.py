@@ -22,6 +22,7 @@ import pytest
 from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
+import crypto_lab.domain.time as time_module
 from crypto_lab.adapters import descriptors as adapter_descriptors
 from crypto_lab.domain import capability_names
 from crypto_lab.domain import descriptors as domain_descriptors
@@ -772,55 +773,107 @@ def test_the_observation_correction_changes_no_canonical_byte() -> None:
     )
 
 
-def test_the_utc_calendar_validity_gap_is_a_frozen_stage_three_residual() -> None:
-    """A real *expressible* mismatch this correction deliberately does **not** close.
+_IMPOSSIBLE_INSTANTS = (
+    "0000-01-01T00:00:00Z",
+    "2026-00-01T00:00:00Z",
+    "2026-13-01T00:00:00Z",
+    "2026-01-00T00:00:00Z",
+    "2026-01-32T00:00:00Z",
+    "2026-02-29T00:00:00Z",
+    "2025-02-29T00:00:00Z",
+    "2026-02-30T00:00:00Z",
+    "2026-04-31T00:00:00Z",
+    "1900-02-29T00:00:00Z",
+    "2100-02-29T00:00:00Z",
+    "2026-01-01T24:00:00Z",
+    "2026-01-01T00:60:00Z",
+    "2026-01-01T00:00:60Z",
+    "2026-01-01T99:99:99Z",
+)
 
-    `parse_utc` rejects an impossible calendar date; the published `UtcDateTime`
-    pattern is `[0-9]{4}-[0-9]{2}-[0-9]{2}`, so `2026-02-30`, `2026-13-01`,
-    `2026-04-31`, and a non-leap `2025-02-29` all validate against the schema and
-    fail at runtime. A calendar-aware pattern would express it exactly, so this is
-    **not** an inexpressibility -- and it is recorded as an open item rather than
-    filed under one.
 
-    It is left open for two reasons, both stated so a later task cannot read this
-    as an oversight:
+@pytest.mark.parametrize("instant", _IMPOSSIBLE_INSTANTS)
+@pytest.mark.parametrize("field", ["observed_at_utc", "expires_at_utc"])
+def test_the_observation_schema_rejects_an_impossible_instant(
+    field: str, instant: str
+) -> None:
+    """The Stage 4 half of the `UtcDateTime` calendar gap, now closed.
 
-    1. **The rule belongs to the shared type, and that type is already
-       released.** `$defs/UtcDateTime` appears in `datasets/dataset-descriptor-v1`,
-       `datasets/dataset-partition-v1`, and `domain/diagnostic-v1` -- three frozen
-       Stage 3 `$id`s. The natural fix is one `WithJsonSchema` in
-       `domain/time.py`, which would change released bytes for all three.
-    2. **A Stage-4-only field-local fix would fork the contract.** Publishing a
-       calendar-aware pattern on the five Stage 4 date fields while three released
-       schemas keep the loose one would give one type two published grammars, and
-       would restate Gregorian leap-year arithmetic as a regex in permanently
-       published bytes -- a second implementation of calendar logic whose only
-       possible failure mode is over-rejecting a valid instant.
+    `parse_utc` routes through `datetime.fromisoformat`, so it has always rejected
+    an impossible calendar date and an out-of-range clock, while the legacy
+    `UtcDateTime` projection published only `[0-9]{2}` runs and accepted both.
+    That projection is frozen into three released Stage 3 `$id`s, so it could not
+    be tightened in place; both of this record's timestamps now carry the
+    forward-only `CalendarValidUtcDateTime` view instead, and the published
+    grammar agrees with the runtime in **both** render modes.
 
-    That makes this the same class as the `ProcessConfig.validate_heartbeat_ratio`
-    residual: a finitely expressible rule absent from *already-committed* bytes,
-    needing its own reviewed versioned-schema decision rather than being folded
-    into this correction. Pinned here as an executable fact, so the day that
-    decision is taken this test is the one that has to change.
+    The legacy projection stays permissive on purpose -- that is what keeps the
+    eleven Stage 3 files byte-identical -- and it is pinned as a frozen residual
+    by `test_the_legacy_projection_stays_a_frozen_stage_three_residual` in
+    `tests/unit/domain/test_time.py`.
     """
-    for impossible in (
-        "2026-02-30T00:00:00Z",
-        "2026-13-01T00:00:00Z",
-        "2026-04-31T00:00:00Z",
-        "2025-02-29T00:00:00Z",
-    ):
-        document = _observation_document(observed_at_utc=impossible)
-        assert _observation_rejects(document), impossible
-        for mode in ("validation", "serialization"):
-            assert Draft202012Validator(_observation_schema(mode)).is_valid(document), (
-                impossible
-            )
-    # A genuine leap day is accepted on both sides, so the gap is one-directional
-    # and the published contract is weaker rather than merely different.
-    leap = _observation_document(
-        observed_at_utc="2024-02-29T00:00:00Z",
-        expires_at_utc="2024-03-01T00:00:00Z",
-    )
-    RuntimeAvailabilityObservation.model_validate_json(json.dumps(leap))
+    document = _observation_document(**{field: instant})
+    assert _observation_rejects(document), instant
     for mode in ("validation", "serialization"):
-        Draft202012Validator(_observation_schema(mode)).validate(leap)
+        assert not Draft202012Validator(_observation_schema(mode)).is_valid(document), (
+            mode,
+            instant,
+        )
+
+
+def test_the_observation_schema_over_rejects_no_real_instant() -> None:
+    """The only failure mode a hand-written calendar regex has. Every one of
+    these is a real instant the runtime accepts, so the schema must too."""
+    pairs = (
+        ("2024-02-29T00:00:00Z", "2024-03-01T00:00:00Z"),
+        ("2000-02-29T00:00:00Z", "2000-03-01T00:00:00Z"),
+        ("0004-02-29T00:00:00Z", "0004-03-01T00:00:00Z"),
+        ("0001-01-01T00:00:00Z", "0001-01-02T00:00:00Z"),
+        ("2026-02-28T23:59:59Z", "2026-03-01T00:00:00Z"),
+        ("2026-04-30T00:00:00.000001Z", "2026-05-01T00:00:00Z"),
+        ("9999-12-30T00:00:00Z", "9999-12-31T23:59:59Z"),
+    )
+    for observed, expires in pairs:
+        document = _observation_document(
+            observed_at_utc=observed, expires_at_utc=expires
+        )
+        RuntimeAvailabilityObservation.model_validate_json(json.dumps(document))
+        for mode in ("validation", "serialization"):
+            Draft202012Validator(_observation_schema(mode)).validate(document)
+
+
+def _assert_forward_view_definition(schema: dict[str, Any]) -> None:
+    """The named alias is hoisted to one shared `$defs` entry, exactly as the
+    legacy `$defs/UtcDateTime` was, so the whole grammar is asserted once."""
+    definition = schema["$defs"]["CalendarValidUtcDateTime"]
+    assert set(definition) == {"allOf"}
+    branches = definition["allOf"]
+    assert len(branches) == 3
+    assert branches[0] == {
+        "type": "string",
+        "format": "date-time",
+        "pattern": time_module._UTC_SCHEMA_PATTERN,
+    }
+    assert branches[1] == {
+        "type": "string",
+        "pattern": time_module._CALENDAR_DATE_PREFIX_PATTERN,
+    }
+    assert branches[2] == {
+        "type": "string",
+        "pattern": time_module._CLOCK_TIME_PREFIX_PATTERN,
+    }
+    # The permissive shared entry is gone from this schema entirely, so no other
+    # field can still be reaching the loose grammar.
+    assert "UtcDateTime" not in schema["$defs"]
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+@pytest.mark.parametrize("field", ["observed_at_utc", "expires_at_utc"])
+def test_both_observation_timestamps_publish_the_forward_view(
+    field: str, mode: str
+) -> None:
+    """Structural, so a field silently reverted to the legacy alias is caught
+    even if some other clause happens to reject the sample documents."""
+    schema = _observation_schema(mode)
+    assert schema["properties"][field] == {"$ref": "#/$defs/CalendarValidUtcDateTime"}
+    _assert_forward_view_definition(schema)

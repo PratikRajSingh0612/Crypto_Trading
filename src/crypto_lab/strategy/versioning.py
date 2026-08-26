@@ -33,7 +33,7 @@ from crypto_lab.domain.hashing import (
     profile_hash,
 )
 from crypto_lab.domain.identifiers import Sha256, StrategyId, StrategyVersionId
-from crypto_lab.domain.time import UtcDateTime
+from crypto_lab.domain.time import CalendarValidUtcDateTime
 from crypto_lab.strategy.expressions import EXPRESSION_SEMANTICS_VERSION
 from crypto_lab.strategy.models import (
     MAX_ENGINE_EXTENSIONS,
@@ -135,7 +135,7 @@ class StrategySourceProvenance(CanonicalModel):
     source_name: SourceName
     source_bytes_sha256: Sha256
     source_byte_length: Annotated[int, Field(strict=True, ge=0, le=MAX_SOURCE_BYTES)]
-    observed_at_utc: UtcDateTime
+    observed_at_utc: CalendarValidUtcDateTime
 
 
 class StrategyVersion(CanonicalModel):
@@ -155,7 +155,7 @@ class StrategyVersion(CanonicalModel):
     strategy_spec: StrategySpec
     extension_hashes: tuple[Sha256, ...] = Field(max_length=MAX_ENGINE_EXTENSIONS)
     hashing_profile_version: Literal["strategy-version/v1"]
-    created_at_utc: UtcDateTime
+    created_at_utc: CalendarValidUtcDateTime
     source_provenance: StrategySourceProvenance
 
     @model_validator(mode="after")

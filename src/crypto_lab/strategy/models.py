@@ -45,7 +45,7 @@ from crypto_lab.domain.identifiers import (
     exact_string_schema,
 )
 from crypto_lab.domain.records import InstrumentId, MarketType
-from crypto_lab.domain.time import UtcDateTime
+from crypto_lab.domain.time import CalendarValidUtcDateTime
 from crypto_lab.domain.versioning import SemanticVersion, parse_semantic_version
 from crypto_lab.strategy.expressions import (
     EXACT_RUNTIME_TYPES,
@@ -571,7 +571,7 @@ class SupportedApproximationPolicy(CanonicalModel):
 
 class AuthoringMetadata(CanonicalModel):
     author: NormalizedIdentifier
-    created_at_utc: UtcDateTime
+    created_at_utc: CalendarValidUtcDateTime
 
 
 class StrategySpec(CanonicalModel):

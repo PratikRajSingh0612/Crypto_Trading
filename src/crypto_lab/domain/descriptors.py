@@ -46,7 +46,7 @@ from crypto_lab.domain.identifiers import (
     Sha256,
     exact_string_schema,
 )
-from crypto_lab.domain.time import UtcDateTime
+from crypto_lab.domain.time import CalendarValidUtcDateTime
 from crypto_lab.domain.versioning import SemanticVersion, parse_semantic_version
 
 MAX_EXECUTABLE_PATH_CHARACTERS = 1024
@@ -400,8 +400,8 @@ class RuntimeAvailabilityObservation(CanonicalModel):
     operating_system: OperatingSystem
     available: bool
     reason_code: ErrorCode | MISSING = MISSING  # type: ignore[valid-type]
-    observed_at_utc: UtcDateTime
-    expires_at_utc: UtcDateTime
+    observed_at_utc: CalendarValidUtcDateTime
+    expires_at_utc: CalendarValidUtcDateTime
     network_required: bool
     credentials_required: bool
 

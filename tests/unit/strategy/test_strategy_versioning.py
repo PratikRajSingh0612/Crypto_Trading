@@ -19,8 +19,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from jsonschema import Draft202012Validator
 from pydantic import ValidationError
 
+import crypto_lab.domain.time as time_module
 from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.hashing import HashingProfile, profile_hash, sha256_bytes
 from crypto_lab.domain.results import Success
@@ -845,3 +847,178 @@ def test_removing_one_feature_parameter_changes_the_hash() -> None:
     mapping["features"][0]["parameters"] = {}
 
     assert strategy_version_hash(_spec(mapping)) != baseline
+
+
+# --------------------------------------------------------------------------
+# Forward-only UTC schema view -- the two `StrategyVersion` timestamps
+# --------------------------------------------------------------------------
+#
+# `parse_utc` routes JSON text through `datetime.fromisoformat`, so it has always
+# rejected an impossible calendar date and an out-of-range clock, while the legacy
+# `UtcDateTime` projection published only `[0-9]{2}` runs and accepted both. That
+# projection is frozen into three released Stage 3 `$id`s, so it could not be
+# tightened in place. `StrategyVersion.created_at_utc` and
+# `StrategySourceProvenance.observed_at_utc` now carry the forward-only
+# `CalendarValidUtcDateTime` view. Both reach `strategy/strategy-version-v1`.
+
+_IMPOSSIBLE_VERSION_INSTANTS = (
+    "0000-01-01T00:00:00Z",
+    "2026-00-01T00:00:00Z",
+    "2026-13-01T00:00:00Z",
+    "2026-01-00T00:00:00Z",
+    "2026-01-32T00:00:00Z",
+    "2026-02-29T00:00:00Z",
+    "2025-02-29T00:00:00Z",
+    "2026-02-30T00:00:00Z",
+    "2026-04-31T00:00:00Z",
+    "1900-02-29T00:00:00Z",
+    "2100-02-29T00:00:00Z",
+    "2026-01-01T24:00:00Z",
+    "2026-01-01T00:60:00Z",
+    "2026-01-01T00:00:60Z",
+    "2026-01-01T99:99:99Z",
+)
+
+_REAL_VERSION_INSTANTS = (
+    "0001-01-01T00:00:00Z",
+    "0004-02-29T00:00:00Z",
+    "0400-02-29T00:00:00Z",
+    "2000-02-29T00:00:00Z",
+    "2024-02-29T00:00:00Z",
+    "2026-02-28T23:59:59Z",
+    "2026-04-30T00:00:00.000001Z",
+    "9999-12-31T23:59:59Z",
+)
+
+_VERSION_TIMESTAMP_FIELDS = ("created_at_utc", "observed_at_utc")
+
+
+def _version_document(field: str, instant: str) -> dict[str, Any]:
+    """A complete valid version document with exactly one timestamp replaced."""
+    document: dict[str, Any] = json.loads(_version(_base_spec()).model_dump_json())
+    if field == "created_at_utc":
+        document["created_at_utc"] = instant
+    else:
+        document["source_provenance"]["observed_at_utc"] = instant
+    return document
+
+
+def _version_schema(mode: str) -> dict[str, Any]:
+    schema: dict[str, Any] = StrategyVersion.model_json_schema(
+        mode=mode  # type: ignore[arg-type]
+    )
+    return schema
+
+
+def _version_accepts(document: dict[str, Any]) -> bool:
+    try:
+        StrategyVersion.model_validate_json(json.dumps(document))
+    except ValidationError:
+        return False
+    return True
+
+
+def test_the_version_baseline_document_agrees_on_every_side() -> None:
+    """Non-vacuity for every clause below: one complete valid document."""
+    document = json.loads(_version(_base_spec()).model_dump_json())
+    assert _version_accepts(document)
+    for mode in ("validation", "serialization"):
+        schema = _version_schema(mode)
+        Draft202012Validator.check_schema(schema)
+        Draft202012Validator(schema).validate(document)
+
+
+@pytest.mark.parametrize("instant", _IMPOSSIBLE_VERSION_INSTANTS)
+@pytest.mark.parametrize("field", _VERSION_TIMESTAMP_FIELDS)
+def test_the_version_schema_rejects_an_impossible_instant(
+    field: str, instant: str
+) -> None:
+    document = _version_document(field, instant)
+    assert not _version_accepts(document)
+    for mode in ("validation", "serialization"):
+        assert not Draft202012Validator(_version_schema(mode)).is_valid(document), (
+            mode,
+            field,
+            instant,
+        )
+
+
+@pytest.mark.parametrize("instant", _REAL_VERSION_INSTANTS)
+@pytest.mark.parametrize("field", _VERSION_TIMESTAMP_FIELDS)
+def test_the_version_schema_over_rejects_no_real_instant(
+    field: str, instant: str
+) -> None:
+    """The only failure mode a hand-written calendar regex has. Neither of these
+    two timestamps is material to identity, so a real instant must survive."""
+    document = _version_document(field, instant)
+    assert _version_accepts(document)
+    for mode in ("validation", "serialization"):
+        Draft202012Validator(_version_schema(mode)).validate(document)
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_both_version_timestamps_publish_the_forward_view(mode: str) -> None:
+    """Structural, so a field silently reverted to the legacy alias is caught
+    even when no sample document happens to fail."""
+    schema = _version_schema(mode)
+    reference = {"$ref": "#/$defs/CalendarValidUtcDateTime"}
+    assert schema["properties"]["created_at_utc"] == reference
+    provenance = schema["$defs"]["StrategySourceProvenance"]["properties"]
+    assert provenance["observed_at_utc"] == reference
+    # And the embedded specification's own timestamp resolves to the same entry.
+    authoring = schema["$defs"]["AuthoringMetadata"]["properties"]
+    assert authoring["created_at_utc"] == reference
+
+    definition = schema["$defs"]["CalendarValidUtcDateTime"]
+    assert set(definition) == {"allOf"}
+    branches = definition["allOf"]
+    assert len(branches) == 3
+    assert branches[0] == {
+        "type": "string",
+        "format": "date-time",
+        "pattern": time_module._UTC_SCHEMA_PATTERN,
+    }
+    assert branches[1] == {
+        "type": "string",
+        "pattern": time_module._CALENDAR_DATE_PREFIX_PATTERN,
+    }
+    assert branches[2] == {
+        "type": "string",
+        "pattern": time_module._CLOCK_TIME_PREFIX_PATTERN,
+    }
+    # `strategy-version-v1` reaches `UtcDateTime` through exactly these three
+    # fields, so once all three migrate the permissive shared definition must be
+    # gone from the schema entirely.
+    assert "UtcDateTime" not in schema["$defs"]
+
+
+def test_the_version_view_changes_no_canonical_byte_or_hash() -> None:
+    """Schema projection only. Both migrated fields sit outside the identity
+    payload, so this pins the whole record rather than only the fields."""
+    spec = _base_spec()
+    version = _version(spec)
+    assert version.content_hash == strategy_version_hash(spec)
+    assert canonical_json_bytes(version.source_provenance) == (
+        b'{"observed_at_utc":"2026-08-18T12:00:00Z",'
+        b'"source_byte_length":27,'
+        b'"source_bytes_sha256":'
+        b'"' + sha256_bytes(b"schema_version: placeholder").encode("ascii") + b'",'
+        b'"source_name":"sma_cross_long.valid.yaml"}'
+    )
+    assert list(StrategyVersion.model_fields) == [
+        "schema_version",
+        "strategy_version_id",
+        "strategy_id",
+        "content_hash",
+        "strategy_spec",
+        "extension_hashes",
+        "hashing_profile_version",
+        "created_at_utc",
+        "source_provenance",
+    ]
+    assert list(StrategySourceProvenance.model_fields) == [
+        "source_name",
+        "source_bytes_sha256",
+        "source_byte_length",
+        "observed_at_utc",
+    ]

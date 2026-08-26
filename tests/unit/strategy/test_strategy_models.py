@@ -21,6 +21,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import TypeAdapter, ValidationError
 
+import crypto_lab.domain.time as time_module
 from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.capability_requirements import ApproximationPolicy
 from crypto_lab.domain.hashing import sha256_bytes
@@ -32,6 +33,7 @@ from crypto_lab.strategy.models import (
     MAX_FEATURE_PARAMETERS,
     MAX_PARAMETERS,
     MAX_UNIVERSE_INSTRUMENTS,
+    AuthoringMetadata,
     Direction,
     EngineExtensionDeclaration,
     ExtensionEconomicEffect,
@@ -1839,3 +1841,117 @@ def test_the_strategy_parity_correction_changes_no_canonical_byte() -> None:
         "maximum",
         "unit",
     ]
+
+
+# --------------------------------------------------------------------------
+# Forward-only UTC schema view -- `AuthoringMetadata.created_at_utc`
+# --------------------------------------------------------------------------
+#
+# `parse_utc` routes JSON text through `datetime.fromisoformat`, so it has always
+# rejected an impossible calendar date and an out-of-range clock, while the
+# legacy `UtcDateTime` projection published only `[0-9]{2}` runs and accepted
+# both. That projection is frozen into three released Stage 3 `$id`s, so it could
+# not be tightened in place. This field now carries the forward-only
+# `CalendarValidUtcDateTime` view, and it reaches two top-level Stage 4 schemas:
+# `strategy/strategy-spec-v1` directly, and `strategy/strategy-version-v1` again
+# through the embedded specification -- so both containers are checked.
+
+_IMPOSSIBLE_AUTHORING_INSTANTS = (
+    "0000-01-01T00:00:00Z",
+    "2026-00-01T00:00:00Z",
+    "2026-13-01T00:00:00Z",
+    "2026-01-00T00:00:00Z",
+    "2026-01-32T00:00:00Z",
+    "2026-02-29T00:00:00Z",
+    "2025-02-29T00:00:00Z",
+    "2026-02-30T00:00:00Z",
+    "2026-04-31T00:00:00Z",
+    "1900-02-29T00:00:00Z",
+    "2100-02-29T00:00:00Z",
+    "2026-01-01T24:00:00Z",
+    "2026-01-01T00:60:00Z",
+    "2026-01-01T00:00:60Z",
+    "2026-01-01T99:99:99Z",
+)
+
+_REAL_AUTHORING_INSTANTS = (
+    "0001-01-01T00:00:00Z",
+    "0004-02-29T00:00:00Z",
+    "0400-02-29T00:00:00Z",
+    "2000-02-29T00:00:00Z",
+    "2024-02-29T00:00:00Z",
+    "2026-02-28T23:59:59Z",
+    "2026-04-30T00:00:00.000001Z",
+    "9999-12-31T23:59:59Z",
+)
+
+
+def _authoring_document(instant: str) -> dict[str, Any]:
+    return _spec_section("authoring_metadata", created_at_utc=instant)
+
+
+@pytest.mark.parametrize("instant", _IMPOSSIBLE_AUTHORING_INSTANTS)
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_spec_schema_rejects_an_impossible_authoring_instant(
+    mode: str, instant: str
+) -> None:
+    document = _authoring_document(instant)
+    assert not _spec_accepts(document)
+    assert not Draft202012Validator(_spec_schema(mode)).is_valid(document)
+
+
+@pytest.mark.parametrize("instant", _REAL_AUTHORING_INSTANTS)
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_spec_schema_over_rejects_no_real_authoring_instant(
+    mode: str, instant: str
+) -> None:
+    """The only failure mode a hand-written calendar regex has."""
+    document = _authoring_document(instant)
+    assert _spec_accepts(document)
+    Draft202012Validator(_spec_schema(mode)).validate(document)
+
+
+@pytest.mark.parametrize("container", ["StrategySpec", "StrategyVersion"])
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_authoring_instant_publishes_the_forward_view_in_both_containers(
+    mode: Literal["validation", "serialization"], container: str
+) -> None:
+    """Structural, so a field silently reverted to the legacy alias is caught in
+    both publishing containers even if no sample document happens to fail."""
+    schema = _containing_schema(container, mode)
+    node = schema["$defs"]["AuthoringMetadata"]["properties"]["created_at_utc"]
+    assert node == {"$ref": "#/$defs/CalendarValidUtcDateTime"}
+    definition = schema["$defs"]["CalendarValidUtcDateTime"]
+    assert set(definition) == {"allOf"}
+    branches = definition["allOf"]
+    assert len(branches) == 3
+    assert branches[0] == {
+        "type": "string",
+        "format": "date-time",
+        "pattern": time_module._UTC_SCHEMA_PATTERN,
+    }
+    assert branches[1] == {
+        "type": "string",
+        "pattern": time_module._CALENDAR_DATE_PREFIX_PATTERN,
+    }
+    assert branches[2] == {
+        "type": "string",
+        "pattern": time_module._CLOCK_TIME_PREFIX_PATTERN,
+    }
+
+
+@pytest.mark.parametrize("mode", ["validation", "serialization"])
+def test_the_spec_schema_retains_no_permissive_utc_definition(mode: str) -> None:
+    """`strategy-spec-v1` reaches `UtcDateTime` through exactly one field, so
+    once that field migrates the loose `$defs` entry must be gone entirely."""
+    assert "UtcDateTime" not in _spec_schema(mode).get("$defs", {})
+
+
+def test_the_authoring_view_changes_no_canonical_byte() -> None:
+    """Schema projection only: the record still dumps and hashes as before."""
+    spec = _spec()
+    assert canonical_json_bytes(spec.authoring_metadata) == (
+        b'{"author":"local_user","created_at_utc":"2026-08-10T00:00:00Z"}'
+    )
+    assert list(AuthoringMetadata.model_fields) == ["author", "created_at_utc"]
+    assert spec.authoring_metadata.created_at_utc == datetime(2026, 8, 10, tzinfo=UTC)
