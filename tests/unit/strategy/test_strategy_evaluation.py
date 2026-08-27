@@ -1606,3 +1606,40 @@ def test_a_different_value_error_from_rendering_still_propagates() -> None:
                 _probe_spec([_bar_feature("probe")], _ALWAYS_FALSE),
                 _bars(["1", "2"]),
             )
+
+
+def test_a_feature_value_at_exactly_the_bound_still_reaches_success() -> None:
+    """The other side of the boundary, at the evaluator contract, not just at
+    `format_decimal`.
+
+    Without this, an off-by-one in the guard -- a `>=` creeping into
+    `format_decimal` -- would be caught only by the direct pin test and never by
+    the contract that actually ships.
+    """
+    longest = "1E-" + str(MAX_DECIMAL_TEXT_LENGTH - 2)
+    result = _result(
+        _probe_spec([_bar_feature("probe")], _ALWAYS_FALSE),
+        _bars([longest]),
+    )
+    (cell,) = result.features[0].values
+    assert cell is not MISSING_VALUE
+    assert len(cell) == MAX_DECIMAL_TEXT_LENGTH
+
+
+def test_a_message_extending_the_pinned_one_is_not_mapped() -> None:
+    """Pins the comparison as equality.
+
+    An unrelated message alone leaves `!=` and `not in` indistinguishable; a
+    superstring separates them.
+    """
+
+    def _extended(_: Decimal) -> str:
+        raise ValueError(_LENGTH_MESSAGE + " (257)")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(evaluation, "format_decimal", _extended)
+        with pytest.raises(ValueError, match=r"\(257\)"):
+            _evaluate(
+                _probe_spec([_bar_feature("probe")], _ALWAYS_FALSE),
+                _bars(["1", "2"]),
+            )

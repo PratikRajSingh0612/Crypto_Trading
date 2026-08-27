@@ -1892,17 +1892,24 @@ COMPARISON.APPROXIMATION_EXCLUDES_LEVEL
 COMPARISON.SCHEMA_VERSION_MISMATCH   COMPARISON.METHODOLOGY_MISMATCH
 ```
 
-**Reviewed correction — one code added.**
-`STRATEGY.DIAGNOSTIC_LIMIT_REACHED` was the first addition to this closed table
-after the plan was approved. It is the terminal diagnostic-limit marker defined
-in section 5.4.1, and it is the only code that correction introduces. No other
-code is added by it, and none is removed — `STRATEGY.REFERENCE_FUTURE_BAR` in
-particular remains reserved per section 6.5.2.
+**Amendment ledger — exactly three codes added since approval, in order.**
+This ledger is what authorizes any future addition, so it states the running
+count rather than describing each correction as though it were the last.
 
-**Second reviewed correction — exactly one further code added.**
-`STRATEGY.EVALUATION_DECIMAL_TOO_LONG` is the second and only other addition.
-It is defined in section 5.9.1. Any further addition still requires a plan
-amendment.
+1. **First reviewed correction.** `STRATEGY.DIAGNOSTIC_LIMIT_REACHED`, the
+   terminal diagnostic-limit marker defined in section 5.4.1. That correction
+   introduces no other code.
+2. **Second reviewed correction.** `STRATEGY.REFERENCE_NAMESPACE_COLLISION`,
+   the reference-namespace disjointness code defined in section 5.10. That
+   correction introduces no other code.
+3. **Third reviewed correction.** `STRATEGY.EVALUATION_DECIMAL_TOO_LONG`,
+   the evaluator rendering bound defined in section 5.9.1. That correction
+   introduces no other code.
+
+The table therefore stands at its approved contents plus exactly these three.
+Nothing is removed — `STRATEGY.REFERENCE_FUTURE_BAR` in particular remains
+reserved per section 6.5.2. Any further addition requires a plan amendment and
+a fourth entry here.
 
 ### 5.9.1 `STRATEGY.EVALUATION_DECIMAL_TOO_LONG` — evaluator rendering bound
 
@@ -1916,13 +1923,27 @@ rendering would exceed `MAX_DECIMAL_TEXT_LENGTH` (256).
 
 **It is reachable from validated input, not merely theoretical.** A value can be
 finite, within `EVALUATION_PRECISION`, and correctly computed, and still render
-longer than the bound: 34 significant digits at a sufficiently negative exponent
-needs 257 characters. The confirmed witness is a `parameters` block setting both
-periods to `3`, and a close series of sixty bars at `2E-222` followed by
-`1E-222`, `2E-222`, `2E-222`. The window sum `5E-222` divided by `3` yields
-`1.666666666666666666666666666666667E-222`, whose canonical body is 257
-characters. Every input in that witness is admissible: `1E-222` renders in 224
-characters on its own, so it passes `CanonicalDecimal` validation.
+longer than the bound.
+
+**The bound is breached from both ends, not only the small one.**
+`format_decimal` computes `body_length = coefficient_length + exponent` when the
+exponent is non-negative, and `2 - point + coefficient_length` when `point` is
+non-positive. So 34 significant digits at a sufficiently *small* exponent needs
+257 characters — and so does a single digit at a sufficiently *large* one. A
+close of 256 nines is admissible; summed through `rolling.sum/v1` at precision
+34 it rounds to `1E+256`, whose body is `1 + 256 = 257`. Both directions raise at
+the same site with the same message, so one guard covers both. The tested
+witness is the small-exponent case; the large-exponent case is stated here so
+the register is not read as exhaustive.
+
+**The confirmed witness, which is what the committed test uses.** One
+`indicator.sma/v1` feature with period `3` and `warm_up_bars` of 2, over exactly
+three bars closing at `1E-222`, `2E-222`, `2E-222`. The window sum `5E-222`
+divided by `3` yields `1.666666666666666666666666666666667E-222`: 34 significant
+digits at exponent −255, so `point = 34 − 255 = −221` and the canonical body is
+`2 + 221 + 34 = 257`. Every input is admissible — `1E-222` renders in 224
+characters on its own and passes `CanonicalDecimal` — so no earlier validation
+rejects it.
 
 **The contract.** Exactly one failure maps to the new code: `format_decimal`
 raising for the canonical length bound, identified by its exact message
@@ -1963,26 +1984,27 @@ commit, with this correction named separately.
 
 **Required tests, test-first.**
 
-1. **RED from the witness.** The sixty-bar probe above, asserted to return a
-   `Failure` carrying `STRATEGY.EVALUATION_DECIMAL_TOO_LONG`. Before the fix it
-   raises `ValueError`; `pytest.raises` must not be used to hide that.
-2. **The exact boundary, both sides.** A rendering of exactly
-   `MAX_DECIMAL_TEXT_LENGTH` characters succeeds; one of 257 rejects.
+1. **RED from the witness.** The three-bar single-feature probe above, asserted
+   to return a `Failure` carrying `STRATEGY.EVALUATION_DECIMAL_TOO_LONG`. Before
+   the fix it raises `ValueError`; `pytest.raises` must not be used to hide that.
+2. **The exact boundary, both sides, at both layers.** Against `format_decimal`
+   directly: a rendering of exactly `MAX_DECIMAL_TEXT_LENGTH` characters
+   succeeds and one of 257 rejects. And **through `evaluate_level_one`**: a
+   feature value rendering to exactly 256 characters must still reach `Success`
+   with a 256-character cell. The direct pair alone would leave an off-by-one in
+   the guard — a `>=` creeping into `format_decimal` — invisible at the
+   evaluator contract.
 3. **The message pin.** A test asserting `format_decimal` still raises exactly
    `canonical decimal exceeds maximum length`, so a reworded message in
    `crypto_lab.domain.financial` fails loudly here instead of silently
    converting this rejection back into an escaping `ValueError`.
-4. **Non-broadening.** A test proving a different `ValueError` out of the
-   rendering path still propagates rather than becoming a diagnostic.
+4. **Non-broadening, and the operator.** A test proving a different `ValueError`
+   out of the rendering path still propagates rather than becoming a diagnostic;
+   and a second case whose message *extends* the pinned one, proving the
+   comparison is equality rather than a substring test in either direction. An
+   unrelated message alone leaves `!=` and `not in` indistinguishable.
 5. **Contract.** A test asserting no exception escapes `evaluate_level_one` for
    the witness input.
-
-**Second reviewed correction — exactly one further code added.**
-`STRATEGY.REFERENCE_NAMESPACE_COLLISION` is the second and only other addition
-since approval. It is the reference-namespace disjointness code defined in section
-5.10, and that correction introduces no other code. The table therefore stands at
-its approved contents plus exactly these two. Nothing is removed. Any further
-addition still requires a plan amendment.
 
 ### 5.10 Reference namespace disjointness — reviewed correction
 

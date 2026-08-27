@@ -355,10 +355,12 @@ def _render(value: Value, feature_id: str) -> FeatureCell:
     """Render one computed feature value as its canonical JSON cell.
 
     A value can be finite, inside `EVALUATION_PRECISION`, and correctly
-    computed, and still exceed `MAX_DECIMAL_TEXT_LENGTH` once rendered: 34
-    significant digits at a sufficiently negative exponent need 257 characters.
-    That is a rejection, not a defect, so it becomes `_Rejected` here and a
-    diagnostic at the boundary. Every other `ValueError` propagates unchanged.
+    computed, and still exceed `MAX_DECIMAL_TEXT_LENGTH` once rendered. Both
+    ends of the exponent range reach it: 34 significant digits at a sufficiently
+    small exponent need 257 characters, and so does a single digit at a
+    sufficiently large one. That is a rejection, not a defect, so it becomes
+    `_Rejected` here and a diagnostic at the boundary. Every other `ValueError`
+    propagates unchanged.
     """
     if value is MISSING_VALUE:
         return MISSING_VALUE
