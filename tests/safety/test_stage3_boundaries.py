@@ -598,7 +598,7 @@ def test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctl
         definition.relative_path.as_posix() for definition in SCHEMA_DEFINITIONS
     )
     identifiers = tuple(definition.schema_id for definition in SCHEMA_DEFINITIONS)
-    assert len(paths) == 11
+    assert len(paths) == 20
     assert len(paths) == len(set(paths))
     assert len(identifiers) == len(set(identifiers))
     assert "protocol/engine-descriptor-v1.schema.json" in paths
@@ -785,7 +785,12 @@ def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
     assert f"Complete at `{STAGE3_TASK8_COMMIT}`" not in roadmap
     assert "Eligible for just-in-time planning after Stage 3 completion" in roadmap
     assert "`DISABLED_WITH_EVIDENCE`" in roadmap
-    assert "**Status:** Project 1 Stages 1-3 complete" in readme
+    # The one assertion Task 8 is authorized to update, per the plan section 3.9
+    # status-authority rule, and only in the same commit that updates README.md.
+    # It becomes that string verbatim -- no additional assertion is added here,
+    # because plan step 6 enumerates exactly two Task 8 edits to this module.
+    # Every Stage 3 assertion above it stays verbatim.
+    assert "**Status:** Project 1 Stages 1-4 complete" in readme
 
 
 def test_stage4_plan_approval_status_is_exact(repository_root: Path) -> None:

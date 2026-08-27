@@ -1,4 +1,10 @@
-"""Closed deterministic registry for the Stage 3 JSON Schemas."""
+"""Closed deterministic registry for the Stage 3 and Stage 4 JSON Schemas.
+
+The eleven Stage 3 entries come first, in their original order, followed by the
+nine Stage 4 strategy and capability entries. Existing entries are never
+reordered: the order is the generation order, and a published `$id` is a
+permanent contract.
+"""
 
 from __future__ import annotations
 
@@ -8,13 +14,27 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
-from crypto_lab.adapters.descriptors import AdapterDescriptor, EngineDescriptor
 from crypto_lab.artifacts.ownership import ARTIFACT_OWNER_ADAPTER
+from crypto_lab.capabilities.comparison import ComparisonEligibilityResult
+from crypto_lab.capabilities.models import (
+    ApproximationDeclaration,
+    CapabilityDeclaration,
+    CapabilityRequirement,
+    CompatibilityResult,
+)
 from crypto_lab.configuration.models import ApplicationConfig
 from crypto_lab.datasets.models import DatasetDescriptor, DatasetPartition
 from crypto_lab.domain.canonical_json import canonical_json_bytes
+from crypto_lab.domain.descriptors import (
+    AdapterDescriptor,
+    EngineDescriptor,
+    RuntimeAvailabilityObservation,
+)
 from crypto_lab.domain.diagnostics import Diagnostic
 from crypto_lab.domain.records import InstrumentRef, Money, Price, Quantity
+from crypto_lab.strategy.expressions import EXPRESSION_ADAPTER
+from crypto_lab.strategy.models import StrategySpec
+from crypto_lab.strategy.versioning import StrategyVersion
 
 JSON_SCHEMA_DRAFT = "https://json-schema.org/draft/2020-12/schema"
 
@@ -81,6 +101,51 @@ SCHEMA_DEFINITIONS: tuple[SchemaDefinition, ...] = (
         PurePosixPath("artifacts/artifact-owner-ref-v1.schema.json"),
         "urn:crypto-lab:schema:artifacts:artifact-owner-ref:1.0.0",
         ARTIFACT_OWNER_ADAPTER,
+    ),
+    SchemaDefinition(
+        PurePosixPath("strategy/strategy-spec-v1.schema.json"),
+        "urn:crypto-lab:schema:strategy:strategy-spec:1.0.0",
+        TypeAdapter(StrategySpec),
+    ),
+    SchemaDefinition(
+        PurePosixPath("strategy/strategy-version-v1.schema.json"),
+        "urn:crypto-lab:schema:strategy:strategy-version:1.0.0",
+        TypeAdapter(StrategyVersion),
+    ),
+    SchemaDefinition(
+        PurePosixPath("strategy/expression-v1.schema.json"),
+        "urn:crypto-lab:schema:strategy:expression:1.0.0",
+        EXPRESSION_ADAPTER,
+    ),
+    SchemaDefinition(
+        PurePosixPath("capabilities/capability-requirement-v1.schema.json"),
+        "urn:crypto-lab:schema:capabilities:capability-requirement:1.0.0",
+        TypeAdapter(CapabilityRequirement),
+    ),
+    SchemaDefinition(
+        PurePosixPath("capabilities/capability-declaration-v1.schema.json"),
+        "urn:crypto-lab:schema:capabilities:capability-declaration:1.0.0",
+        TypeAdapter(CapabilityDeclaration),
+    ),
+    SchemaDefinition(
+        PurePosixPath("capabilities/approximation-declaration-v1.schema.json"),
+        "urn:crypto-lab:schema:capabilities:approximation-declaration:1.0.0",
+        TypeAdapter(ApproximationDeclaration),
+    ),
+    SchemaDefinition(
+        PurePosixPath("capabilities/compatibility-result-v1.schema.json"),
+        "urn:crypto-lab:schema:capabilities:compatibility-result:1.0.0",
+        TypeAdapter(CompatibilityResult),
+    ),
+    SchemaDefinition(
+        PurePosixPath("capabilities/runtime-availability-observation-v1.schema.json"),
+        "urn:crypto-lab:schema:capabilities:runtime-availability-observation:1.0.0",
+        TypeAdapter(RuntimeAvailabilityObservation),
+    ),
+    SchemaDefinition(
+        PurePosixPath("capabilities/comparison-eligibility-result-v1.schema.json"),
+        "urn:crypto-lab:schema:capabilities:comparison-eligibility-result:1.0.0",
+        TypeAdapter(ComparisonEligibilityResult),
     ),
 )
 

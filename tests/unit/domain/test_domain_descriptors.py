@@ -229,8 +229,11 @@ def test_the_protocol_descriptor_schemas_are_byte_identical_after_relocation(
     schemas = repository_root / "schemas"
     assert (schemas / adapter_path).read_bytes() == rendered[adapter_path]
     assert (schemas / engine_path).read_bytes() == rendered[engine_path]
-    # Task 6 registers nothing, so the closed registry must still hold eleven.
-    assert len(rendered) == 11
+    # Task 6 itself registered nothing; Task 8 then appended the nine Stage 4
+    # entries, taking the closed registry to twenty. The two protocol digests
+    # pinned above are what this test actually guards, and they are unchanged --
+    # the count is updated rather than relaxed so the guard stays exact.
+    assert len(rendered) == 20
 
 
 def test_a_descriptor_built_through_either_import_path_is_the_same_record() -> None:
