@@ -43,6 +43,7 @@ from crypto_lab.domain.diagnostics import (
     DiagnosticSeverity,
 )
 from crypto_lab.domain.financial import (
+    MAX_DECIMAL_TEXT_LENGTH,
     CanonicalDecimal,
     NonNegativeDecimal,
     format_decimal,
@@ -96,6 +97,15 @@ _SERIES_TOO_LONG: Final = "STRATEGY.EVALUATION_SERIES_TOO_LONG"
 _DIVIDE_BY_ZERO: Final = "STRATEGY.EVALUATION_DIVIDE_BY_ZERO"
 _NON_FINITE: Final = "STRATEGY.EVALUATION_NON_FINITE"
 _MISSING_INPUT: Final = "STRATEGY.EVALUATION_MISSING_INPUT"
+_DECIMAL_TOO_LONG: Final = "STRATEGY.EVALUATION_DECIMAL_TOO_LONG"
+
+#: The exact message `format_decimal` raises for the canonical length bound.
+#: Plan section 5.9.1 maps this one message and no other: a broad
+#: `except ValueError` would convert real defects into diagnostics, which is
+#: what the `Result`-only contract exists to prevent. A committed test pins
+#: this string against `crypto_lab.domain.financial`, so a reword there fails
+#: loudly instead of silently restoring the escaping `ValueError`.
+_DECIMAL_LENGTH_MESSAGE: Final = "canonical decimal exceeds maximum length"
 
 _MESSAGES: Final[dict[str, str]] = {
     _SERIES_TOO_LONG: "strategy evaluation bar series exceeds the maximum length",
@@ -104,6 +114,10 @@ _MESSAGES: Final[dict[str, str]] = {
     _MISSING_INPUT: (
         "strategy evaluation encountered a missing input under a dataset-rejecting "
         "missing-value policy"
+    ),
+    _DECIMAL_TOO_LONG: (
+        "strategy evaluation produced a feature value whose canonical rendering "
+        "exceeds the maximum decimal text length"
     ),
 }
 
@@ -337,12 +351,30 @@ def _feature_value(
     return _checked(max(numbers))
 
 
-def _render(value: Value) -> FeatureCell:
-    """Render one computed feature value as its canonical JSON cell."""
+def _render(value: Value, feature_id: str) -> FeatureCell:
+    """Render one computed feature value as its canonical JSON cell.
+
+    A value can be finite, inside `EVALUATION_PRECISION`, and correctly
+    computed, and still exceed `MAX_DECIMAL_TEXT_LENGTH` once rendered: 34
+    significant digits at a sufficiently negative exponent need 257 characters.
+    That is a rejection, not a defect, so it becomes `_Rejected` here and a
+    diagnostic at the boundary. Every other `ValueError` propagates unchanged.
+    """
     if value is MISSING_VALUE:
         return MISSING_VALUE
     if type(value) is Decimal:
-        return format_decimal(value)
+        try:
+            return format_decimal(value)
+        except ValueError as error:
+            if str(error) != _DECIMAL_LENGTH_MESSAGE:
+                raise
+            raise _Rejected(
+                _DECIMAL_TOO_LONG,
+                {
+                    "feature_id": feature_id,
+                    "maximum_text_length": MAX_DECIMAL_TEXT_LENGTH,
+                },
+            ) from error
     return cast("str", value)
 
 
@@ -655,8 +687,9 @@ def evaluate_level_one(
 
     Returns complete feature and signal series for an accepted input, or a
     `Result` failure. No exception escapes: every expected rejection — an
-    over-long series, a division by zero, a non-finite intermediate, and a missing
-    input under `REJECT_DATASET` — becomes a diagnostic.
+    over-long series, a division by zero, a non-finite intermediate, a missing
+    input under `REJECT_DATASET`, and a feature value whose canonical rendering
+    would exceed `MAX_DECIMAL_TEXT_LENGTH` — becomes a diagnostic.
     """
     if len(bars) > MAX_EVALUATION_BARS:
         return Failure(
@@ -685,6 +718,17 @@ def evaluate_level_one(
             arithmetic.traps[decimal.Overflow] = False
             arithmetic.traps[decimal.InvalidOperation] = False
             lookup, skipped, entries, exits = _compute(spec, graph, bars)
+        # Rendering is inside the guarded region, and outside `localcontext`,
+        # exactly as before. `_render` can reject on the canonical length bound
+        # of section 5.9.1; building `Success` first would let that escape as a
+        # bare `ValueError` and break the contract this docstring states.
+        rendered = tuple(
+            FeatureSeries(
+                feature_id=name,
+                values=tuple(_render(value, name) for value in lookup[name]),
+            )
+            for name in graph.order
+        )
     except _Rejected as rejected:
         return Failure(
             outcome="FAILURE",
@@ -697,13 +741,7 @@ def evaluate_level_one(
         outcome="SUCCESS",
         value=EvaluationResult(
             bar_count=len(bars),
-            features=tuple(
-                FeatureSeries(
-                    feature_id=name,
-                    values=tuple(_render(value) for value in lookup[name]),
-                )
-                for name in graph.order
-            ),
+            features=rendered,
             entry_signals=tuple(
                 SignalSeries(rule_id=name, values=tuple(values))
                 for name, values in entries

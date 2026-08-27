@@ -17,7 +17,7 @@ from typing import Any, Final
 import pytest
 
 from crypto_lab.domain.canonical_json import canonical_json_bytes
-from crypto_lab.domain.financial import format_decimal
+from crypto_lab.domain.financial import MAX_DECIMAL_TEXT_LENGTH, format_decimal
 from crypto_lab.domain.results import Failure, Success
 from crypto_lab.strategy import evaluation, feature_graph
 from crypto_lab.strategy.evaluation import (
@@ -1523,3 +1523,86 @@ def test_sma_cross_long_remains_the_unchanged_regression_anchor() -> None:
     assert cells["slow_sma"][50] is not MISSING_VALUE
     assert result.entry_signals[0].rule_id == "enter_cross"
     assert result.exit_signals[0].rule_id == "exit_cross"
+
+
+# --- Step: the canonical rendering bound (plan section 5.9.1) ---------------
+#
+# A value can be finite, inside EVALUATION_PRECISION, and correctly computed,
+# and still render longer than MAX_DECIMAL_TEXT_LENGTH. Before this correction
+# the rendering ran outside the guarded region, so `format_decimal` raised a
+# bare ValueError straight through `evaluate_level_one`, contradicting its
+# documented Result-only contract.
+
+_DECIMAL_TOO_LONG: Final = "STRATEGY.EVALUATION_DECIMAL_TOO_LONG"
+
+#: The exact message `format_decimal` raises for the canonical length bound.
+#: The evaluator maps this one message and nothing else, so a reword in
+#: `crypto_lab.domain.financial` must fail loudly here.
+_LENGTH_MESSAGE: Final = "canonical decimal exceeds maximum length"
+
+
+def _over_long_mean_spec() -> StrategySpec:
+    """A three-bar mean whose quotient needs 257 canonical characters."""
+    return _probe_spec([_sma("probe", "three", warm_up_bars=2)], _ALWAYS_FALSE)
+
+
+def _over_long_mean_bars() -> tuple[Bar, ...]:
+    """Sum 5E-222 over period three, giving 34 digits at exponent -255."""
+    return _bars(["1E-222", "2E-222", "2E-222"])
+
+
+def test_an_unrenderable_feature_value_is_a_diagnostic_not_an_exception() -> None:
+    """The confirmed witness from plan section 5.9.1."""
+    assert _codes(_over_long_mean_spec(), _over_long_mean_bars()) == [_DECIMAL_TOO_LONG]
+
+
+def test_no_exception_escapes_evaluation_for_the_unrenderable_witness() -> None:
+    """The docstring contract, asserted rather than trusted."""
+    outcome = _evaluate(_over_long_mean_spec(), _over_long_mean_bars())
+    assert isinstance(outcome, Failure), outcome
+
+
+def test_the_unrenderable_diagnostic_names_the_feature_and_omits_the_value() -> None:
+    """Structural facts only: embedding the value would defeat the bound."""
+    outcome = _evaluate(_over_long_mean_spec(), _over_long_mean_bars())
+    assert isinstance(outcome, Failure), outcome
+    (diagnostic,) = outcome.diagnostics
+    assert diagnostic.error_code == _DECIMAL_TOO_LONG
+    assert diagnostic.source_component == evaluation.SOURCE_COMPONENT
+    assert diagnostic.details["feature_id"] == "probe"
+    assert diagnostic.details["maximum_text_length"] == MAX_DECIMAL_TEXT_LENGTH
+    rendered = json.dumps(diagnostic.model_dump(mode="json"))
+    assert "666666666666" not in rendered
+
+
+def test_the_rendering_bound_rejects_at_exactly_one_character_over() -> None:
+    """Both sides of the boundary, so the guard is not an approximation."""
+    # `1E-n` renders as "0." plus n-1 zeroes plus "1", so its length is n + 2.
+    longest = Decimal("1E-" + str(MAX_DECIMAL_TEXT_LENGTH - 2))
+    assert len(format_decimal(longest)) == MAX_DECIMAL_TEXT_LENGTH
+    with pytest.raises(ValueError, match=_LENGTH_MESSAGE):
+        format_decimal(longest.scaleb(-1))
+
+
+def test_format_decimal_still_raises_the_exact_message_the_evaluator_maps() -> None:
+    """Pin the coupling: a reword upstream must fail here, not silently escape."""
+    # `match` is a substring search; the equality below is the real assertion,
+    # and it is what fails if the message is reworded or merely extended.
+    with pytest.raises(ValueError, match=_LENGTH_MESSAGE) as caught:
+        format_decimal(Decimal("1E-250").scaleb(-10))
+    assert str(caught.value) == _LENGTH_MESSAGE
+
+
+def test_a_different_value_error_from_rendering_still_propagates() -> None:
+    """The catch maps one message; it must not have been broadened."""
+
+    def _other(_: Decimal) -> str:
+        raise ValueError("some unrelated rendering defect")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(evaluation, "format_decimal", _other)
+        with pytest.raises(ValueError, match="some unrelated rendering defect"):
+            _evaluate(
+                _probe_spec([_bar_feature("probe")], _ALWAYS_FALSE),
+                _bars(["1", "2"]),
+            )
