@@ -444,8 +444,19 @@ and outside product, test, build, runtime, verification, and acceptance paths.
 
 ## Stage scope
 
-Stage 4 implementation is complete and awaits Task 9 final status recording and
-whole-stage completion review. Stage 5 is not started.
+Project 1 Stage 4 is complete. Stage 4 implementation completed at
+`33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`; the final status was recorded by
+the separate Task 9 status commit. The closed 20-schema registry holds
+the nine new Stage 4 schemas together with the eleven Stage 3 schemas,
+preserved byte-identical to `main`. Stage 5 is not started.
+
+The independent sweeps agree on the falsifiable results: zero
+over-rejections, and zero disagreement between the four schema surfaces.
+The published bytes are therefore a superset of the runtime, never a
+subset. The two sweeps do not agree on the residual set of inexpressible
+rules, and that register is a maintained enumeration rather than a
+machine-verified closure, not a claim that every possible runtime or
+schema rule was exhaustively enumerated.
 
 GitNexus remains `DISABLED_WITH_EVIDENCE` and is non-blocking: it is not
 required to set up, verify, build, test, or run the project, and it is not

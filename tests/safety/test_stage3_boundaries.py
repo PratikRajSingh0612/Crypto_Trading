@@ -96,6 +96,12 @@ _ALLOWED_IMPORT_ROOTS = {
 # landing needs exactly one name from it, in exactly one file, so the root alone
 # is not a sufficient guard: `test_the_types_root_is_confined_to_one_exact_import`
 # pins the location and the form as well.
+#: Specification section 5.1 forbids these two roots inside the strategy and
+#: capabilities packages. Both are in ``_ALLOWED_IMPORT_ROOTS`` because
+#: ``configuration``, ``cli``, and ``schema_registry`` need them, so nothing
+#: else in the repository narrows them per package.
+_PACKAGES_DENIED_FILESYSTEM_AND_DYNAMIC_IMPORT = frozenset({"capabilities", "strategy"})
+_ROOTS_DENIED_IN_THOSE_PACKAGES = frozenset({"importlib", "pathlib"})
 _TYPES_ROOT = "types"
 _TYPES_IMPORTER = "strategy/models.py"
 _TYPES_SYMBOL = "MappingProxyType"
@@ -289,6 +295,16 @@ def _source_files(repository_root: Path) -> tuple[Path, ...]:
     return tuple(sorted((repository_root / "src/crypto_lab").rglob("*.py")))
 
 
+def _imported_roots(tree: ast.AST) -> tuple[str, ...]:
+    roots: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.extend(alias.name.partition(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            roots.append(node.module.partition(".")[0])
+    return tuple(roots)
+
+
 def _normalized_source(path: Path) -> str:
     lines = path.read_text(encoding="utf-8").splitlines()
     return "\n".join(line.rstrip() for line in lines) + "\n"
@@ -432,6 +448,46 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
     }
 
 
+def test_strategy_and_capabilities_import_no_pathlib_or_importlib(
+    repository_root: Path,
+) -> None:
+    """Specification section 5.1 prohibition, unguarded until Task 9.
+
+    Both roots are in the 22-root allowlist because other packages need them,
+    so nothing else in the repository would reject them here. Adding
+    ``from pathlib import Path`` to the strategy loader would give it the
+    filesystem reach section 5.1 exists to deny.
+    """
+    source = repository_root / "src/crypto_lab"
+    failures: list[str] = []
+    for path in _source_files(repository_root):
+        relative = path.relative_to(source)
+        if relative.parts[0] not in _PACKAGES_DENIED_FILESYSTEM_AND_DYNAMIC_IMPORT:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for root in _imported_roots(tree):
+            if root in _ROOTS_DENIED_IN_THOSE_PACKAGES:
+                failures.append(f"{relative.as_posix()}: forbidden import root: {root}")
+    assert failures == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import pathlib",
+        "import importlib",
+        "import pathlib as p",
+        "import importlib.util",
+        "from pathlib import Path",
+        "from importlib.util import resolve_name",
+    ],
+)
+def test_the_import_root_scanner_detects_each_forbidden_shape(source: str) -> None:
+    """The prohibition guard begins green, so prove the scanner is load-bearing."""
+    roots = _imported_roots(ast.parse(source))
+    assert set(roots) & _ROOTS_DENIED_IN_THOSE_PACKAGES != set()
+
+
 def test_the_types_root_is_confined_to_one_exact_import(
     repository_root: Path,
 ) -> None:
@@ -548,6 +604,84 @@ def test_environment_scan_detects_control_literal() -> None:
     tree = ast.parse('control = "PYDANTIC_DISABLE_PLUGINS"\n')
     violations = _environment_access_violations(tree, "probe.py")
     assert violations == ["probe.py:1: prohibited control literal"]
+
+
+def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> None:
+    """An exact set, not a lower bound: a silent removal must fail here.
+
+    Without this, deleting a name deletes the parametrized case below that
+    would have caught it, so the suite shrinks instead of failing. The count
+    matches the plan's own arithmetic: section 3.9 records 79 at Stage 3 and
+    section 9.8 removes exactly fourteen.
+    """
+    assert len(_DEFERRED_DEFINITIONS) == 65
+    assert _DEFERRED_DEFINITIONS == {
+        "AdapterCatalog",
+        "AdapterCatalogEntry",
+        "AdapterCommand",
+        "AdapterCommandRequestEnvelope",
+        "AdapterResultManifest",
+        "AdapterValidationResult",
+        "ArtifactFinalizationPurpose",
+        "ArtifactFinalizer",
+        "ArtifactOwnerKind",
+        "ArtifactRef",
+        "ArtifactRepository",
+        "ArtifactSourceRole",
+        "AuditSink",
+        "AuditEvent",
+        "BootstrapDescriptorEnvelope",
+        "CancellationToken",
+        "CandidateArtifact",
+        "CandidateArtifactRepository",
+        "CandidateArtifactState",
+        "CandidateArtifactProducerKind",
+        "CandidateFinalization",
+        "CanonicalFill",
+        "CanonicalOrder",
+        "CommandInvocationRecord",
+        "CommandInvocationRepository",
+        "CommandInvocationState",
+        "CommandKind",
+        "CommandResult",
+        "ComparisonEligibilityService",
+        "ContentHasher",
+        "Clock",
+        "DatasetRepository",
+        "EngineRunRecord",
+        "EngineRunRepository",
+        "EngineRunRequest",
+        "EquityPoint",
+        "EvidenceFinalizationRequest",
+        "ExperimentRecord",
+        "ExperimentRepository",
+        "ExperimentSpec",
+        "Fee",
+        "FinalizationResult",
+        "NegotiationResult",
+        "MetricValue",
+        "MonotonicInstant",
+        "OrderSide",
+        "OrderType",
+        "PortfolioSnapshot",
+        "PositionSnapshot",
+        "PositionEffect",
+        "ProcessSupervisor",
+        "ProtocolEventEnvelope",
+        "ResultFinalizationRequest",
+        "RetryPolicy",
+        "Result",
+        "RunEvent",
+        "RunManifest",
+        "SanitizedAdapterResultManifest",
+        "SemanticStatus",
+        "UnitOfWork",
+        "ValidationOutcome",
+        "ingest_dataset",
+        "negotiate_protocol",
+        "normalize_dataset",
+        "place_order",
+    }
 
 
 @pytest.mark.parametrize("name", sorted(_DEFERRED_DEFINITIONS))
@@ -729,6 +863,131 @@ STAGE4_PLAN = (
     "docs/superpowers/plans/2026-08-10-project-1-portable-strategy-"
     "capabilities-comparison-implementation-plan.md"
 )
+STAGE4_IMPLEMENTATION_COMMIT = "33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce"
+#: Plan rule 1: every commit touching the Stage 4 plan file, in commit order.
+#: Derived with `git log --reverse -- <STAGE4_PLAN>`, not transcribed from the
+#: plan. Some entries also appear in the follow-up tuple below, because those
+#: commits changed both the plan and the implementation.
+STAGE4_PLAN_CORRECTION_COMMITS = (
+    "65eca5b17d45c0cf04f856dc6049e0c3ee7a2be9",
+    "f898499d647d1d4ade571345973c6ced5e84403c",
+    "f57357379222404685d805d081de4f61f36a7fe5",
+    "cfede94c5de22fba93176e4d5f75aceeffc7695e",
+    "7830f935e069d0fb3053682095e949cedb4bb1de",
+    "2edd529a93547b4374e65de78f21619f5122b498",
+    "a5112b2812b5dccf5e4c12ec6d7b08a43232a65f",
+    "f5de3305d71713c452bccc74823b4c1e016c1814",
+    "77e0bc2e327bac333d228c6e4cde08c2cedf21a5",
+)
+#: Plan rule 2: the post-Task-8 implementation correction, then every review
+#: follow-up in commit order. Recorded separately from the implementation hash,
+#: exactly as the Stage 3 row separates its post-completion stability
+#: correction.
+STAGE4_EVALUATOR_CORRECTION_COMMIT = "7f7bfce12abc72a63b8624562ff2e448a26f7610"
+STAGE4_REVIEW_FOLLOWUP_COMMITS = (
+    "a5112b2812b5dccf5e4c12ec6d7b08a43232a65f",
+    "f5de3305d71713c452bccc74823b4c1e016c1814",
+    "77e0bc2e327bac333d228c6e4cde08c2cedf21a5",
+)
+STAGE4_ROADMAP = "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
+STAGE4_VERIFICATION_GUIDE = "docs/development/verification.md"
+#: Interim phrasings that Task 9's own commit makes false. None may survive in
+#: either documentation file.
+_RETIRED_STATUS_PHRASES = (
+    "awaits Task 9",
+    "Task 9 pending",
+)
+_README_STAGE4_STATUS = (
+    "Project 1 Stage 4 is complete. Portable strategy ingestion, "
+    "deterministic Level 1 evaluation, strategy versioning and hashing, "
+    "capability resolution, comparison eligibility, and the reviewed "
+    "20-schema registry are implemented. Stage 4 implementation completed at "
+    f"`{STAGE4_IMPLEMENTATION_COMMIT}`; the final status was recorded by the "
+    "separate Task 9 status commit. Stage 5 has not started."
+)
+_VERIFICATION_STAGE4_STATUS = "\n".join(
+    (
+        "Project 1 Stage 4 is complete. Stage 4 implementation completed at",
+        f"`{STAGE4_IMPLEMENTATION_COMMIT}`; the final status was recorded by",
+        "the separate Task 9 status commit. The closed 20-schema registry holds",
+        "the nine new Stage 4 schemas together with the eleven Stage 3 schemas,",
+        "preserved byte-identical to `main`. Stage 5 is not started.",
+    )
+)
+#: The claims the sweeps actually support. NOT "zero disagreement between the
+#: published schemas and the runtime validators" -- the schema-workflow section
+#: of the same file records forty-six under-rejections resolving to eleven
+#: rules, which are exactly that kind of disagreement.
+_VERIFICATION_CORPUS_QUALIFICATION = "\n".join(
+    (
+        "The independent sweeps agree on the falsifiable results: zero",
+        "over-rejections, and zero disagreement between the four schema surfaces.",
+        "The published bytes are therefore a superset of the runtime, never a",
+        "subset. The two sweeps do not agree on the residual set of inexpressible",
+        "rules, and that register is a maintained enumeration rather than a",
+        "machine-verified closure, not a claim that every possible runtime or",
+        "schema rule was exhaustively enumerated.",
+    )
+)
+#: The non-goal exclusions, pinned verbatim so the completion wording cannot be
+#: widened by deleting them.
+_VERIFICATION_NON_GOALS = "\n".join(
+    (
+        "No real trading engine, exchange connectivity, market-data download, real",
+        "backtest, order or fill simulation, portfolio accounting, persistence, paper",
+        "wallet, tax or TDS logic, LLM integration, user interface, Docker "
+        "setup, cloud",
+        "deployment, or server deployment exists anywhere in the repository. Stage 4",
+        "executes no engine, no adapter, no strategy, and no declared engine "
+        "extension,",
+        "and combines no comparison result into an averaged, voted, or synthetic "
+        "figure.",
+    )
+)
+_STAGE4_ROADMAP_STATUS_LINE = (
+    "**Status:** Approved planning decomposition; Stages 1 through 4 complete"
+)
+_STAGE4_ROADMAP_PLAN_SENTENCE = (
+    "Stages 1 through 4 have approved detailed implementation plans."
+)
+_STAGE4_ROADMAP_ROW = (
+    "| 4 — Portable Strategy, Capabilities, and Comparison | Approved and "
+    "executed; corrected detailed plan approved at "
+    f"`{STAGE4_PLAN_APPROVAL_COMMIT}` after two independent reviews, "
+    "superseding the pre-correction review at "
+    "`bf5e427a8fe055be2b6cb803b69d4c2334aeee69`; launcher bootstrap "
+    f"prerequisite completed at `{STAGE4_LAUNCHER_BOOTSTRAP_COMMIT}`; reviewed "
+    "plan corrections at "
+    + ", ".join(f"`{commit}`" for commit in STAGE4_PLAN_CORRECTION_COMMITS)
+    + " | Implementation complete at "
+    f"`{STAGE4_IMPLEMENTATION_COMMIT}`; post-completion evaluator "
+    f"rendering-bound correction at `{STAGE4_EVALUATOR_CORRECTION_COMMIT}`, with "
+    "review follow-ups at "
+    + ", ".join(f"`{commit}`" for commit in STAGE4_REVIEW_FOLLOWUP_COMMITS)
+    + "; final status recorded by the separate "
+    "Task 9 status commit, which is a status record and not the implementation "
+    "hash | Complete; portable strategy ingestion, static validation, "
+    "deterministic Level 1 evaluation, strategy versioning and hashing, "
+    "capability vocabulary and compatibility resolution, comparison "
+    "eligibility, and the closed 20-schema registry — 9 new Stage 4 schemas "
+    "with the 11 Stage 3 schemas preserved byte-identical — verified offline "
+    "on the complete verifier, which passed on its first attempt; GitNexus "
+    "remains `DISABLED_WITH_EVIDENCE` with the manual source, reference, and "
+    "diff fallback recorded; Stage 5 not started |"
+)
+#: Section 11 item 3, byte-exact including its hard wrapping. Reverting item 3
+#: to the symmetric "within one point" wording removes this sentence. No
+#: negative pin accompanies it: the retired phrasing necessarily survives
+#: inside item 3's own rationale for retiring it, so a whole-file negative pin
+#: would be false the moment it was written.
+_STAGE4_COVERAGE_SENTENCE = "\n".join(
+    (
+        "3. Branch coverage must be at least 90.00 percent and must not be more than",
+        "   1.00 percentage point below the Stage 3 baseline of 93.64 percent. "
+        "Coverage",
+        "   above the Stage 3 baseline is permitted.",
+    )
+)
 
 
 def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
@@ -744,8 +1003,8 @@ def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
         / "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
     ).read_text(encoding="utf-8")
     readme = (repository_root / "README.md").read_text(encoding="utf-8")
-    assert "Stages 1 through 3 complete" in roadmap
-    assert "Stages 1 through 3 have approved detailed implementation plans." in roadmap
+    assert _STAGE4_ROADMAP_STATUS_LINE in roadmap
+    assert _STAGE4_ROADMAP_PLAN_SENTENCE in roadmap
     assert (
         "**Approved detailed implementation plan:** "
         "`docs/superpowers/plans/"
@@ -783,7 +1042,11 @@ def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
         "generated schemas verified offline |"
     ) in roadmap
     assert f"Complete at `{STAGE3_TASK8_COMMIT}`" not in roadmap
-    assert "Eligible for just-in-time planning after Stage 3 completion" in roadmap
+    # The Stage 4 transition, per the plan section 3.9 status-authority rule.
+    # A pair, not a swap: the positive pin alone would pass on a roadmap that
+    # carried both the new row and a stale leftover copy of the retired phrase.
+    assert _STAGE4_ROADMAP_ROW in roadmap
+    assert "Eligible for just-in-time planning after Stage 3 completion" not in roadmap
     assert "`DISABLED_WITH_EVIDENCE`" in roadmap
     # The one assertion Task 8 is authorized to update, per the plan section 3.9
     # status-authority rule, and only in the same commit that updates README.md.
@@ -814,20 +1077,73 @@ def test_stage4_plan_approval_status_is_exact(repository_root: Path) -> None:
     planned_line = f"**Planned detailed implementation plan:** `{STAGE4_PLAN}`."
     assert approved_line in roadmap
     assert planned_line not in roadmap
-    assert (
-        "| 4 — Portable Strategy, Capabilities, and Comparison | Eligible for "
-        "just-in-time planning after Stage 3 completion; corrected detailed "
-        f"plan approved at `{STAGE4_PLAN_APPROVAL_COMMIT}` after two "
-        "independent reviews, superseding the pre-correction review at "
-        "`bf5e427a8fe055be2b6cb803b69d4c2334aeee69`; launcher bootstrap "
-        f"prerequisite completed at `{STAGE4_LAUNCHER_BOOTSTRAP_COMMIT}` | "
-        "Not started | Not evaluated |"
-    ) in roadmap
+    assert _STAGE4_ROADMAP_ROW in roadmap
 
-    # Stage 4 implementation has not started, and Stage 5 has not started.
-    assert "Stages 1 through 3 complete" in roadmap
+    # Section 11 item 3 must stay directional. Reverting it to the symmetric
+    # "within one point" band removes this sentence and fails here.
+    assert _STAGE4_COVERAGE_SENTENCE in plan
+
+    # Stage 4 implementation is complete, and Stage 5 has not started.
+    assert _STAGE4_ROADMAP_STATUS_LINE in roadmap
     assert (
         "| 5 — Experiment, Run, Invocation, Retry, and Aggregation Logic | "
         "Intentionally deferred until Stages 3\u20134 completion | Not started | "
         "Not evaluated |"
     ) in roadmap
+
+
+def test_stage4_completion_status_is_exact(repository_root: Path) -> None:
+    """One test, three surfaces, so no surface can drift alone.
+
+    Positive pins are byte-exact, following the hard-wrapped comparison in
+    ``test_readme_uses_only_closed_stage3_launcher_setup``. The two containment
+    assertions close the gap a negative-only guard leaves: they have no
+    phrasing to evade.
+    """
+    assert re.fullmatch(r"[0-9a-f]{40}", STAGE4_IMPLEMENTATION_COMMIT) is not None
+    assert STAGE4_IMPLEMENTATION_COMMIT not in {
+        STAGE3_TASK8_COMMIT,
+        STAGE3_IMPLEMENTATION_COMMIT,
+        STAGE3_STABILITY_CORRECTION_COMMIT,
+        STAGE4_LAUNCHER_BOOTSTRAP_COMMIT,
+        STAGE4_PLAN_APPROVAL_COMMIT,
+        STAGE4_EVALUATOR_CORRECTION_COMMIT,
+        *STAGE4_PLAN_CORRECTION_COMMITS,
+        *STAGE4_REVIEW_FOLLOWUP_COMMITS,
+    }
+
+    roadmap = (repository_root / STAGE4_ROADMAP).read_text(encoding="utf-8")
+    readme = (repository_root / "README.md").read_text(encoding="utf-8")
+    guide = (repository_root / STAGE4_VERIFICATION_GUIDE).read_text(encoding="utf-8")
+
+    assert _STAGE4_ROADMAP_STATUS_LINE in roadmap
+    assert _STAGE4_ROADMAP_PLAN_SENTENCE in roadmap
+    assert _STAGE4_ROADMAP_ROW in roadmap
+
+    assert _README_STAGE4_STATUS in readme
+    assert _VERIFICATION_STAGE4_STATUS in guide
+    assert _VERIFICATION_CORPUS_QUALIFICATION in guide
+    assert _VERIFICATION_NON_GOALS in guide
+
+    for phrase in _RETIRED_STATUS_PHRASES:
+        assert phrase not in readme
+        assert phrase not in guide
+
+    # The same implementation hash on every surface, asserted separately so
+    # changing it in exactly one file fails here and names that file.
+    assert STAGE4_IMPLEMENTATION_COMMIT in roadmap
+    assert STAGE4_IMPLEMENTATION_COMMIT in readme
+    assert STAGE4_IMPLEMENTATION_COMMIT in guide
+
+    # Containment. Remove the pinned blocks, then scan what is left. Scoped to
+    # the two documentation files, never the roadmap: the roadmap carries its
+    # own Stage 5 rows, and "exhaustive" occurs there legitimately in Stage 5's
+    # exit evidence.
+    readme_rest = readme.replace(_README_STAGE4_STATUS, "")
+    guide_rest = guide.replace(_VERIFICATION_STAGE4_STATUS, "").replace(
+        _VERIFICATION_CORPUS_QUALIFICATION, ""
+    )
+    assert "Stage 5" not in readme_rest
+    assert "Stage 5" not in guide_rest
+    assert "exhaustiv" not in readme_rest.lower()
+    assert "exhaustiv" not in guide_rest.lower()
