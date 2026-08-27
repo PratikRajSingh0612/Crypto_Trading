@@ -286,18 +286,50 @@ cannot add a single source file, import root, or schema without editing it.
 | `test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctly` | `assert len(paths) == 11` | Change to `20` |
 | `test_stage3_completion_status_is_exact` | Pins far more than the Stage 3 row: the roadmap status line `Stages 1 through 3 complete`; the sentence `Stages 1 through 3 have approved detailed implementation plans.`; the Stage 3 approved-plan line; the Stage 3 dependency-bootstrap control row; three negative assertions, one of which pins the absence of `Complete at` plus the Stage 3 Task 8 hash; the Stage 4 phrase `Eligible for just-in-time planning after Stage 3 completion`; the literal `` `DISABLED_WITH_EVIDENCE` ``; and the README line `**Status:** Project 1 Stages 1-3 complete` | See the status-authority rule below. No task may weaken a Stage 3 assertion |
 | Stage 4 plan-approval status guard | Added by the **separate roadmap-and-guard commit** that follows this plan's approval commit — not by the plan commit itself, which cannot pin its own hash. It pins the corrected-plan approval commit and the launcher bootstrap prerequisite, and asserts Stage 4 implementation is not started | Task 9 replaces the not-started assertions with completion assertions; no other task touches it |
+| Stage 4 documentation-status guard | Does not exist. `test_stage3_completion_status_is_exact` reads only `README.md` and the roadmap, and `docs/development/verification.md` is pinned by nothing at all | **Added by Task 9.** A new test pinning the exact final Stage 4 status text in `README.md`, `docs/development/verification.md`, and the roadmap together, so no one surface can drift alone |
+| `_DEFERRED_DEFINITIONS` membership | 79 names at Stage 3, 65 after section 9.8, with **no assertion on the set or its length**: removing a member deletes a parametrized case instead of failing one | **Added by Task 9.** `assert len(_DEFERRED_DEFINITIONS) == 65` plus a frozen-set comparison, following the precedent already in the file at `test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two` |
+| `pathlib` / `importlib` inside `strategy` and `capabilities` | Unguarded. Both roots are members of the reviewed 22-root allowlist because `configuration`, `cli`, and `schema_registry` need them, and no test narrows either root per package | **Added by Task 9.** A per-package AST scan rejecting both roots inside `strategy/` and `capabilities/`, in both `import` and `from … import` shape |
+| `tests/safety/test_gitnexus_development_tooling.py::test_terminal_outcome_matches_roadmap_status` | Pins `Stages 1 through 3 have approved detailed implementation plans.` at line 375 and `**Status:** Approved planning decomposition; Stages 1 through 3 complete` at lines 406-409. Both are falsified by Task 9's roadmap edit; line 375 fires on every execution route | **Task 9 updates exactly those two assertions** to their Stage 4 forms. No GitNexus outcome, evidence file, exclusion, or row literal changes |
+| Section 11 item 3 coverage sentence | Pinned by nothing | **Added by Task 9** as one positive assertion inside the existing `test_stage4_plan_approval_status_is_exact`, which already reads the plan file |
 
 **Status-authority rule.** Stage 4 completion necessarily invalidates four
 strings that `test_stage3_completion_status_is_exact` pins, so a blanket "no
 Stage 4 task touches this test" is unsatisfiable. Authority is therefore split
-narrowly and exhaustively:
+narrowly, and the split below is exhaustive **as of the Task 9 completion
+correction**. It was not exhaustive before: the original rule enumerated only
+`test_stage3_completion_status_is_exact` and missed
+`tests/safety/test_gitnexus_development_tooling.py`, which pins two of the same
+roadmap strings. Treat the enumeration as a derived list to be re-confirmed
+against the tests, not as a closed claim:
 
-- **Task 8** may update exactly the README status-line assertion, in the same
-  commit that updates `README.md`. Nothing else.
+- **Task 8** may update exactly the README status-line assertion — the
+  `**Status:** Project 1 Stages 1-3 complete` line at `README.md:3` — in the
+  same commit that updates `README.md`. Nothing else.
 - **Task 9** may update exactly the roadmap status line, the
   `Stages 1 through 3 have approved detailed implementation plans.` sentence,
   and the `Eligible for just-in-time planning after Stage 3 completion` phrase,
-  each replaced by an equally exact Stage 4 assertion. Nothing else.
+  each replaced by an equally exact Stage 4 assertion; **the two roadmap-status
+  assertions in `tests/safety/test_gitnexus_development_tooling.py`** at line
+  375 and lines 406-409, replaced the same way; and it **adds** the Stage 4
+  documentation-status guard, the `_DEFERRED_DEFINITIONS` membership assertion,
+  the `pathlib`/`importlib` per-package scan named in the table above, and a
+  positive pin of the section 11 item 3 coverage sentence inside the existing
+  `test_stage4_plan_approval_status_is_exact`. Nothing else.
+- **Task 8's README authority does not block Task 9.** They own different
+  strings in the same file. Task 8 owns the status line at `README.md:3`;
+  Task 9 owns the Stage 4 status paragraph at `README.md:7`, which is the
+  interim `awaits Task 9` sentence Task 8 wrote and only Task 9 can retire.
+  Task 9 leaves `README.md:3` and its assertion verbatim.
+- **`Stages 1 through 3 complete` is pinned three times**, and the
+  `Stages 1 through 3 have approved detailed implementation plans.` sentence
+  twice. The sites are `test_stage3_completion_status_is_exact` (both strings),
+  `test_stage4_plan_approval_status_is_exact` (the status line, under its
+  "Stage 4 implementation has not started" block), and
+  `test_gitnexus_development_tooling.py::test_terminal_outcome_matches_roadmap_status`
+  (both strings, lines 375 and 406-409). Task 9 updates **every** site in the
+  same commit. Updating some leaves the focused run red in a way that reads like
+  a scope violation rather than an incomplete edit. Derive the site list rather
+  than trusting this one: `grep -rn "Stages 1 through 3" tests/ --include=*.py`.
 - **No task** may weaken, delete, or relax any Stage 3 assertion: the Stage 3
   row, its approved-plan line, its dependency-bootstrap control row, all three
   negative assertions, and the `DISABLED_WITH_EVIDENCE` literal all remain
@@ -1653,7 +1685,8 @@ are corrected together, atomically, because they are one defect class.
     hand-edit a future generated schema, to change field shape, to remove the
     field serializer, or to expose `MappingProxyType` in schema output.
 17. Task 9 must record this plan-correction commit together with all earlier
-    Stage 4 plan corrections, per Task 9 step 6.
+    Stage 4 plan corrections, per Task 9 step 8. Its hash is
+    `cfede94c5de22fba93176e4d5f75aceeffc7695e`, known once the commit landed.
 
 **Ownership.** This is a **post-Task-5 deep-immutability corrective landing,
 required before Task 6**. It is not Task 6 work and does not change the Stage 4
@@ -2366,14 +2399,15 @@ recursive alias, feature cycle, and the valid golden inputs — are fixture file
 
 | Path | Change |
 |---|---|
-| `tests/safety/test_stage3_boundaries.py` | **Tasks 2 through 8**, each applying only the subset matching the files and deferred names it creates: `_ALLOWED_SOURCE_FILES`, `_ALLOWED_IMPORT_ROOTS`, `_DEFERRED_DEFINITIONS`, schema count `11` to `20`. Also the post-Task-5 deep-immutability landing of section 5.5.1, which adds the `types` root and its location-and-form guard. Task 9: the Stage 4 completion status guard only |
+| `tests/safety/test_stage3_boundaries.py` | **Tasks 2 through 8**, each applying only the subset matching the files and deferred names it creates: `_ALLOWED_SOURCE_FILES`, `_ALLOWED_IMPORT_ROOTS`, `_DEFERRED_DEFINITIONS`, schema count `11` to `20`. Also the post-Task-5 deep-immutability landing of section 5.5.1, which adds the `types` root and its location-and-form guard. **Task 9:** the Stage 4 completion status guard across all three status surfaces, the three §3.9-granted assertion replacements in `test_stage3_completion_status_is_exact`, the plan-approval guard's Stage 4 row and its second `Stages 1 through 3 complete`, the `_DEFERRED_DEFINITIONS` membership assertion, the `pathlib`/`importlib` per-package scan, and the section 11 item 3 coverage pin — and nothing else |
+| `tests/safety/test_gitnexus_development_tooling.py` | **Task 9 only**, and only the two roadmap-status assertions inside `test_terminal_outcome_matches_roadmap_status` at line 375 and lines 406-409. No GitNexus outcome, evidence file, exclusion, or row literal changes |
 | `tests/safety/test_project_dependencies.py` | `_EXPECTED_RUNTIME_REQUIREMENTS`, `_EXPECTED_DEVELOPMENT_NAMES`, pinned mypy table keys |
 | `tests/unit/test_schema_registry.py` | Closed 11-entry `_EXPECTED` path-to-`$id` map, `len(SCHEMA_DEFINITIONS) == 11`, and the test name (Appendix I) |
 | `tests/unit/test_package_layout.py` | Closed `PACKAGE_MODULES` list, which drives the fresh-import probe |
 | `pyproject.toml` | Add `pyyaml>=6.0.3,<7`; add `types-pyyaml>=6.0.12,<7` to `dev` |
 | `uv.lock` | Regenerated by the launcher; never hand-edited |
-| `docs/development/verification.md` | Stage 4 focused checks and schema count |
-| `README.md` | Status line and strategy-loading summary |
+| `docs/development/verification.md` | **Task 8:** Stage 4 focused checks and schema count, and the interim Stage 4 status paragraph. **Task 9:** replaces that interim paragraph with the final Stage 4 status text and pins it |
+| `README.md` | **Task 8:** status line at line 3 and strategy-loading summary. **Task 9:** replaces the interim `awaits Task 9` Stage 4 status paragraph with the final Stage 4 status text and pins it, leaving the line-3 status line verbatim |
 | `docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md` | **Task 9 only.** Stage 4 implementation complete at the Task 8 commit, Task 9 status finalization distinguished from the implementation hash, Stage 5 still not started |
 
 Stage 4 implementation must not modify the corrected launcher
@@ -2484,8 +2518,11 @@ test change.
 Nine separately reviewable tasks. No task may be merged into another, and each
 ends in a clean committed worktree. Task 8 owns the complete implementation
 acceptance and the implementation commit; Task 9 owns only the Stage 4
-completion status and its executable guard, because a task cannot write its own
-commit hash into the roadmap.
+completion status across the roadmap, `README.md`, and
+`docs/development/verification.md`, together with its executable guard and the
+two roadmap-status assertions in
+`tests/safety/test_gitnexus_development_tooling.py` that its roadmap edit
+falsifies, because a task cannot write its own commit hash into the roadmap.
 
 **Closed-world guard rule.** `tests/safety/test_stage3_boundaries.py` is in the
 Files list of **every** task from Task 2 onward, and each task applies only the
@@ -4102,45 +4139,171 @@ documentation accuracy, and implementation acceptance.
 ### Task 9 — Stage 4 completion status and executable status guard
 
 **Runs only after Task 8 is committed**, because it records that commit's exact
-hash.
+hash. Task 8 is committed at
+`33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`.
 
-**Files, exactly two:**
-`docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md` and
-`tests/safety/test_stage3_boundaries.py`, or whichever module then holds the
-exact roadmap-status guard.
+**Files, exactly five:**
 
-**Consumes:** the committed Task 8 hash.
-**Produces:** the recorded Stage 4 completion status and its executable guard.
+1. `docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md`
+2. `tests/safety/test_stage3_boundaries.py`
+3. `README.md`
+4. `docs/development/verification.md`
+5. `tests/safety/test_gitnexus_development_tooling.py`
+
+**On the fifth file.** It is not a documentation surface and Task 9 changes no
+GitNexus behaviour in it. It is in the map for one mechanical reason:
+`test_terminal_outcome_matches_roadmap_status` is the *second* module that pins
+roadmap status strings, and step 4 falsifies two of its assertions —
+`assert "Stages 1 through 3 have approved detailed implementation plans." in roadmap`
+at line 375, which fires on every execution route, and
+`assert "**Status:** Approved planning decomposition; Stages 1 through 3 complete" in roadmap`
+at lines 406-409, which fires on the `DISABLED_WITH_EVIDENCE` route the
+repository is on. Task 9's own focused command runs `tests\safety`, and
+`scripts/verify.ps1` runs the whole suite, so leaving this module out does not
+defer the failure — it makes Task 9 unable to go green at all. Confirm the set
+is complete before starting, with
+`grep -rln "project-1-master-roadmap" tests/ --include=*.py`; it returns exactly
+these two modules today, and a third would have to be added to this map.
+
+Files 3 and 4 were added by the Task 9 completion correction. Task 8 wrote an
+interim status sentence into both — "Stage 4 implementation is complete and
+awaits Task 9 final status recording and whole-stage completion review" — which
+Task 9's own commit makes false. Reviewer D's M27 ruling is that a task cannot be
+asked to guard prose it is not authorized to correct, and that widening this file
+map is the smallest change consistent with the plan's own pattern: Task 9 already
+owns the roadmap status *transition*, and these are the parallel documentation
+transitions.
+
+**Consumes:**
+
+- the actual Task 8 commit `33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`, read from
+  Git rather than from this plan;
+- the complete Stage 4 plan history, including every plan-correction commit;
+- the complete Stage 4 implementation and correction history;
+- the Task 8 schema manifests — the twenty registry entries, the nine Stage 4
+  schema digests, and the eleven Stage 3 digests;
+- the Task 8 review and verification evidence, including the four final reviewer
+  reports and the blocker and correction reports.
+
+**Produces:**
+
+- the final Stage 4 roadmap status;
+- the final Stage 4 documentation status in `README.md` and
+  `docs/development/verification.md`;
+- executable cross-file status consistency, so no one surface can drift alone;
+- the final whole-stage review evidence;
+- a merge-ready clean branch.
 
 **Test-first sequence**
 
 1. Read the Task 8 commit hash with `git rev-parse HEAD` immediately after that
    commit, and record it in the ledger before editing anything.
-2. Add a Stage 4 completion guard alongside the existing
-   `test_stage3_completion_status_is_exact`, **and replace the not-started
-   assertions in the plan-approval guard** that the separate roadmap-and-guard
-   commit introduced, so the two do not contradict each other. Pin the exact
-   roadmap text as module constants: the Task 8 implementation hash, the
-   corrected-plan approval hash, and the launcher bootstrap prerequisite
-   `350fac49ff5b1db4ec62b60c7ade76580f9894dd`.
-   **Expected RED:** `AssertionError`, because the roadmap still records Stage 4
-   implementation as not started.
-3. Update the Stage 4 row of roadmap section 9, and the roadmap status line,
-   to record:
-   - **Stage 4 implementation complete at the Task 8 commit** — the
-     implementation hash is Task 8's, never Task 9's;
-   - that **Stage 4 status finalization at Task 9 is not represented as the
-     implementation hash**. Task 9's own commit is a status-recording commit and
-     must be described as such, exactly as the Stage 3 row distinguishes its
-     implementation commit from its later stability correction;
-   - that **Stage 5 remains not started**, with its plan still deferred and its
-     exit gate not evaluated.
-4. Keep the executable roadmap guard exact: every pinned string must be a
+2. **Update or add the guard assertions first, before touching any
+   documentation.** In `tests/safety/test_stage3_boundaries.py`:
+   - add a Stage 4 completion guard alongside the existing
+     `test_stage3_completion_status_is_exact`, pinning the exact final status
+     text in all three surfaces — roadmap, `README.md`, and
+     `docs/development/verification.md` — as set out in "Exact final status
+     text" and "The Stage 4 completion guard" below;
+   - **update the three §3.9-granted assertions inside
+     `test_stage3_completion_status_is_exact`.** Step 4 falsifies all three, and
+     without this bullet step 5 can never go green. Authority is the
+     status-authority rule; the replacements are exact:
+
+     | Current assertion | Becomes |
+     |---|---|
+     | `assert "Stages 1 through 3 complete" in roadmap` | `assert _STAGE4_ROADMAP_STATUS_LINE in roadmap` |
+     | `assert "Stages 1 through 3 have approved detailed implementation plans." in roadmap` | `assert _STAGE4_ROADMAP_PLAN_SENTENCE in roadmap` |
+     | `assert "Eligible for just-in-time planning after Stage 3 completion" in roadmap` | `assert _STAGE4_ROADMAP_ROW in roadmap` **and** `assert "Eligible for just-in-time planning after Stage 3 completion" not in roadmap` |
+
+     The third replacement is a pair, not a swap. The positive pin alone would
+     pass on a roadmap that carried both the new row and a stale leftover copy
+     of the retired phrase; the added negative pin makes the transition
+     complete. The phrase occurs exactly once in the roadmap today, inside the
+     Stage 4 row, so the negative pin is exact.
+
+     Every other assertion in that test — the Stage 3 row, its approved-plan
+     line, its dependency-bootstrap control row, all three negative assertions,
+     the `DISABLED_WITH_EVIDENCE` literal, and Task 8's README status line —
+     stays verbatim;
+   - **replace the not-started assertions in the plan-approval guard** that the
+     separate roadmap-and-guard commit introduced, so the two do not contradict
+     each other. That means its Stage 4 row assertion, which currently ends
+     `| Not started | Not evaluated |`, and its own second copy of
+     `Stages 1 through 3 complete`. Its Stage 5 row assertion is **not** touched;
+   - pin the exact roadmap text as module constants: the Task 8 implementation
+     hash, the corrected-plan approval hash, the launcher bootstrap prerequisite
+     `350fac49ff5b1db4ec62b60c7ade76580f9894dd`, and the plan-correction chain;
+   - add the `_DEFERRED_DEFINITIONS` membership assertion that closes Reviewer D
+     M26;
+   - add the `pathlib`/`importlib` per-package scan that closes Reviewer D D-4b;
+   - add to `test_stage4_plan_approval_status_is_exact` a positive pin of the
+     exact section 11 item 3 coverage sentence, `_STAGE4_COVERAGE_SENTENCE`
+     below. That test already reads `STAGE4_PLAN`, so this is one more assertion
+     in an existing test, not a new file. No negative pin accompanies it, for
+     the reason given under "Mutation obligations".
+
+   And in `tests/safety/test_gitnexus_development_tooling.py`, inside
+   `test_terminal_outcome_matches_roadmap_status`, update exactly the two
+   roadmap-status assertions step 4 falsifies, and nothing else:
+
+   | Line | Current assertion | Becomes |
+   |---|---|---|
+   | 375 | `assert "Stages 1 through 3 have approved detailed implementation plans." in roadmap` | `assert "Stages 1 through 4 have approved detailed implementation plans." in roadmap` |
+   | 406-409 | `assert ("**Status:** Approved planning decomposition; Stages 1 through 3 complete" in roadmap)` | the same assertion with `Stages 1 through 4 complete` |
+
+   Both keep their exact-substring form. Every other assertion in that module —
+   the Stage 2 approved-plan lines, the `ENABLED` and `DISABLED_WITH_EVIDENCE`
+   row literals, the route branching, and the
+   `"Only Stage 1 has a detailed implementation plan" not in roadmap` negative —
+   stays verbatim. Task 9 changes no GitNexus outcome, evidence file, or
+   exclusion.
+3. **Observe RED, and label it honestly.** Run the focused guard. The expected
+   failure is that the roadmap, `README.md`, and
+   `docs/development/verification.md` all still hold the interim pre-Task-9
+   status: the roadmap Stage 4 row still reads `Not started`, and both
+   documentation files still contain `awaits Task 9`. The failure must name the
+   first stale status surface.
+
+   **Expect four red tests, not one**, and do not read the extra three as a
+   mistake:
+   - `test_stage3_completion_status_is_exact` — its three replaced assertions;
+   - `test_stage4_plan_approval_status_is_exact` — its replaced Stage 4 row and
+     its second copy of `Stages 1 through 3 complete`;
+   - `test_stage4_completion_status_is_exact` — the new guard, on every status
+     surface;
+   - `test_terminal_outcome_matches_roadmap_status` in
+     `tests/safety/test_gitnexus_development_tooling.py` — its two replaced
+     assertions.
+
+   All four go green after step 4, and no other test changes colour.
+
+   **Three of the new assertions begin green, and that is correct, not a
+   defect.** `len(_DEFERRED_DEFINITIONS) == 65` is true today; neither
+   `crypto_lab.strategy` nor `crypto_lab.capabilities` imports `pathlib` or
+   `importlib` today, which Reviewer D confirmed by inspection; and
+   `_STAGE4_COVERAGE_SENTENCE` is already present, because the corrected
+   section 11 item 3 lands with the plan-correction commit, which is an ancestor
+   of Task 9. All three are **preventive** guards: they exist so a future change
+   cannot silently break a rule that currently holds. Do not fabricate a failure
+   for any of them. Their load-bearing proof is the mutation campaign in step 8,
+   not a RED in step 3.
+
+   The two containment assertions of the completion guard also begin green, for
+   the reason recorded under "The Stage 4 completion guard".
+4. **Update the roadmap, `README.md`, and the verification guide together, in
+   one commit**, to the exact text in "Exact final status text" below. Updating
+   one without the others is precisely the drift the guard exists to prevent.
+5. **Observe GREEN, and confirm it proves cross-file agreement**, not merely
+   that three files were edited. The guard asserts the same Task 8 hash in all
+   three surfaces and the absence of every interim phrasing from both
+   documentation files.
+6. Keep the executable roadmap guard exact: every pinned string must be a
    verbatim substring of the roadmap, and the guard must fail if the roadmap
    text drifts. Do not relax any existing Stage 3 assertion.
-5. Confirm no source, schema, dependency, or lockfile change is present in this
-   commit.
-6. **Record the complete Stage 4 plan history — reviewed correction.** The
+7. Confirm no source, schema, fixture, dependency, script, or lockfile change is
+   present in this commit.
+8. **Record the complete Stage 4 plan history — reviewed correction.** The
    approved plan was corrected several times during implementation, so recording
    only the original approval hash would misstate which document the stage was
    built against. Task 9 must **derive the history from Git rather than from a
@@ -4191,21 +4354,30 @@ exact roadmap-status guard.
    - the **deep-immutability plan correction** of section 5.5.1
      (`docs: require deep strategy immutability`) — the commit containing the
      reviewed deep-immutability section and the closed-world 22-root import
-     update. Its hash is derived from Git after the commit exists, and is
-     recorded in both the ledger and the roadmap's Stage 4 row. Named
-     descriptively rather than by hash because a document cannot contain its own
-     commit hash;
+     update. It has landed, so its hash is now known and stated here rather than
+     deferred: `cfede94c5de22fba93176e4d5f75aceeffc7695e`. It is recorded in
+     both the ledger and the roadmap's Stage 4 row;
+   - the **Task 9 completion correction** (`docs: correct stage 4 completion
+     plan`) — the commit carrying this widened five-file map, the M26 and D-4b
+     assignments, the documentation-status invariant, and the directional
+     coverage wording. Its hash is derived from Git after the commit exists,
+     because a document cannot contain the hash of the commit that introduces
+     it. It **is** recorded literally in the roadmap, because the roadmap is
+     written by the later Task 9 status commit, for which that hash is already
+     an ancestor;
    - any further reviewed plan-correction commit that lands before Task 9.
 
    **Derive the chain from Git, not from arithmetic here.** The known hashes are
    `b6721b870c79db7b999b9eb70107e53992cbe1ab`,
    `65eca5b17d45c0cf04f856dc6049e0c3ee7a2be9`,
-   `f898499d647d1d4ade571345973c6ced5e84403c`, and
-   `f57357379222404685d805d081de4f61f36a7fe5`, followed by the
-   deep-immutability plan-correction commit and any later one, each read from
-   Git. Task 9 must confirm the recorded set against
-   `git log --oneline -- <this plan path>` rather than against a number, so the
-   record cannot drift as further corrections land.
+   `f898499d647d1d4ade571345973c6ced5e84403c`,
+   `f57357379222404685d805d081de4f61f36a7fe5`, and
+   `cfede94c5de22fba93176e4d5f75aceeffc7695e` — the last being the
+   deep-immutability plan correction, whose hash is now known and so is stated
+   here rather than deferred — followed by the Task 9 completion correction and
+   any later one, each read from Git. Task 9 must confirm the recorded set
+   against `git log --oneline -- <this plan path>` rather than against a number,
+   so the record cannot drift as further corrections land.
 
    Implementation commits are **not** plan commits and are recorded separately;
    they are likewise derived from Git rather than counted here. Two that are
@@ -4215,9 +4387,607 @@ exact roadmap-status guard.
    implementation commit `fix: freeze strategy mapping fields`. This is not a
    closed enumeration of Stage 4's non-plan commits.
 
+   **The late correction chain must appear in the derived history.** These five
+   commits are the ones most easily lost. Six corrections land between the last
+   feature commit `9328e7a64888f1cc5f87fb38fa13dc5752aedb48` and Task 8; the
+   five below are the consecutive tail of that run, ending in Task 8 itself:
+   `1a8d08da6f0d4fc153093b31de20dbb4af4d8f68`,
+   `ae24043f2405a81f55005af096697ad7182da3a8`,
+   `22c4c5810798a8bc3d306b7c9b0e80d8c6ef16fc`,
+   `cc3b44b0300e0af1c68bb3bbc8ae05edf4e87747`, and
+   `33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`. Their presence in the derived
+   list is a check on the derivation, not a substitute for it.
+
    The plan-approval guard's pinned corrected-plan hash still identifies the
    approval commit, not the corrections; Task 9 records the corrections alongside
    it rather than replacing it.
+
+9. **Close Reviewer D M26** — referred to as "M2" in the Task 9 controller
+   instruction; the two names denote the same finding, and the mapping is
+   recorded here so a reviewer can audit it rather than rediscover it. See
+   "Closing Reviewer D M26" below.
+10. **Close Reviewer D D-4b**, the `pathlib`/`importlib` guard. See "Closing
+    Reviewer D D-4b" below.
+11. **Run the complete Stage 4 whole-stage review** in fresh review contexts that
+    did not author Task 9, per section 12.
+
+    **On ordering.** Section 12 item 2 says the whole-stage review "follows the
+    status commit, not the implementation commit, so it reviews the final
+    recorded state of the stage". The binding requirement is the *state*
+    reviewed, not the clock. The review may therefore run before the commit,
+    provided it reviews the exact tree that will be committed and nothing
+    changes afterwards. Any finding that requires an edit invalidates the run,
+    and the review is redone on the corrected tree. Running it pre-commit is
+    preferred, because a finding then costs an edit rather than a second commit.
+12. **Run the complete verifier from the clean feature branch**, first-attempt
+    pass.
+13. **Commit Task 9.**
+
+#### The permanent documentation-status invariant
+
+Task 9 makes this invariant executable, and it holds from Task 9 onward:
+
+1. `README.md`, `docs/development/verification.md`, and the Stage 4 row of the
+   roadmap must agree that Stage 4 is complete.
+2. All three must record Stage 4 implementation completion at
+   `33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`.
+3. All interim `awaits Task 9` wording must be absent from both documentation
+   files, as must `Task 9 pending` and any equivalent still-pending phrasing.
+4. No document may imply Stage 5 has started.
+5. No document may claim that every theoretically possible runtime or schema
+   invariant was exhaustively enumerated.
+6. Documentation **may** state that the reviewed rule matrix, the generated
+   schemas, and the test corpus showed zero disagreement. That is the accurate
+   claim and it is the one to make.
+7. Documentation must retain the exact non-goal exclusions already present: no
+   real trading engine, exchange connectivity, market-data download, real
+   backtest, order or fill simulation, portfolio accounting, persistence, paper
+   wallet, tax or TDS logic, LLM integration, user interface, Docker setup,
+   cloud deployment, or server deployment.
+
+#### Task 9 records no hash of its own
+
+A commit cannot contain its own hash. Task 9 therefore records:
+
+- **implementation complete at the Task 8 commit**
+  `33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`;
+- **final status recorded by the Task 9 commit**, described as the status commit
+  that current HEAD becomes after the commit, exactly as the Stage 3 row
+  distinguishes its implementation commit from its later stability correction;
+- the **actual Task 9 hash in the completion report and the merge evidence**,
+  read from Git after the commit — never fabricated inside its own tree, and
+  never written into the roadmap, `README.md`, or the verification guide as a
+  self-reference.
+
+A placeholder standing in for the Task 9 hash inside any of the five files is a
+defect, not a convention. The guard rejects a placeholder **substituted for the
+Task 8 hash on any of the three status surfaces**; a placeholder introduced
+anywhere else is caught by the exact-scope diff review, not by an assertion.
+State it that way and no more strongly.
+
+#### Exact final status text
+
+**Roadmap status line** (replaces `Stages 1 through 3 complete`):
+
+```text
+**Status:** Approved planning decomposition; Stages 1 through 4 complete
+```
+
+**Roadmap plan sentence** (replaces the `Stages 1 through 3` form):
+
+```text
+Stages 1 through 4 have approved detailed implementation plans.
+```
+
+**Roadmap Stage 4 row of section 9.** `<task9-plan-correction>` below is not a
+placeholder to be left in place: it is the hash of the Task 9 completion
+correction, substituted in full before the row is written. Derive it from the
+**full** plan-commit chain that step 8 already mandates —
+`git log --format="%H %s" -- docs/superpowers/plans/2026-08-10-project-1-portable-strategy-capabilities-comparison-implementation-plan.md`
+— and take the commit whose subject is `docs: correct stage 4 completion plan`.
+Do not use `git log -1`: if a further plan correction lands after this one,
+`-1` silently returns the wrong commit, and the row must name every correction
+in order regardless.
+
+```text
+| 4 — Portable Strategy, Capabilities, and Comparison | Approved and executed; corrected detailed plan approved at `b6721b870c79db7b999b9eb70107e53992cbe1ab` after two independent reviews, superseding the pre-correction review at `bf5e427a8fe055be2b6cb803b69d4c2334aeee69`; launcher bootstrap prerequisite completed at `350fac49ff5b1db4ec62b60c7ade76580f9894dd`; reviewed plan corrections at `65eca5b17d45c0cf04f856dc6049e0c3ee7a2be9`, `f898499d647d1d4ade571345973c6ced5e84403c`, `f57357379222404685d805d081de4f61f36a7fe5`, `cfede94c5de22fba93176e4d5f75aceeffc7695e`, and `<task9-plan-correction>` | Implementation complete at `33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`; final status recorded by the separate Task 9 status commit, which is a status record and not the implementation hash | Complete; portable strategy ingestion, static validation, deterministic Level 1 evaluation, strategy versioning and hashing, capability vocabulary and compatibility resolution, comparison eligibility, and the closed 20-schema registry — 9 new Stage 4 schemas with the 11 Stage 3 schemas preserved byte-identical — verified offline on the complete verifier, which passed on its first attempt; GitNexus remains `DISABLED_WITH_EVIDENCE` with the manual source, reference, and diff fallback recorded; Stage 5 not started |
+```
+
+The Stage 5 row is unchanged and still reads `Not started` and `Not evaluated`.
+No other stage row changes.
+
+**`README.md`**, replacing the single interim line at `README.md:7`. It is one
+source line, matching the surrounding paragraph style:
+
+```text
+Project 1 Stage 4 is complete. Portable strategy ingestion, deterministic Level 1 evaluation, strategy versioning and hashing, capability resolution, comparison eligibility, and the reviewed 20-schema registry are implemented. Stage 4 implementation completed at `33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`; the final status was recorded by the separate Task 9 status commit. Stage 5 has not started.
+```
+
+`README.md:3` keeps `**Status:** Project 1 Stages 1-4 complete` verbatim. Task 8
+wrote it and Task 9 does not touch it.
+
+**`docs/development/verification.md`**, replacing the two interim lines under
+`## Stage scope`. The file is hard-wrapped and the guard pins these paragraphs
+**byte-exact, newlines included**, so the wrapping below is not a suggestion:
+reproduce it exactly, line break for line break.
+
+```text
+Project 1 Stage 4 is complete. Stage 4 implementation completed at
+`33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`; the final status was recorded by
+the separate Task 9 status commit. The closed 20-schema registry holds
+the nine new Stage 4 schemas together with the eleven Stage 3 schemas,
+preserved byte-identical to `main`. Stage 5 is not started.
+
+The independent sweeps over the reviewed rule matrix, the generated
+schemas, and the Stage 4 test corpus found zero disagreement between the
+published schemas and the runtime validators. That is a result over the
+reviewed corpus and those sweeps. It is not a claim that every possible
+runtime or schema rule was exhaustively enumerated.
+```
+
+Every other paragraph of `## Stage scope` is retained verbatim, including the
+GitNexus `DISABLED_WITH_EVIDENCE` and manual-fallback paragraph and the
+non-goal exclusion paragraph. The rest of the verification guide is retained
+verbatim: the offline launcher workflow, the exact registry count 20, the schema
+generation and distribution commands, the Stage 3 byte-preservation requirement,
+the expression conditional-dispatch tractability note, the calendar-valid and
+clock-valid Stage 4 timestamp projection, the targeted flake gates, and the
+complete verifier instructions. Do not alter a script or a command unless the
+existing text is factually stale.
+
+#### The Stage 4 completion guard
+
+The pins are **byte-exact, newlines included**, following the module's own
+documentation-prose precedent at
+`test_readme_uses_only_closed_stage3_launcher_setup`, which compares a
+hard-wrapped block with `==` including every line break. No whitespace
+normalization is used and none is needed: this plan dictates the exact wrapping
+of every sentence Task 9 writes, so byte-exactness costs nothing and is strictly
+tighter than a normalized comparison. It is therefore an exact verbatim pin in
+the sense section 3.9 requires — no regex, no substring-of-substring.
+
+Add to `tests/safety/test_stage3_boundaries.py`, beside the existing status
+constants:
+
+```python
+STAGE4_IMPLEMENTATION_COMMIT = "33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce"
+STAGE4_ROADMAP = "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
+STAGE4_VERIFICATION_GUIDE = "docs/development/verification.md"
+#: Interim phrasings that Task 9's own commit makes false. None may survive in
+#: either documentation file.
+_RETIRED_STATUS_PHRASES = (
+    "awaits Task 9",
+    "Task 9 pending",
+)
+_README_STAGE4_STATUS = (
+    "Project 1 Stage 4 is complete. Portable strategy ingestion, "
+    "deterministic Level 1 evaluation, strategy versioning and hashing, "
+    "capability resolution, comparison eligibility, and the reviewed "
+    "20-schema registry are implemented. Stage 4 implementation completed at "
+    f"`{STAGE4_IMPLEMENTATION_COMMIT}`; the final status was recorded by the "
+    "separate Task 9 status commit. Stage 5 has not started."
+)
+_VERIFICATION_STAGE4_STATUS = "\n".join(
+    (
+        "Project 1 Stage 4 is complete. Stage 4 implementation completed at",
+        f"`{STAGE4_IMPLEMENTATION_COMMIT}`; the final status was recorded by",
+        "the separate Task 9 status commit. The closed 20-schema registry holds",
+        "the nine new Stage 4 schemas together with the eleven Stage 3 schemas,",
+        "preserved byte-identical to `main`. Stage 5 is not started.",
+    )
+)
+_VERIFICATION_CORPUS_QUALIFICATION = "\n".join(
+    (
+        "The independent sweeps over the reviewed rule matrix, the generated",
+        "schemas, and the Stage 4 test corpus found zero disagreement between the",
+        "published schemas and the runtime validators. That is a result over the",
+        "reviewed corpus and those sweeps. It is not a claim that every possible",
+        "runtime or schema rule was exhaustively enumerated.",
+    )
+)
+#: Section 5.1's non-goal exclusions, pinned verbatim so the completion wording
+#: cannot be widened by deleting them.
+_VERIFICATION_NON_GOALS = "\n".join(
+    (
+        "No real trading engine, exchange connectivity, market-data download, real",
+        "backtest, order or fill simulation, portfolio accounting, persistence, paper",
+        "wallet, tax or TDS logic, LLM integration, user interface, Docker setup, cloud",
+        "deployment, or server deployment exists anywhere in the repository. Stage 4",
+        "executes no engine, no adapter, no strategy, and no declared engine extension,",
+        "and combines no comparison result into an averaged, voted, or synthetic figure.",
+    )
+)
+_STAGE4_ROADMAP_STATUS_LINE = (
+    "**Status:** Approved planning decomposition; Stages 1 through 4 complete"
+)
+_STAGE4_ROADMAP_PLAN_SENTENCE = (
+    "Stages 1 through 4 have approved detailed implementation plans."
+)
+#: Section 11 item 3, byte-exact including its hard wrapping. Pinned inside
+#: test_stage4_plan_approval_status_is_exact, which already reads STAGE4_PLAN.
+#: Reverting item 3 to the symmetric "within one point" wording removes this
+#: sentence and fails that test. No negative pin accompanies it: the retired
+#: phrasing necessarily survives inside item 3's own rationale for retiring it,
+#: so a whole-file negative pin would be false the moment it was written.
+_STAGE4_COVERAGE_SENTENCE = "\n".join(
+    (
+        "3. Branch coverage must be at least 90.00 percent and must not be more than",
+        "   1.00 percentage point below the Stage 3 baseline of 93.64 percent. Coverage",
+        "   above the Stage 3 baseline is permitted.",
+    )
+)
+```
+
+The guard itself:
+
+```python
+def test_stage4_completion_status_is_exact(repository_root: Path) -> None:
+    """One test, three surfaces, so no surface can drift alone.
+
+    Positive pins are byte-exact. The two containment assertions close the
+    gap a negative-only guard leaves: they have no phrasing to evade.
+    """
+    assert re.fullmatch(r"[0-9a-f]{40}", STAGE4_IMPLEMENTATION_COMMIT) is not None
+    assert STAGE4_IMPLEMENTATION_COMMIT not in {
+        STAGE3_TASK8_COMMIT,
+        STAGE3_IMPLEMENTATION_COMMIT,
+        STAGE3_STABILITY_CORRECTION_COMMIT,
+        STAGE4_LAUNCHER_BOOTSTRAP_COMMIT,
+        STAGE4_PLAN_APPROVAL_COMMIT,
+    }
+
+    roadmap = (repository_root / STAGE4_ROADMAP).read_text(encoding="utf-8")
+    readme = (repository_root / "README.md").read_text(encoding="utf-8")
+    guide = (repository_root / STAGE4_VERIFICATION_GUIDE).read_text(
+        encoding="utf-8"
+    )
+
+    # 1 -- roadmap.
+    assert _STAGE4_ROADMAP_STATUS_LINE in roadmap
+    assert _STAGE4_ROADMAP_PLAN_SENTENCE in roadmap
+    assert _STAGE4_ROADMAP_ROW in roadmap
+
+    # 2, 3 -- documentation, byte-exact.
+    assert _README_STAGE4_STATUS in readme
+    assert _VERIFICATION_STAGE4_STATUS in guide
+    assert _VERIFICATION_CORPUS_QUALIFICATION in guide
+    assert _VERIFICATION_NON_GOALS in guide
+
+    # 4 -- no interim phrasing survives.
+    for phrase in _RETIRED_STATUS_PHRASES:
+        assert phrase not in readme
+        assert phrase not in guide
+
+    # 5 -- the same implementation hash on every surface, asserted separately
+    # so changing it in exactly one file fails here and names that file.
+    assert STAGE4_IMPLEMENTATION_COMMIT in roadmap
+    assert STAGE4_IMPLEMENTATION_COMMIT in readme
+    assert STAGE4_IMPLEMENTATION_COMMIT in guide
+
+    # 6, 7 -- containment. Remove the pinned blocks, then scan what is left.
+    readme_rest = readme.replace(_README_STAGE4_STATUS, "")
+    guide_rest = guide.replace(_VERIFICATION_STAGE4_STATUS, "").replace(
+        _VERIFICATION_CORPUS_QUALIFICATION, ""
+    )
+    assert "Stage 5" not in readme_rest
+    assert "Stage 5" not in guide_rest
+    assert "exhaustiv" not in readme_rest.lower()
+    assert "exhaustiv" not in guide_rest.lower()
+```
+
+`_STAGE4_ROADMAP_ROW` is the Stage 4 row given verbatim above, with the
+`<task9-plan-correction>` hash substituted, written as an implicitly
+concatenated string literal so the line stays inside the Ruff line-length
+limit.
+
+**Scope note on the containment assertions.** They apply to `README.md` and
+`docs/development/verification.md` only, never to the roadmap. `Stage 5` occurs
+legitimately in the roadmap's own Stage 5 rows, and `exhaustive` occurs
+legitimately in the roadmap at line 160, in Stage 5's exit evidence
+("run and experiment transitions are exhaustive"). Extending either containment
+to the roadmap would fail on correct pre-existing text. The roadmap's Stage 5
+status is instead pinned by the exact-row assertion already in
+`test_stage4_plan_approval_status_is_exact`, which Task 9 keeps whole.
+
+**Stage 5 row.** Task 9 replaces the *not-started Stage 4* assertions in
+`test_stage4_plan_approval_status_is_exact`. It leaves that test's Stage 5 row
+assertion completely unchanged, including the plan-status cell
+`Intentionally deferred until Stages 3–4 completion`. Narrowing that pin to
+`Not started` and `Not evaluated` alone would let the plan-status cell be
+dropped silently.
+
+**Preventive coverage, labelled honestly.** Assertions 1 through 5 go RED before
+step 4 and GREEN after it. Assertions 6 and 7 are green from the start, because
+neither documentation file contains `Stage 5` outside the sentence being written
+or the token `exhaustiv` at all. They are preventive, and the mutation campaign
+is their proof.
+
+#### Closing Reviewer D M26
+
+**Finding, from primary source.** `_DEFERRED_DEFINITIONS` is defined at
+`tests/safety/test_stage3_boundaries.py:109` and consumed at four sites,
+including
+`@pytest.mark.parametrize("name", sorted(_DEFERRED_DEFINITIONS))` and
+`assert defined & _DEFERRED_DEFINITIONS == {name}` *inside* that parametrized
+test. No assertion pins the set's membership or its length.
+
+**Current behaviour.** Removing a member deletes a test case instead of failing
+one. The suite gets smaller, and smaller looks like passing.
+
+**Expected behaviour.** Removing a member fails a named test.
+
+**Why it is inside Task 9's authority.** `tests/safety/test_stage3_boundaries.py`
+was already one of Task 9's files before this correction, and the precedent sits
+in the same module:
+`test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two` pins both a
+count and the exact set.
+
+**The change.** Add, following that precedent exactly:
+
+```python
+def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> None:
+    """An exact set, not a lower bound: a silent removal must fail here.
+
+    Without this, deleting a name deletes the parametrized case that would have
+    caught it, so the suite shrinks instead of failing.
+    """
+    assert len(_DEFERRED_DEFINITIONS) == 65
+    assert _DEFERRED_DEFINITIONS == {
+        "AdapterCatalog",
+        "AdapterCatalogEntry",
+        "AdapterCommand",
+        "AdapterCommandRequestEnvelope",
+        "AdapterResultManifest",
+        "AdapterValidationResult",
+        "ArtifactFinalizationPurpose",
+        "ArtifactFinalizer",
+        "ArtifactOwnerKind",
+        "ArtifactRef",
+        "ArtifactRepository",
+        "ArtifactSourceRole",
+        "AuditSink",
+        "AuditEvent",
+        "BootstrapDescriptorEnvelope",
+        "CancellationToken",
+        "CandidateArtifact",
+        "CandidateArtifactRepository",
+        "CandidateArtifactState",
+        "CandidateArtifactProducerKind",
+        "CandidateFinalization",
+        "CanonicalFill",
+        "CanonicalOrder",
+        "CommandInvocationRecord",
+        "CommandInvocationRepository",
+        "CommandInvocationState",
+        "CommandKind",
+        "CommandResult",
+        "ComparisonEligibilityService",
+        "ContentHasher",
+        "Clock",
+        "DatasetRepository",
+        "EngineRunRecord",
+        "EngineRunRepository",
+        "EngineRunRequest",
+        "EquityPoint",
+        "EvidenceFinalizationRequest",
+        "ExperimentRecord",
+        "ExperimentRepository",
+        "ExperimentSpec",
+        "Fee",
+        "FinalizationResult",
+        "NegotiationResult",
+        "MetricValue",
+        "MonotonicInstant",
+        "OrderSide",
+        "OrderType",
+        "PortfolioSnapshot",
+        "PositionSnapshot",
+        "PositionEffect",
+        "ProcessSupervisor",
+        "ProtocolEventEnvelope",
+        "ResultFinalizationRequest",
+        "RetryPolicy",
+        "Result",
+        "RunEvent",
+        "RunManifest",
+        "SanitizedAdapterResultManifest",
+        "SemanticStatus",
+        "UnitOfWork",
+        "ValidationOutcome",
+        "ingest_dataset",
+        "negotiate_protocol",
+        "normalize_dataset",
+        "place_order",
+    }
+```
+
+That set literal is the sixty-five names as section 9.8 leaves them, in the
+module's existing order. The count 65 matches the plan's own arithmetic:
+section 3.9 records 79 at Stage 3, and section 9.8 removes exactly fourteen.
+Task 9 confirms the literal against the module rather than against this list, so
+the assertion pins reality and not a transcription.
+
+**Demonstrating mutation.** Remove `ComparisonEligibilityService` from
+`_DEFERRED_DEFINITIONS`. Before the change, the suite passes with one fewer
+case. After it, `test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five`
+fails on both the length and the set comparison.
+
+#### Closing Reviewer D D-4b
+
+**The guarded surface** is `src/crypto_lab/strategy/**` and
+`src/crypto_lab/capabilities/**` — production source only, reached through the
+existing `_source_files()` helper, which globs `src/crypto_lab` and therefore
+never sees a test module.
+
+**The unguarded form** is any import whose root is `pathlib` or `importlib`, in
+both AST shapes: `ast.Import` (`import pathlib`, `import importlib.util`,
+`import pathlib as p`) and `ast.ImportFrom` (`from pathlib import Path`,
+`from importlib.util import resolve_name`). Both roots are members of the
+reviewed 22-root allowlist because `configuration`, `cli`, and `schema_registry`
+need them, and `_PROHIBITED_FOR_STRATEGY` / `_PROHIBITED_FOR_CAPABILITIES` in
+`tests/architecture/test_package_import_boundaries.py` list only `crypto_lab.*`
+packages, no standard-library roots. No test narrows either root per package.
+
+**The rule is prohibition**, not allowlisting and not ownership. Section 5.1
+states it as "`crypto_lab.strategy` and `crypto_lab.capabilities` must not
+import … `pathlib` … `importlib` …". Adding `from pathlib import Path` to
+`src/crypto_lab/strategy/loader.py` would give the loader the filesystem reach
+section 5.1 exists to deny, and today passes every gate in the repository.
+
+**No production source change is required.** Reviewer D confirmed by inspection
+that neither package imports either root today, so the rule holds in fact and is
+purely unguarded. Task 9 changes no file under `src/`.
+
+**Why the guard goes in `tests/safety/test_stage3_boundaries.py`**, and not in
+`tests/architecture/test_package_import_boundaries.py` where D-4b's "Required
+correction" line pointed. This is a reasoned departure from that one line of the
+finding, not an oversight, on three grounds:
+
+1. `tests/architecture/test_package_import_boundaries.py` is outside Task 9's
+   authorized file map. D-4b itself raised this as a scope warning and offered
+   the alternative explicitly: "Either authorize both files explicitly, or defer
+   D-4b to a separately reviewed correction." This *is* that separately reviewed
+   correction, and it authorizes the safety module rather than a fifth file.
+2. `tests/safety/test_stage3_boundaries.py` owns `_ALLOWED_IMPORT_ROOTS`, the
+   22-root allowlist that *admits* `pathlib` and `importlib` in the first place.
+   A per-package narrowing belongs beside the rule it narrows; a reader who
+   changes the allowlist sees the narrowing in the same file.
+3. The architecture module's `_PROHIBITED_FOR_*` tables express intra-
+   `crypto_lab` layering direction and contain no standard-library root. Adding
+   stdlib roots there would merge two distinct contracts into one table.
+
+The substance of D-4b — surface, forms, polarity — is adopted unchanged.
+
+**The change.** Add a self-contained scanner helper and two tests. **Do not
+refactor `test_source_imports_only_the_explicit_stage3_allowlist` to use the new
+helper**, tempting as the deduplication is. That test is a Stage 3 assertion,
+section 3.9 enumerates Task 9's additions as exactly three and closes with
+"Nothing else", and the refactor would also degrade its failure message: it
+reports the full dotted module name (`crypto_lab.strategy.foo`), which a
+root-only helper discards. Six duplicated lines are the correct price.
+
+```python
+_PACKAGES_DENIED_FILESYSTEM_AND_DYNAMIC_IMPORT = frozenset(
+    {"capabilities", "strategy"}
+)
+_ROOTS_DENIED_IN_THOSE_PACKAGES = frozenset({"importlib", "pathlib"})
+
+
+def _imported_roots(tree: ast.AST) -> tuple[str, ...]:
+    roots: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.extend(alias.name.partition(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            roots.append(node.module.partition(".")[0])
+    return tuple(roots)
+
+
+def test_strategy_and_capabilities_import_no_pathlib_or_importlib(
+    repository_root: Path,
+) -> None:
+    """Section 5.1 prohibition, unguarded until now.
+
+    Both roots are in the 22-root allowlist because other packages need them,
+    so nothing else in the repository would reject them here.
+    """
+    source = repository_root / "src/crypto_lab"
+    failures: list[str] = []
+    for path in _source_files(repository_root):
+        relative = path.relative_to(source)
+        if relative.parts[0] not in _PACKAGES_DENIED_FILESYSTEM_AND_DYNAMIC_IMPORT:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for root in _imported_roots(tree):
+            if root in _ROOTS_DENIED_IN_THOSE_PACKAGES:
+                failures.append(f"{relative.as_posix()}: forbidden import root: {root}")
+    assert failures == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import pathlib",
+        "import importlib",
+        "import pathlib as p",
+        "import importlib.util",
+        "from pathlib import Path",
+        "from importlib.util import resolve_name",
+    ],
+)
+def test_the_import_root_scanner_detects_each_forbidden_shape(source: str) -> None:
+    """The prohibition guard begins green, so prove the scanner is load-bearing."""
+    roots = _imported_roots(ast.parse(source))
+    assert set(roots) & _ROOTS_DENIED_IN_THOSE_PACKAGES != set()
+```
+
+`_imported_roots` is new and is used only by the two tests above.
+`test_source_imports_only_the_explicit_stage3_allowlist` keeps its own inline
+walk, its own allowlist, and its own failure message, byte for byte.
+
+#### Mutation obligations
+
+The guard is not accepted on a green run. Apply each mutation below, one at a
+time, from a clean tree, restoring byte-exactly after each, and record the named
+failing test that kills it. No Task 8 schema or source path may be touched.
+
+**Killable — each must produce a named failing test.**
+
+1. Restore `awaits Task 9` in `README.md`.
+2. Restore `awaits Task 9` in `docs/development/verification.md`.
+3. Change only the roadmap Task 8 hash.
+4. Change only the `README.md` Task 8 hash.
+5. Change only the verification-guide Task 8 hash.
+6. Claim Stage 5 has started, in exactly one documentation file.
+7. Remove the schema count from exactly one status surface.
+8. Claim all runtime and schema rules were exhaustively enumerated, in exactly
+   one documentation file.
+9. Change section 11 item 3 back to the symmetric "within one point" wording.
+10. Modify the Stage 3 roadmap row; then, separately, the Stage 5 roadmap row.
+11. Remove `ComparisonEligibilityService` from `_DEFERRED_DEFINITIONS` — the
+    mutation that reintroduces Reviewer D M26.
+12. Add `from pathlib import Path` to `src/crypto_lab/strategy/loader.py`; then,
+    separately, `import importlib` to `src/crypto_lab/capabilities/resolver.py`
+    — the two mutations that reintroduce Reviewer D D-4b. Restore both files
+    byte-exactly; this is the one case that touches `src/`, and it must leave no
+    trace.
+13. Reverse the `pathlib`/`importlib` guard's polarity to
+    `assert failures != []`. The guard fails on the unmutated tree, which is the
+    kill.
+14. Substitute a placeholder for the Task 8 hash in any one of the three status
+    surfaces.
+
+Mutation 9 is killed because `test_stage4_plan_approval_status_is_exact` already
+reads `STAGE4_PLAN`; Task 9 adds to it a positive pin of the exact corrected
+sentence from section 11 item 3, which the symmetric wording no longer contains.
+**No negative pin of the retired phrasing is added.** That test reads the whole
+plan file, and the retired phrasing "within one point of the 93.64" necessarily
+survives inside item 3's own rationale for retiring it, so a whole-file negative
+pin would be false the moment it was written. The positive pin is sufficient.
+
+**Not killable by any test, and recorded as such rather than claimed.**
+
+15. Delete the `_DEFERRED_DEFINITIONS` membership assertion.
+16. Delete the `pathlib`/`importlib` guard.
+
+Deleting a test cannot fail that test. This is the M26 defect one level up, and
+no assertion inside the suite closes it. The defences are the exact-scope diff
+review of section 12 and Task 9's independent review gate, both of which read
+every changed line. Record these two as **NOT KILLABLE**, with that reason. Do
+not report a killer for them.
+
+**Coverage limits of the killable set, stated rather than implied.**
+
+- Mutation 10 is killed only on the Stage 3 and Stage 5 rows, the two the guards
+  pin. Roadmap rows 1, 2, and 6 through 10 are pinned nowhere. That gap is
+  pre-existing and outside Task 9's authority to close; record it, do not widen
+  the guard to reach it.
+- Mutation 14 is killed only where the placeholder *replaces* the pinned hash.
+  A placeholder added elsewhere in the roadmap, or anywhere in
+  `tests/safety/test_stage3_boundaries.py`, is caught by review, not by an
+  assertion. The claim to make is "the guard rejects a placeholder substituted
+  for the Task 8 hash on any status surface", not "the guard rejects a
+  placeholder".
 
 **Focused verification:**
 
@@ -4226,16 +4996,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File `
   .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\safety -q
 ```
 
+Required: exit zero, no warning, and no skip.
+
 **Broader:** the complete verifier `scripts/verify.ps1`, first-attempt pass.
 
-**Security review:** confirm the commit changes exactly the roadmap and the
-status guard, and that no implementation file is touched.
+**Security review:** confirm the commit changes exactly the roadmap, the two
+documentation files, the status guard, and the two roadmap-status assertions in
+`tests/safety/test_gitnexus_development_tooling.py` — five paths, no more — and
+that no production source, generated schema, fixture, script, `pyproject.toml`,
+or `uv.lock` is touched.
 
-**Independent review gate:** required before commit.
+**Independent review gate:** required before commit, in a fresh context that did
+not author Task 9.
 
-**Commit:** `test: record project 1 stage 4 completion`
+**Commit:** `docs: complete project 1 stage 4`
 
-The whole-stage review follows Task 9.
+The whole-stage review covers Task 9's final recorded state, per section 12
+item 2 and the ordering note at step 11.
 
 ### 9.8 Exact `_DEFERRED_DEFINITIONS` changes
 
@@ -4307,8 +5084,22 @@ Stage 4 is complete only when every item below has fresh offline evidence.
 1. `scripts/verify.ps1` exits zero on the **first** attempt from a clean
    Stage 4 worktree, and again on merged local `main`. No pass-on-rerun.
 2. Only the approved Windows symbolic-link privilege skip remains.
-3. Branch coverage is at least 90 percent and within one point of the 93.64
-   percent Stage 3 baseline.
+3. Branch coverage must be at least 90.00 percent and must not be more than
+   1.00 percentage point below the Stage 3 baseline of 93.64 percent. Coverage
+   above the Stage 3 baseline is permitted.
+
+   This replaces the earlier abbreviation "within one point of the 93.64 percent
+   Stage 3 baseline", which read as a two-sided band and would have failed a
+   Stage 4 measurement merely for improving on Stage 3. The rule is directional
+   and always was: section 7 states it directionally, and the executable
+   `--cov-fail-under=90` gate has no upper bound. Section 7 is unchanged by this
+   correction because it is already correct.
+
+   **Measurement scope.** Section 7 names the 93.64 percent comparison against
+   **merged-main** branch coverage. Item 1 of this section already requires the
+   verifier to pass on the Stage 4 worktree and again on merged local `main`, so
+   the floor is evaluated on both measurements and the merged-main figure is the
+   one section 7 governs.
 4. `schema-generate-check` is clean and the registry contains exactly 20 files.
 5. `schema-distribution` is clean.
 6. The eleven Stage 3 schemas are byte-identical to `main`.
@@ -4333,8 +5124,12 @@ Stage 4 is complete only when every item below has fresh offline evidence.
 19. Nine tasks are committed in order, each with its own independent review.
     Task 8 carries the implementation acceptance and the implementation commit
     and writes nothing into the roadmap; Task 9 records Stage 4 completion
-    against Task 8's committed hash, does not present its own hash as the
-    implementation hash, and confirms Stage 5 remains not started.
+    against Task 8's committed hash in the roadmap, `README.md`, and
+    `docs/development/verification.md`, holds the three surfaces in agreement
+    with an executable guard, realigns the two roadmap-status assertions in
+    `tests/safety/test_gitnexus_development_tooling.py`, does not present its
+    own hash as the implementation hash, and confirms Stage 5 remains not
+    started.
 20. Both execution prerequisites are ancestors of `main` — the launcher
     bootstrap correction `350fac49ff5b1db4ec62b60c7ade76580f9894dd` and the
     separate roadmap-and-guard commit carrying this plan's approval — the
@@ -4375,8 +5170,12 @@ eleven-line justification at lines 196 to 206.
    architecture compliance, interface consistency, stage scope, schema
    ownership, YAML security, supply-chain safety, determinism, property-test
    quality, flake resistance, and privacy and network boundaries. The
-   whole-stage review follows the status commit, not the implementation commit,
-   so it reviews the final recorded state of the stage.
+   whole-stage review covers the **final recorded state** of the stage, not the
+   implementation commit alone. The binding requirement is the state reviewed,
+   not the clock: the review may run before the Task 9 commit provided it
+   reviews the exact tree that will be committed, and any finding requiring an
+   edit invalidates the run, which is redone on the corrected tree. See the
+   ordering note at Task 9 step 11.
 3. Every finding records severity, exact file and section, evidence,
    consequence, and required correction. Resolve every Critical and Important
    finding and rerun the scoped review. The implementing context must not
@@ -4444,7 +5243,7 @@ No other `pyproject.toml` change is authorized. In particular
  }
 ```
 
-### Appendix C — `tests/safety/test_stage3_boundaries.py` patches (Tasks 2 through 8; the post-Task-5 deep-immutability landing of section 5.5.1; status guard in Task 9)
+### Appendix C — `tests/safety/test_stage3_boundaries.py` patches (Tasks 2 through 8; the post-Task-5 deep-immutability landing of section 5.5.1; status guard, `_DEFERRED_DEFINITIONS` membership assertion, and `pathlib`/`importlib` per-package scan in Task 9)
 
 Add to `_ALLOWED_SOURCE_FILES`, preserving alphabetical order:
 
@@ -4527,9 +5326,15 @@ No Stage 4 task modifies the **Stage 3** assertions inside
 `test_stage3_completion_status_is_exact`. Task 8 and Task 9 hold the narrow,
 enumerated authority defined by the status-authority rule in section 3.9 over
 the four Stage-4-dependent strings, and Task 9 additionally adds a Stage 4
-completion guard and updates the Stage 4 plan-approval guard that the separate
-roadmap-and-guard commit introduced. Neither touches the closed-world lists
-above.
+completion guard spanning all three status surfaces, the
+`_DEFERRED_DEFINITIONS` membership assertion, and the `pathlib`/`importlib`
+per-package scan, and the section 11 item 3 coverage pin. It also updates the
+Stage 4 plan-approval guard that the separate roadmap-and-guard commit
+introduced. Neither touches the closed-world lists above; the membership
+assertion pins `_DEFERRED_DEFINITIONS` as section 9.8 leaves it and changes no
+member. Task 9's two assertion edits in
+`tests/safety/test_gitnexus_development_tooling.py` are outside this appendix,
+which governs only `tests/safety/test_stage3_boundaries.py`.
 
 ### Appendix D — `crypto_lab/domain/hashing.py` patch (Tasks 2 and 5)
 
@@ -4898,4 +5703,11 @@ importing `yaml` loads a compiled module. Therefore:
    `yaml/__init__.py` compiled-extension evidence and its consequences.
 7. **Status task.** The stage is nine tasks. Task 8 owns implementation
    acceptance and must not write its own hash into the roadmap; Task 9 owns the
-   completion status and its executable guard.
+   completion status across the roadmap, `README.md`, and
+   `docs/development/verification.md`, and its executable guard. The stage
+   remains nine tasks: the Task 9 completion correction widened Task 9's file
+   map to five, closed three escalated findings inside it, and added no task.
+   The fifth file,
+   `tests/safety/test_gitnexus_development_tooling.py`, is in the map only
+   because it is the second module pinning roadmap status strings; Task 9
+   changes no GitNexus behaviour.
