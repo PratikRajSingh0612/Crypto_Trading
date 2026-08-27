@@ -1964,8 +1964,13 @@ unchanged.
    inside the guarded region; the rendered values, their order, and the
    `EvaluationResult` shape are unchanged. The existing golden series must pass
    untouched.
-5. **Do not weaken the "No exception escapes" contract.** It is strengthened:
-   the docstring gains this rejection, and the guard makes the statement true.
+5. **Do not weaken the no-escape contract.** It is strengthened: the docstring
+   gains this rejection, and the guard makes the statement true. The docstring
+   previously opened "No exception escapes", which a committed test refutes —
+   an unrelated `ValueError` propagates, deliberately, by prohibition 1 above.
+   It now reads "No **expected rejection** escapes as an exception", which is
+   the contract that was always meant and is now literally true. That is a
+   correction to an over-broad sentence, not a relaxation of the rule.
 
 **Diagnostic shape.** `SOURCE_COMPONENT` is `strategy.evaluation`, consistent
 with the other four evaluation codes. Details carry the structural facts only —
@@ -4579,22 +4584,36 @@ State it that way and no more strongly.
 Stages 1 through 4 have approved detailed implementation plans.
 ```
 
-**Roadmap Stage 4 row of section 9.** The four angle-bracket tokens below are
-not placeholders to be left in place. Each is substituted in full before the row
-is written, and all four are ancestors of the Task 9 status commit by the time
-it lands:
+**Roadmap Stage 4 row of section 9.** The angle-bracket tokens below are not
+placeholders to be left in place. Each is substituted in full before the row is
+written, and all are ancestors of the Task 9 status commit by the time it lands.
 
-| Token | Commit |
-|---|---|
-| `<task9-plan-correction>` | the Task 9 completion correction, subject `docs: correct stage 4 completion plan` |
-| `<error-code-plan-correction>` | the error-code amendment, subject `docs: add evaluator decimal-length error code` |
-| `<evaluator-correction>` | the post-Task-8 implementation correction, subject `fix: reject unrenderable evaluator decimals` |
-| `<evaluator-review-followup>` | its review follow-up, subject `fix: close review findings on the evaluator correction` |
+**Two composition rules, not a closed token list.** A fixed list of tokens is
+the trap section 5.9 already fell into: the (n+1)th correction has nowhere to
+go, and the row silently stops reproducing from this block. State the rule and
+derive the hashes:
 
-Section 5.9.1's Ownership paragraph requires the evaluator correction to be
-named separately from the implementation hash; that is why the implementation
-cell carries two hashes and not one. Derive every token from the **full**
-commit chain that step 8 already mandates —
+1. **Plan-corrections cell.** Name every commit that touches this plan file,
+   in commit order, after the approval and superseded-review hashes and the
+   launcher prerequisite. Derive the list from
+   `git log --reverse --format="%H %s" -- <this plan path>`; do not transcribe
+   it from here.
+2. **Implementation cell.** Name the Task 8 implementation hash; then the
+   post-Task-8 implementation correction; then **every** post-Task-8 review
+   follow-up in commit order, however many there are. Section 5.9.1's Ownership
+   paragraph requires the evaluator correction to be named separately from the
+   implementation hash, which is why this cell carries more than one hash.
+   A follow-up that closes a whole-stage review finding rather than the
+   evaluator review's own findings is still a follow-up for this purpose;
+   describe the group as review follow-ups without attributing each to a
+   particular review.
+
+`<task9-plan-correction>` is the Task 9 completion correction, subject
+`docs: correct stage 4 completion plan`, and `<evaluator-correction>` is the
+implementation correction, subject `fix: reject unrenderable evaluator
+decimals`. Both are named because other sections refer to them; every other
+hash in the row comes from the two rules above. Derive them all from the
+**full** commit chain that step 8 already mandates —
 `git log --format="%H %s" -- docs/superpowers/plans/2026-08-10-project-1-portable-strategy-capabilities-comparison-implementation-plan.md`
 — and take the commit whose subject is `docs: correct stage 4 completion plan`.
 Do not use `git log -1`: if a further plan correction lands after this one,
@@ -4602,7 +4621,7 @@ Do not use `git log -1`: if a further plan correction lands after this one,
 in order regardless.
 
 ```text
-| 4 — Portable Strategy, Capabilities, and Comparison | Approved and executed; corrected detailed plan approved at `b6721b870c79db7b999b9eb70107e53992cbe1ab` after two independent reviews, superseding the pre-correction review at `bf5e427a8fe055be2b6cb803b69d4c2334aeee69`; launcher bootstrap prerequisite completed at `350fac49ff5b1db4ec62b60c7ade76580f9894dd`; reviewed plan corrections at `65eca5b17d45c0cf04f856dc6049e0c3ee7a2be9`, `f898499d647d1d4ade571345973c6ced5e84403c`, `f57357379222404685d805d081de4f61f36a7fe5`, `cfede94c5de22fba93176e4d5f75aceeffc7695e`, `<task9-plan-correction>`, and `<error-code-plan-correction>` | Implementation complete at `33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`; post-completion evaluator rendering-bound correction at `<evaluator-correction>` with its review follow-up at `<evaluator-review-followup>`; final status recorded by the separate Task 9 status commit, which is a status record and not the implementation hash | Complete; portable strategy ingestion, static validation, deterministic Level 1 evaluation, strategy versioning and hashing, capability vocabulary and compatibility resolution, comparison eligibility, and the closed 20-schema registry — 9 new Stage 4 schemas with the 11 Stage 3 schemas preserved byte-identical — verified offline on the complete verifier, which passed on its first attempt; GitNexus remains `DISABLED_WITH_EVIDENCE` with the manual source, reference, and diff fallback recorded; Stage 5 not started |
+| 4 — Portable Strategy, Capabilities, and Comparison | Approved and executed; corrected detailed plan approved at `b6721b870c79db7b999b9eb70107e53992cbe1ab` after two independent reviews, superseding the pre-correction review at `bf5e427a8fe055be2b6cb803b69d4c2334aeee69`; launcher bootstrap prerequisite completed at `350fac49ff5b1db4ec62b60c7ade76580f9894dd`; reviewed plan corrections at <every commit touching this plan file, in commit order, per rule 1> | Implementation complete at `33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`; post-completion evaluator rendering-bound correction at `<evaluator-correction>`, with review follow-ups at <every post-Task-8 follow-up, in commit order, per rule 2>; final status recorded by the separate Task 9 status commit, which is a status record and not the implementation hash | Complete; portable strategy ingestion, static validation, deterministic Level 1 evaluation, strategy versioning and hashing, capability vocabulary and compatibility resolution, comparison eligibility, and the closed 20-schema registry — 9 new Stage 4 schemas with the 11 Stage 3 schemas preserved byte-identical — verified offline on the complete verifier, which passed on its first attempt; GitNexus remains `DISABLED_WITH_EVIDENCE` with the manual source, reference, and diff fallback recorded; Stage 5 not started |
 ```
 
 The Stage 5 row is unchanged and still reads `Not started` and `Not evaluated`.
@@ -5239,20 +5258,45 @@ Stage 4 is complete only when every item below has fresh offline evidence.
 13. Comparison eligibility and every ineligibility reason are explicit.
 14. No majority vote, averaging, or synthetic combined return exists anywhere.
 15. Every Stage 4 exclusion in section 5.1 holds. **Reviewer D-4a correction to
-    this gate's wording.** The proof is not one module. `eval`, `exec`,
-    `compile`, dynamic imports, network, subprocess, environment access, and
-    filesystem reach are proven by `tests/safety/test_stage3_boundaries.py` —
-    the closed 22-root import allowlist, the environment-access scan, the
-    path-access scan, and the `pathlib`/`importlib` per-package scan added in
-    Task 9. Unsafe-YAML construction and the typing-integrity rules are proven
-    by the module named below. The order, fill, portfolio, backtest,
-    persistence, and trading exclusions are proven by the absence of any such
-    module in the closed source-file set, which
-    `test_stage3_source_file_set_is_closed` asserts by exact equality.
-    `datetime.datetime.now` has **no executable guard**: the `datetime` root is
-    allowlisted for legitimate use, and no per-package narrowing exists for it.
-    It holds in fact today and is recorded as an open gap rather than claimed
-    closed. The originally named module is
+    this gate's wording, itself corrected once.** The gate originally claimed a
+    single module proved every exclusion. It does not, and the first attempt to
+    apportion the proof was also wrong. The accurate apportionment:
+
+    - **Network, subprocess, environment access, and filesystem reach** are
+      proven repository-wide by `tests/safety/test_stage3_boundaries.py`: the
+      closed 22-root import allowlist, `test_project_source_has_no_environment_access`,
+      `test_source_has_no_path_ambient_access_or_later_stage_definitions`, and
+      the `pathlib`/`importlib` per-package scan added in Task 9.
+    - **`eval`, `exec`, `compile`, and `__import__`** are **not** proven by that
+      module and cannot be: they are builtins requiring no import, so an
+      import-root allowlist is categorically the wrong instrument. They are
+      scanned per-module by `tests/unit/strategy/test_strategy_loader.py`
+      (`_FORBIDDEN_CALL_NAMES`) and
+      `tests/unit/capabilities/test_capability_comparison.py`
+      (`_FORBIDDEN_CALLS`), which between them cover
+      `strategy/loader.py`, `strategy/versioning.py`, and
+      `capabilities/comparison.py` — three of the eighteen new source files.
+      **No repository-wide guard exists.** The property holds in fact today:
+      the only `compile(` occurrences under `src/` are `re.compile`. The loader
+      scan's own docstring already records that reflection defeats an AST check
+      and that the primary control is behavioural, not syntactic.
+    - **Order, fill, portfolio, backtest, persistence, and trading behaviour**
+      are **constrained, not proven**, by
+      `test_stage3_source_file_set_is_closed`, which asserts exact equality of
+      the source-file set. That forbids a new module; it does not forbid such a
+      function being added inside an existing one. No test asserts the absence
+      of that behaviour directly.
+    - **Unsafe-YAML construction and the typing-integrity rules** are proven by
+      the module originally named.
+    - **`datetime.datetime.now`** has **no repository-wide guard**. The
+      `datetime` root is allowlisted for legitimate use and no per-package
+      narrowing exists. Three modules are covered per-module — `now`, `utcnow`,
+      and `today` sit in `_FORBIDDEN_CALL_NAMES`, and
+      `test_capability_comparison.py` asserts `"now" not in called`. The other
+      fifteen are unguarded. It holds in fact today.
+
+    Recorded as open gaps rather than claimed closed. The originally named
+    module is
     `tests/safety/test_stage4_boundaries.py`.
 16. GitNexus was not invoked; the manual source, reference, and diff fallback
     was used and recorded.
