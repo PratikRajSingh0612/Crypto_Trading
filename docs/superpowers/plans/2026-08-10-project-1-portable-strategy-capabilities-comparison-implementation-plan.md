@@ -1879,6 +1879,7 @@ STRATEGY.EXTENSION_DECLARATION       STRATEGY.POLICY_FORBIDDEN_MARKET
 STRATEGY.POLICY_FORBIDDEN_DIRECTION  STRATEGY.EVALUATION_DIVIDE_BY_ZERO
 STRATEGY.EVALUATION_NON_FINITE       STRATEGY.EVALUATION_SERIES_TOO_LONG
 STRATEGY.EVALUATION_MISSING_INPUT    STRATEGY.DIAGNOSTIC_LIMIT_REACHED
+STRATEGY.EVALUATION_DECIMAL_TOO_LONG
 STRATEGY.REFERENCE_NAMESPACE_COLLISION
 CAPABILITY.UNKNOWN_NAME              CAPABILITY.VOCABULARY_VERSION
 CAPABILITY.DECLARATION_OVERLAP       CAPABILITY.REQUIREMENT_UNMET
@@ -1891,13 +1892,90 @@ COMPARISON.APPROXIMATION_EXCLUDES_LEVEL
 COMPARISON.SCHEMA_VERSION_MISMATCH   COMPARISON.METHODOLOGY_MISMATCH
 ```
 
-**Reviewed correction — exactly one code added.**
-`STRATEGY.DIAGNOSTIC_LIMIT_REACHED` is the sole addition to this closed table
-since the plan was approved. It is the terminal diagnostic-limit marker defined
+**Reviewed correction — one code added.**
+`STRATEGY.DIAGNOSTIC_LIMIT_REACHED` was the first addition to this closed table
+after the plan was approved. It is the terminal diagnostic-limit marker defined
 in section 5.4.1, and it is the only code that correction introduces. No other
-code is added, and none is removed — `STRATEGY.REFERENCE_FUTURE_BAR` in
-particular remains reserved per section 6.5.2. Any further addition still
-requires a plan amendment.
+code is added by it, and none is removed — `STRATEGY.REFERENCE_FUTURE_BAR` in
+particular remains reserved per section 6.5.2.
+
+**Second reviewed correction — exactly one further code added.**
+`STRATEGY.EVALUATION_DECIMAL_TOO_LONG` is the second and only other addition.
+It is defined in section 5.9.1. Any further addition still requires a plan
+amendment.
+
+### 5.9.1 `STRATEGY.EVALUATION_DECIMAL_TOO_LONG` — evaluator rendering bound
+
+**The defect this closes.** `evaluate_level_one`'s docstring states "No
+exception escapes", and section 5.2's `Result`-only contract holds it to that.
+It did not hold. `Success` was constructed **outside** the
+`try` / `except _Rejected` block, and the feature-rendering call inside that
+construction reaches `format_decimal`, which raises a bare
+`ValueError("canonical decimal exceeds maximum length")` when a canonical
+rendering would exceed `MAX_DECIMAL_TEXT_LENGTH` (256).
+
+**It is reachable from validated input, not merely theoretical.** A value can be
+finite, within `EVALUATION_PRECISION`, and correctly computed, and still render
+longer than the bound: 34 significant digits at a sufficiently negative exponent
+needs 257 characters. The confirmed witness is a `parameters` block setting both
+periods to `3`, and a close series of sixty bars at `2E-222` followed by
+`1E-222`, `2E-222`, `2E-222`. The window sum `5E-222` divided by `3` yields
+`1.666666666666666666666666666666667E-222`, whose canonical body is 257
+characters. Every input in that witness is admissible: `1E-222` renders in 224
+characters on its own, so it passes `CanonicalDecimal` validation.
+
+**The contract.** Exactly one failure maps to the new code: `format_decimal`
+raising for the canonical length bound, identified by its exact message
+`canonical decimal exceeds maximum length`. Every other `ValueError` propagates
+unchanged.
+
+**Prohibited, each for a stated reason.**
+
+1. **Do not broaden the catch** to bare `except ValueError` or `except
+   Exception`. A broad catch converts real defects into diagnostics, which is
+   the failure mode section 5.2 exists to prevent.
+2. **Do not loosen `MAX_DECIMAL_TEXT_LENGTH`.** The 256-character bound is a
+   Stage 3 canonical-value rule and is byte-pinned by the Stage 3 schemas.
+3. **Do not reuse `STRATEGY.EVALUATION_NON_FINITE`.** The value is finite. That
+   code would misreport the cause and would collide with the existing
+   non-finite tests.
+4. **Do not change the bytes of any successful evaluation.** The rendering moves
+   inside the guarded region; the rendered values, their order, and the
+   `EvaluationResult` shape are unchanged. The existing golden series must pass
+   untouched.
+5. **Do not weaken the "No exception escapes" contract.** It is strengthened:
+   the docstring gains this rejection, and the guard makes the statement true.
+
+**Diagnostic shape.** `SOURCE_COMPONENT` is `strategy.evaluation`, consistent
+with the other four evaluation codes. Details carry the structural facts only —
+the `feature_id` whose series could not be rendered, and
+`maximum_text_length` — and never the offending value, which would defeat the
+bound by embedding a 257-character number in the diagnostic.
+
+**Ownership.** This is a **post-Task-8 implementation correction**, not Task 9
+work and not a new task. It lands as one commit before the Task 9 status commit,
+touching exactly `src/crypto_lab/strategy/evaluation.py` and
+`tests/unit/strategy/test_strategy_evaluation.py`. Task 9's own file map is
+unchanged by it. Because it changes Stage 4 implementation after Task 8, the
+Stage 4 roadmap row must record it the way the Stage 3 row records its
+post-completion stability correction: implementation complete at the Task 8
+commit, with this correction named separately.
+
+**Required tests, test-first.**
+
+1. **RED from the witness.** The sixty-bar probe above, asserted to return a
+   `Failure` carrying `STRATEGY.EVALUATION_DECIMAL_TOO_LONG`. Before the fix it
+   raises `ValueError`; `pytest.raises` must not be used to hide that.
+2. **The exact boundary, both sides.** A rendering of exactly
+   `MAX_DECIMAL_TEXT_LENGTH` characters succeeds; one of 257 rejects.
+3. **The message pin.** A test asserting `format_decimal` still raises exactly
+   `canonical decimal exceeds maximum length`, so a reworded message in
+   `crypto_lab.domain.financial` fails loudly here instead of silently
+   converting this rejection back into an escaping `ValueError`.
+4. **Non-broadening.** A test proving a different `ValueError` out of the
+   rendering path still propagates rather than becoming a diagnostic.
+5. **Contract.** A test asserting no exception escapes `evaluate_level_one` for
+   the witness input.
 
 **Second reviewed correction — exactly one further code added.**
 `STRATEGY.REFERENCE_NAMESPACE_COLLISION` is the second and only other addition
@@ -4591,10 +4669,13 @@ _VERIFICATION_NON_GOALS = "\n".join(
     (
         "No real trading engine, exchange connectivity, market-data download, real",
         "backtest, order or fill simulation, portfolio accounting, persistence, paper",
-        "wallet, tax or TDS logic, LLM integration, user interface, Docker setup, cloud",
+        "wallet, tax or TDS logic, LLM integration, user interface, Docker "
+        "setup, cloud",
         "deployment, or server deployment exists anywhere in the repository. Stage 4",
-        "executes no engine, no adapter, no strategy, and no declared engine extension,",
-        "and combines no comparison result into an averaged, voted, or synthetic figure.",
+        "executes no engine, no adapter, no strategy, and no declared engine "
+        "extension,",
+        "and combines no comparison result into an averaged, voted, or synthetic "
+        "figure.",
     )
 )
 _STAGE4_ROADMAP_STATUS_LINE = (
@@ -4612,7 +4693,8 @@ _STAGE4_ROADMAP_PLAN_SENTENCE = (
 _STAGE4_COVERAGE_SENTENCE = "\n".join(
     (
         "3. Branch coverage must be at least 90.00 percent and must not be more than",
-        "   1.00 percentage point below the Stage 3 baseline of 93.64 percent. Coverage",
+        "   1.00 percentage point below the Stage 3 baseline of 93.64 percent. "
+        "Coverage",
         "   above the Stage 3 baseline is permitted.",
     )
 )
@@ -4638,9 +4720,7 @@ def test_stage4_completion_status_is_exact(repository_root: Path) -> None:
 
     roadmap = (repository_root / STAGE4_ROADMAP).read_text(encoding="utf-8")
     readme = (repository_root / "README.md").read_text(encoding="utf-8")
-    guide = (repository_root / STAGE4_VERIFICATION_GUIDE).read_text(
-        encoding="utf-8"
-    )
+    guide = (repository_root / STAGE4_VERIFICATION_GUIDE).read_text(encoding="utf-8")
 
     # 1 -- roadmap.
     assert _STAGE4_ROADMAP_STATUS_LINE in roadmap
@@ -4867,9 +4947,7 @@ reports the full dotted module name (`crypto_lab.strategy.foo`), which a
 root-only helper discards. Six duplicated lines are the correct price.
 
 ```python
-_PACKAGES_DENIED_FILESYSTEM_AND_DYNAMIC_IMPORT = frozenset(
-    {"capabilities", "strategy"}
-)
+_PACKAGES_DENIED_FILESYSTEM_AND_DYNAMIC_IMPORT = frozenset({"capabilities", "strategy"})
 _ROOTS_DENIED_IN_THOSE_PACKAGES = frozenset({"importlib", "pathlib"})
 
 
