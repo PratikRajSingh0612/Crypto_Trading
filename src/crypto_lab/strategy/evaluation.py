@@ -688,10 +688,14 @@ def evaluate_level_one(
     """Evaluate one validated strategy over an explicit bounded bar series.
 
     Returns complete feature and signal series for an accepted input, or a
-    `Result` failure. No exception escapes: every expected rejection — an
+    `Result` failure. **No expected rejection escapes as an exception:** an
     over-long series, a division by zero, a non-finite intermediate, a missing
     input under `REJECT_DATASET`, and a feature value whose canonical rendering
-    would exceed `MAX_DECIMAL_TEXT_LENGTH` — becomes a diagnostic.
+    would exceed `MAX_DECIMAL_TEXT_LENGTH` each become a diagnostic. A genuine
+    defect still propagates, deliberately — plan section 5.9.1 prohibition 1
+    forbids broadening the rendering catch, because a catch wide enough to
+    convert defects into diagnostics is the failure this contract exists to
+    prevent. A committed test pins that distinction.
     """
     if len(bars) > MAX_EVALUATION_BARS:
         return Failure(

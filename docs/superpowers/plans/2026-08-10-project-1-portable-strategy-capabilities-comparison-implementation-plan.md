@@ -4579,10 +4579,22 @@ State it that way and no more strongly.
 Stages 1 through 4 have approved detailed implementation plans.
 ```
 
-**Roadmap Stage 4 row of section 9.** `<task9-plan-correction>` below is not a
-placeholder to be left in place: it is the hash of the Task 9 completion
-correction, substituted in full before the row is written. Derive it from the
-**full** plan-commit chain that step 8 already mandates —
+**Roadmap Stage 4 row of section 9.** The four angle-bracket tokens below are
+not placeholders to be left in place. Each is substituted in full before the row
+is written, and all four are ancestors of the Task 9 status commit by the time
+it lands:
+
+| Token | Commit |
+|---|---|
+| `<task9-plan-correction>` | the Task 9 completion correction, subject `docs: correct stage 4 completion plan` |
+| `<error-code-plan-correction>` | the error-code amendment, subject `docs: add evaluator decimal-length error code` |
+| `<evaluator-correction>` | the post-Task-8 implementation correction, subject `fix: reject unrenderable evaluator decimals` |
+| `<evaluator-review-followup>` | its review follow-up, subject `fix: close review findings on the evaluator correction` |
+
+Section 5.9.1's Ownership paragraph requires the evaluator correction to be
+named separately from the implementation hash; that is why the implementation
+cell carries two hashes and not one. Derive every token from the **full**
+commit chain that step 8 already mandates —
 `git log --format="%H %s" -- docs/superpowers/plans/2026-08-10-project-1-portable-strategy-capabilities-comparison-implementation-plan.md`
 — and take the commit whose subject is `docs: correct stage 4 completion plan`.
 Do not use `git log -1`: if a further plan correction lands after this one,
@@ -4590,7 +4602,7 @@ Do not use `git log -1`: if a further plan correction lands after this one,
 in order regardless.
 
 ```text
-| 4 — Portable Strategy, Capabilities, and Comparison | Approved and executed; corrected detailed plan approved at `b6721b870c79db7b999b9eb70107e53992cbe1ab` after two independent reviews, superseding the pre-correction review at `bf5e427a8fe055be2b6cb803b69d4c2334aeee69`; launcher bootstrap prerequisite completed at `350fac49ff5b1db4ec62b60c7ade76580f9894dd`; reviewed plan corrections at `65eca5b17d45c0cf04f856dc6049e0c3ee7a2be9`, `f898499d647d1d4ade571345973c6ced5e84403c`, `f57357379222404685d805d081de4f61f36a7fe5`, `cfede94c5de22fba93176e4d5f75aceeffc7695e`, and `<task9-plan-correction>` | Implementation complete at `33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`; final status recorded by the separate Task 9 status commit, which is a status record and not the implementation hash | Complete; portable strategy ingestion, static validation, deterministic Level 1 evaluation, strategy versioning and hashing, capability vocabulary and compatibility resolution, comparison eligibility, and the closed 20-schema registry — 9 new Stage 4 schemas with the 11 Stage 3 schemas preserved byte-identical — verified offline on the complete verifier, which passed on its first attempt; GitNexus remains `DISABLED_WITH_EVIDENCE` with the manual source, reference, and diff fallback recorded; Stage 5 not started |
+| 4 — Portable Strategy, Capabilities, and Comparison | Approved and executed; corrected detailed plan approved at `b6721b870c79db7b999b9eb70107e53992cbe1ab` after two independent reviews, superseding the pre-correction review at `bf5e427a8fe055be2b6cb803b69d4c2334aeee69`; launcher bootstrap prerequisite completed at `350fac49ff5b1db4ec62b60c7ade76580f9894dd`; reviewed plan corrections at `65eca5b17d45c0cf04f856dc6049e0c3ee7a2be9`, `f898499d647d1d4ade571345973c6ced5e84403c`, `f57357379222404685d805d081de4f61f36a7fe5`, `cfede94c5de22fba93176e4d5f75aceeffc7695e`, `<task9-plan-correction>`, and `<error-code-plan-correction>` | Implementation complete at `33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`; post-completion evaluator rendering-bound correction at `<evaluator-correction>` with its review follow-up at `<evaluator-review-followup>`; final status recorded by the separate Task 9 status commit, which is a status record and not the implementation hash | Complete; portable strategy ingestion, static validation, deterministic Level 1 evaluation, strategy versioning and hashing, capability vocabulary and compatibility resolution, comparison eligibility, and the closed 20-schema registry — 9 new Stage 4 schemas with the 11 Stage 3 schemas preserved byte-identical — verified offline on the complete verifier, which passed on its first attempt; GitNexus remains `DISABLED_WITH_EVIDENCE` with the manual source, reference, and diff fallback recorded; Stage 5 not started |
 ```
 
 The Stage 5 row is unchanged and still reads `Not started` and `Not evaluated`.
@@ -4618,12 +4630,25 @@ the separate Task 9 status commit. The closed 20-schema registry holds
 the nine new Stage 4 schemas together with the eleven Stage 3 schemas,
 preserved byte-identical to `main`. Stage 5 is not started.
 
-The independent sweeps over the reviewed rule matrix, the generated
-schemas, and the Stage 4 test corpus found zero disagreement between the
-published schemas and the runtime validators. That is a result over the
-reviewed corpus and those sweeps. It is not a claim that every possible
-runtime or schema rule was exhaustively enumerated.
+The independent sweeps agree on the falsifiable results: zero
+over-rejections, and zero disagreement between the four schema surfaces.
+The published bytes are therefore a superset of the runtime, never a
+subset. The two sweeps do not agree on the residual set of inexpressible
+rules, and that register is a maintained enumeration rather than a
+machine-verified closure, not a claim that every possible runtime or
+schema rule was exhaustively enumerated.
 ```
+
+**On the wording of that second paragraph.** An earlier draft said the sweeps
+"found zero disagreement between the published schemas and the runtime
+validators". That is false, and the same file refutes it: the committed
+schema-workflow section records that the reviewer's sweep produced forty-six
+under-rejections resolving to eleven rules. Those *are* schema-versus-runtime
+disagreements. The two claims the evidence actually supports are zero
+over-rejections and zero disagreement **between the four schema surfaces**,
+which together give the superset property. Do not restore the stronger sentence;
+it would make the completion documentation contradict the evidence section
+forty-five lines above it.
 
 Every other paragraph of `## Stage scope` is retained verbatim, including the
 GitNexus `DISABLED_WITH_EVIDENCE` and manual-fallback paragraph and the
@@ -5213,7 +5238,21 @@ Stage 4 is complete only when every item below has fresh offline evidence.
 12. `runtime.live` is rejected by core policy before resolution.
 13. Comparison eligibility and every ineligibility reason are explicit.
 14. No majority vote, averaging, or synthetic combined return exists anywhere.
-15. Every Stage 4 exclusion in section 5.1 holds, proven by
+15. Every Stage 4 exclusion in section 5.1 holds. **Reviewer D-4a correction to
+    this gate's wording.** The proof is not one module. `eval`, `exec`,
+    `compile`, dynamic imports, network, subprocess, environment access, and
+    filesystem reach are proven by `tests/safety/test_stage3_boundaries.py` —
+    the closed 22-root import allowlist, the environment-access scan, the
+    path-access scan, and the `pathlib`/`importlib` per-package scan added in
+    Task 9. Unsafe-YAML construction and the typing-integrity rules are proven
+    by the module named below. The order, fill, portfolio, backtest,
+    persistence, and trading exclusions are proven by the absence of any such
+    module in the closed source-file set, which
+    `test_stage3_source_file_set_is_closed` asserts by exact equality.
+    `datetime.datetime.now` has **no executable guard**: the `datetime` root is
+    allowlisted for legitimate use, and no per-package narrowing exists for it.
+    It holds in fact today and is recorded as an open gap rather than claimed
+    closed. The originally named module is
     `tests/safety/test_stage4_boundaries.py`.
 16. GitNexus was not invoked; the manual source, reference, and diff fallback
     was used and recorded.
