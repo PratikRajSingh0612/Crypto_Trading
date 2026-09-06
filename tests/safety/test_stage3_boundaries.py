@@ -35,6 +35,7 @@ _ALLOWED_SOURCE_FILES = {
     "configuration/__init__.py",
     "configuration/loader.py",
     "configuration/models.py",
+    "configuration/retry_policy.py",
     "configuration/snapshot.py",
     "datasets/__init__.py",
     "datasets/hashing.py",
@@ -48,6 +49,7 @@ _ALLOWED_SOURCE_FILES = {
     "domain/compatibility.py",
     "domain/descriptors.py",
     "domain/diagnostics.py",
+    "domain/experiment.py",
     "domain/financial.py",
     "domain/hashing.py",
     "domain/identifiers.py",
@@ -55,6 +57,7 @@ _ALLOWED_SOURCE_FILES = {
     "domain/ports.py",
     "domain/records.py",
     "domain/results.py",
+    "domain/retry.py",
     "domain/time.py",
     "domain/versioning.py",
     "experiments/__init__.py",
@@ -150,9 +153,7 @@ _DEFERRED_DEFINITIONS = {
     "EngineRunRequest",
     "EquityPoint",
     "EvidenceFinalizationRequest",
-    "ExperimentRecord",
     "ExperimentRepository",
-    "ExperimentSpec",
     "Fee",
     "FinalizationResult",
     "NegotiationResult",
@@ -166,7 +167,6 @@ _DEFERRED_DEFINITIONS = {
     "ProcessSupervisor",
     "ProtocolEventEnvelope",
     "ResultFinalizationRequest",
-    "RetryPolicy",
     "Result",
     "RunEvent",
     "RunManifest",
@@ -617,9 +617,10 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     releases twelve names across Tasks 1 through 6, each in the task that
     first defines it, so the pinned count reads sixty-five minus the names
     released so far: Task 1 released `Clock`, `CommandKind` and
-    `CommandInvocationState`, giving 62.
+    `CommandInvocationState`, giving 62; Task 2 released `RetryPolicy`,
+    `ExperimentSpec` and `ExperimentRecord`, giving 59.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 62
+    assert len(_DEFERRED_DEFINITIONS) == 59
     assert _DEFERRED_DEFINITIONS == {
         "AdapterCatalog",
         "AdapterCatalogEntry",
@@ -655,9 +656,7 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "EngineRunRequest",
         "EquityPoint",
         "EvidenceFinalizationRequest",
-        "ExperimentRecord",
         "ExperimentRepository",
-        "ExperimentSpec",
         "Fee",
         "FinalizationResult",
         "NegotiationResult",
@@ -671,7 +670,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "ProcessSupervisor",
         "ProtocolEventEnvelope",
         "ResultFinalizationRequest",
-        "RetryPolicy",
         "Result",
         "RunEvent",
         "RunManifest",
