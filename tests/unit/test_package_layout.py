@@ -30,6 +30,7 @@ PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab.domain.compatibility",
     "crypto_lab.domain.experiment",
     "crypto_lab.domain.retry",
+    "crypto_lab.domain.command_invocation",
     "crypto_lab.strategy",
     "crypto_lab.strategy.evaluation",
     "crypto_lab.strategy.expressions",

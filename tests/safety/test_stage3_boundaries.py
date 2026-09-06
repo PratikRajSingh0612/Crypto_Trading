@@ -45,6 +45,7 @@ _ALLOWED_SOURCE_FILES = {
     "domain/canonical_json.py",
     "domain/capability_names.py",
     "domain/capability_requirements.py",
+    "domain/command_invocation.py",
     "domain/comparison_levels.py",
     "domain/compatibility.py",
     "domain/descriptors.py",
@@ -142,7 +143,6 @@ _DEFERRED_DEFINITIONS = {
     "CandidateFinalization",
     "CanonicalFill",
     "CanonicalOrder",
-    "CommandInvocationRecord",
     "CommandInvocationRepository",
     "CommandResult",
     "ComparisonEligibilityService",
@@ -618,9 +618,10 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     first defines it, so the pinned count reads sixty-five minus the names
     released so far: Task 1 released `Clock`, `CommandKind` and
     `CommandInvocationState`, giving 62; Task 2 released `RetryPolicy`,
-    `ExperimentSpec` and `ExperimentRecord`, giving 59.
+    `ExperimentSpec` and `ExperimentRecord`, giving 59; Task 3 released
+    `CommandInvocationRecord`, giving 58.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 59
+    assert len(_DEFERRED_DEFINITIONS) == 58
     assert _DEFERRED_DEFINITIONS == {
         "AdapterCatalog",
         "AdapterCatalogEntry",
@@ -645,7 +646,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "CandidateFinalization",
         "CanonicalFill",
         "CanonicalOrder",
-        "CommandInvocationRecord",
         "CommandInvocationRepository",
         "CommandResult",
         "ComparisonEligibilityService",
