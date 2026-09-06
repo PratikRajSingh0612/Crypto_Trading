@@ -5,7 +5,6 @@ from crypto_lab.configuration.models import (
     ApplicationConfig,
     CliOverrides,
     ConfigurationLayer,
-    RetryTerminalState,
 )
 from crypto_lab.configuration.snapshot import (
     ConfigSnapshot,
@@ -13,6 +12,7 @@ from crypto_lab.configuration.snapshot import (
     material_base_configuration_hash,
     snapshot_configuration,
 )
+from crypto_lab.domain.lifecycle import RetryTerminalState
 
 __all__ = (
     "ApplicationConfig",

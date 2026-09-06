@@ -8,14 +8,17 @@ from pydantic import TypeAdapter, ValidationError
 from crypto_lab.domain.identifiers import (
     ArtifactId,
     AssetCode,
+    AttemptToken,
     AuditEventId,
     CandidateArtifactId,
+    CorrelationId,
     DatasetId,
     DatasetPartitionId,
     DiagnosticId,
     EventId,
     ExperimentId,
     InvocationId,
+    LogicalSlotId,
     NormalizedIdentifier,
     RunId,
     Sha256,
@@ -37,6 +40,7 @@ _ID_CASES: list[tuple[TypeAdapter[str], str]] = [
     (TypeAdapter(DiagnosticId), "diag_"),
     (TypeAdapter(AuditEventId), "audit_"),
     (TypeAdapter(DatasetPartitionId), "part_"),
+    (TypeAdapter(LogicalSlotId), "slot_"),
 ]
 
 
@@ -79,6 +83,36 @@ def test_prefixed_uuid4_alias_accepts_only_its_canonical_family(
             "BTC.USDT-V1",
             ("btc", "two words", "", "_BTC", "BTC!"),
         ),
+        (
+            # Temporary sensitive correlation material: 32-1024 URL-safe characters.
+            TypeAdapter(AttemptToken),
+            "A1b2C3d4E5f6G7h8-_" + "z" * 14,
+            (
+                "a" * 31,
+                "a" * 1025,
+                "",
+                "a" * 31 + " ",
+                "a" * 31 + "!",
+                " " + "a" * 32,
+                "a" * 16 + "." + "a" * 16,
+            ),
+        ),
+        (
+            # The same constraints as the `artifacts.ownership` alias, defined
+            # separately because `domain` may not import `artifacts`.
+            TypeAdapter(CorrelationId),
+            "stage5.task1:run-1",
+            (
+                "",
+                ".leading",
+                "-leading",
+                ":leading",
+                "_leading",
+                "two words",
+                "a" * 129,
+                "slash/ed",
+            ),
+        ),
     ],
 )
 def test_constrained_string_aliases(
@@ -101,6 +135,8 @@ def test_constrained_string_aliases(
         (TypeAdapter(Sha256), "a" * 64),
         (TypeAdapter(NormalizedIdentifier), "schema.registry-v1"),
         (TypeAdapter(AssetCode), "BTC.USDT-V1"),
+        (TypeAdapter(AttemptToken), "a" * 32),
+        (TypeAdapter(CorrelationId), "stage5.task1:run-1"),
     ],
 )
 def test_identifier_schemas_reject_terminal_newline(

@@ -98,6 +98,10 @@ def _availability_observation_id(value: str) -> str:
     return validate_prefixed_uuid4(value, "avail_")
 
 
+def _logical_slot_id(value: str) -> str:
+    return validate_prefixed_uuid4(value, "slot_")
+
+
 type ExperimentId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^exp_{_UUID4}$"),
@@ -182,6 +186,12 @@ type AvailabilityObservationId = Annotated[
     AfterValidator(_availability_observation_id),
     WithJsonSchema(exact_string_schema(rf"^avail_{_UUID4}$")),
 ]
+type LogicalSlotId = Annotated[
+    str,
+    StringConstraints(strict=True, pattern=rf"^slot_{_UUID4}$"),
+    AfterValidator(_logical_slot_id),
+    WithJsonSchema(exact_string_schema(rf"^slot_{_UUID4}$")),
+]
 type Sha256 = Annotated[
     str,
     StringConstraints(strict=True, pattern=r"^[0-9a-f]{64}$"),
@@ -216,6 +226,48 @@ type AssetCode = Annotated[
             r"^[A-Z][A-Z0-9]*(?:[._-][A-Z0-9]+)*$",
             min_length=1,
             max_length=32,
+        )
+    ),
+]
+
+_URL_SAFE_PATTERN = r"^[A-Za-z0-9_-]+$"
+_CORRELATION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+
+#: The raw attempt token of one run attempt (Stage 5 plan section 3.3).
+#: Temporary sensitive correlation material: it is hashed by
+#: ``attempt_token_hash`` before it reaches any persisted record and is never a
+#: field of one, so no registered schema publishes this projection.
+type AttemptToken = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        min_length=32,
+        max_length=1024,
+        pattern=_URL_SAFE_PATTERN,
+    ),
+    WithJsonSchema(
+        exact_string_schema(
+            _URL_SAFE_PATTERN,
+            min_length=32,
+            max_length=1024,
+        )
+    ),
+]
+#: The same constraints as the ``artifacts.ownership`` alias of the same name,
+#: defined separately because ``domain`` may not import ``artifacts``.
+type CorrelationId = Annotated[
+    str,
+    StringConstraints(
+        strict=True,
+        min_length=1,
+        max_length=128,
+        pattern=_CORRELATION_ID_PATTERN,
+    ),
+    WithJsonSchema(
+        exact_string_schema(
+            _CORRELATION_ID_PATTERN,
+            min_length=1,
+            max_length=128,
         )
     ),
 ]

@@ -22,6 +22,8 @@ class HashingProfile(StrEnum):
     ARTIFACT_OWNER_V1 = "artifact-owner/v1"
     DIAGNOSTIC_IDENTITY_V1 = "diagnostic-identity/v1"
     STRATEGY_VERSION_V1 = "strategy-version/v1"
+    EXPERIMENT_CONFIGURATION_V1 = "experiment-configuration/v1"
+    EXPERIMENT_SPEC_V1 = "experiment-spec/v1"
 
 
 class CanonicalHashEnvelope(CanonicalModel):

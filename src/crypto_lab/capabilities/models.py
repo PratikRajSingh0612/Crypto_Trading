@@ -14,8 +14,11 @@ immutable-mapping representation is needed and Task 6 imports nothing from
 
 ``CapabilityRequirement`` and ``ApproximationPolicy`` are owned by
 ``crypto_lab.domain.capability_requirements`` per plan section 5.7 item 6 and are
-re-exported here. The ``__all__`` entry is mandatory rather than cosmetic: strict
-mypy implies ``--no-implicit-reexport``.
+re-exported here. ``CompatibilityOutcome`` is owned by
+``crypto_lab.domain.compatibility`` since Stage 5 Task 1 (Stage 5 plan section
+2.5) and is re-exported here the same way, byte-neutrally for the released
+``compatibility-result-v1`` schema. The ``__all__`` entries are mandatory rather
+than cosmetic: strict mypy implies ``--no-implicit-reexport``.
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ from crypto_lab.domain.comparison_levels import (
     ComparisonLevel,
     sorted_comparison_level_enum,
 )
+from crypto_lab.domain.compatibility import CompatibilityOutcome
 from crypto_lab.domain.diagnostics import ErrorCode
 from crypto_lab.domain.identifiers import (
     ApproximationId,
@@ -388,21 +392,6 @@ class ApproximationDeclaration(CanonicalModel):
         if value != tuple(sorted(value, key=str)):
             raise ValueError("prevented comparison levels must be sorted")
         return value
-
-
-class CompatibilityOutcome(StrEnum):
-    """The four approved outcomes of specification sections 11.5 and 13.4.
-
-    ``NOT_APPLICABLE`` and ``UNAVAILABLE`` are distinct on purpose and neither may
-    absorb the other: section 13.4 requires an unrunnable-but-compatible adapter to
-    record "a terminal availability outcome" and forbids mislabelling it as a
-    strategy failure.
-    """
-
-    SUPPORTED = "SUPPORTED"
-    SUPPORTED_WITH_APPROXIMATION = "SUPPORTED_WITH_APPROXIMATION"
-    NOT_APPLICABLE = "NOT_APPLICABLE"
-    UNAVAILABLE = "UNAVAILABLE"
 
 
 class CompatibilityReason(CanonicalModel):

@@ -2595,3 +2595,106 @@ def test_the_stage_three_digests_are_keyed_on_paths_not_on_a_count() -> None:
         assert name in _STAGE3_SHA256, name
     for name in _STAGE4_PATHS:
         assert name not in _STAGE3_SHA256, name
+
+
+# --- Stage 5 Task 1: the nine Stage 4 schemas are pinned the same way ----------
+#
+# Stage 5 plan section 2.5 relocates `RetryTerminalState` (entry 5,
+# `configuration/application-config-v1`) and `CompatibilityOutcome` (entry 17,
+# `capabilities/compatibility-result-v1`) into `domain`, and requires each move
+# to be byte-neutral or not performed. Section 2.7 assigns this block to Task 1
+# so the digest gate covers all twenty existing schemas before any other Stage 5
+# change lands. Each value was derived from the working tree at the Stage 5 base
+# commit and confirmed equal to the corresponding `main` blob in both directions.
+# The Stage-5-absent half of the key guard belongs to Task 9, once `_STAGE5_PATHS`
+# and the seven Stage 5 entries exist.
+
+_STAGE4_SHA256: Final[dict[str, str]] = {
+    "strategy/strategy-spec-v1.schema.json": (
+        "6874d259a04384720862f0a6a6325be740080431a4ebcf8e8d37ed416c9dde9c"
+    ),
+    "strategy/strategy-version-v1.schema.json": (
+        "35127c235062d067e451514dcdfbc703f8fda4d99b3c63c94ea9beb4eb37500d"
+    ),
+    "strategy/expression-v1.schema.json": (
+        "84d967a8afff10e48ee0129a74b666eb5902e2f4b1d307fe63bba7f0fda9b465"
+    ),
+    "capabilities/capability-requirement-v1.schema.json": (
+        "fda291aed5395f7d0d947d05a5e596de7ef827f53421ded061ad11b7e3f17e81"
+    ),
+    "capabilities/capability-declaration-v1.schema.json": (
+        "e89b2cf02135f0c3a284f4351555fb6bba8be9e6c8b512aebf58339a275b9817"
+    ),
+    "capabilities/approximation-declaration-v1.schema.json": (
+        "ea73a819ca178d8a7e5bbd98412e66bf486b92c91f8dfb7214f84abc8b27ff1c"
+    ),
+    "capabilities/compatibility-result-v1.schema.json": (
+        "de2863c06038653045187748d494851d3aad14323215028951d11639990f80bb"
+    ),
+    "capabilities/runtime-availability-observation-v1.schema.json": (
+        "ec92c4402f6e4c9ad1ac4a248d30ae9a28c8065e1b97f8d275583c5f339f469b"
+    ),
+    "capabilities/comparison-eligibility-result-v1.schema.json": (
+        "21bb21350fcc2fb1bb512cf14f799ec05eb58b6d06665492bbd5265adbfea08d"
+    ),
+}
+
+
+def test_the_nine_stage_four_schema_files_match_their_reviewed_digests() -> None:
+    """The one assertion a simultaneous Stage 4 model change and regeneration fails."""
+    assert tuple(sorted(_STAGE4_SHA256)) == tuple(sorted(_STAGE4_PATHS))
+    assert len(_STAGE4_SHA256) == 9
+    for name, expected in _STAGE4_SHA256.items():
+        actual = hashlib.sha256((_COMMITTED_ROOT / name).read_bytes()).hexdigest()
+        assert actual == expected, name
+
+
+def test_the_stage_four_digests_are_keyed_on_paths_not_on_a_count() -> None:
+    """A renamed or dropped Stage 4 file must fail rather than pass vacuously."""
+    for name in _STAGE4_PATHS:
+        assert (_COMMITTED_ROOT / name).is_file(), name
+        assert name in _STAGE4_SHA256, name
+    for name in _STAGE3_PATHS:
+        assert name not in _STAGE4_SHA256, name
+
+
+def test_the_two_relocation_bearing_entries_render_their_pinned_bytes() -> None:
+    """Entries 5 and 17 are the two schemas the Task 1 relocations could move.
+
+    Pinned against the **render**, not only the committed file: hashing the file
+    alone would still pass if a relocation changed what generation emits, since
+    nothing regenerates during a test run. `RetryTerminalState` must keep
+    rendering with no `description`, because the moved class carries no
+    docstring; `CompatibilityOutcome` must keep rendering its byte-identical one.
+    """
+    ordered = _ordered_paths()
+    config_path = "configuration/application-config-v1.schema.json"
+    result_path = "capabilities/compatibility-result-v1.schema.json"
+    assert ordered[5] == config_path
+    assert ordered[17] == result_path
+
+    rendered = render_schema_files()
+    config_digest = hashlib.sha256(rendered[PurePosixPath(config_path)]).hexdigest()
+    result_digest = hashlib.sha256(rendered[PurePosixPath(result_path)]).hexdigest()
+    assert config_digest == _STAGE3_SHA256[config_path]
+    assert result_digest == _STAGE4_SHA256[result_path]
+
+    committed = _committed_schemas()
+    assert committed[PurePosixPath(config_path)]["$defs"]["RetryTerminalState"] == {
+        "enum": ["FAILED", "TIMED_OUT", "UNAVAILABLE"],
+        "title": "RetryTerminalState",
+        "type": "string",
+    }
+    outcome = committed[PurePosixPath(result_path)]["$defs"]["CompatibilityOutcome"]
+    assert set(outcome) == {"description", "enum", "title", "type"}
+    assert outcome["enum"] == [
+        "SUPPORTED",
+        "SUPPORTED_WITH_APPROXIMATION",
+        "NOT_APPLICABLE",
+        "UNAVAILABLE",
+    ]
+    assert outcome["title"] == "CompatibilityOutcome"
+    assert outcome["type"] == "string"
+    assert outcome["description"].startswith(
+        "The four approved outcomes of specification sections 11.5 and 13.4."
+    )

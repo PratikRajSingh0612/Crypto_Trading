@@ -45,11 +45,14 @@ _ALLOWED_SOURCE_FILES = {
     "domain/capability_names.py",
     "domain/capability_requirements.py",
     "domain/comparison_levels.py",
+    "domain/compatibility.py",
     "domain/descriptors.py",
     "domain/diagnostics.py",
     "domain/financial.py",
     "domain/hashing.py",
     "domain/identifiers.py",
+    "domain/lifecycle.py",
+    "domain/ports.py",
     "domain/records.py",
     "domain/results.py",
     "domain/time.py",
@@ -138,12 +141,9 @@ _DEFERRED_DEFINITIONS = {
     "CanonicalOrder",
     "CommandInvocationRecord",
     "CommandInvocationRepository",
-    "CommandInvocationState",
-    "CommandKind",
     "CommandResult",
     "ComparisonEligibilityService",
     "ContentHasher",
-    "Clock",
     "DatasetRepository",
     "EngineRunRecord",
     "EngineRunRepository",
@@ -611,10 +611,15 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
 
     Without this, deleting a name deletes the parametrized case below that
     would have caught it, so the suite shrinks instead of failing. The count
-    matches the plan's own arithmetic: section 3.9 records 79 at Stage 3 and
-    section 9.8 removes exactly fourteen.
+    matches the plans' own arithmetic: the Stage 4 plan's section 3.9 records
+    79 at Stage 3 and its section 9.8 removes exactly fourteen, giving the
+    sixty-five this test is named for. The Stage 5 plan's section 2.7 then
+    releases twelve names across Tasks 1 through 6, each in the task that
+    first defines it, so the pinned count reads sixty-five minus the names
+    released so far: Task 1 released `Clock`, `CommandKind` and
+    `CommandInvocationState`, giving 62.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 65
+    assert len(_DEFERRED_DEFINITIONS) == 62
     assert _DEFERRED_DEFINITIONS == {
         "AdapterCatalog",
         "AdapterCatalogEntry",
@@ -641,12 +646,9 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "CanonicalOrder",
         "CommandInvocationRecord",
         "CommandInvocationRepository",
-        "CommandInvocationState",
-        "CommandKind",
         "CommandResult",
         "ComparisonEligibilityService",
         "ContentHasher",
-        "Clock",
         "DatasetRepository",
         "EngineRunRecord",
         "EngineRunRepository",
@@ -708,9 +710,9 @@ def test_each_normative_deferred_symbol_is_detected_by_the_stage3_guard(
         "AdapterResultManifest",
         "CandidateArtifactState",
         "CanonicalOrder",
-        "CommandInvocationState",
         "EngineRunRequest",
         "PortfolioSnapshot",
+        "RunEvent",
         "ValidationOutcome",
     ],
 )

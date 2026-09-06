@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from enum import StrEnum
 from pathlib import PureWindowsPath
 from typing import Annotated, ClassVar, Literal, Self
 
@@ -21,6 +20,7 @@ from pydantic.json_schema import JsonSchemaValue
 from crypto_lab.domain.base import CanonicalModel
 from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.identifiers import NormalizedIdentifier, Sha256
+from crypto_lab.domain.lifecycle import RetryTerminalState as RetryTerminalState
 from crypto_lab.domain.versioning import SemanticVersion
 
 PathText = Annotated[
@@ -230,12 +230,12 @@ type RuntimeMetadataValue = (
 )
 
 
-class RetryTerminalState(StrEnum):
-    FAILED = "FAILED"
-    TIMED_OUT = "TIMED_OUT"
-    UNAVAILABLE = "UNAVAILABLE"
-
-
+# `RetryTerminalState` is defined in `crypto_lab.domain.lifecycle` since Stage 5
+# Task 1 (Stage 5 plan section 2.5) and re-exported above in the explicit
+# `import X as X` form, so `from crypto_lab.configuration.models import
+# RetryTerminalState` stays valid under strict mypy. The relocation is
+# byte-neutral for the released `configuration/application-config-v1` schema,
+# which renders the enum by bare class name and without a description.
 _RETRY_ORDER = tuple(RetryTerminalState)
 
 
