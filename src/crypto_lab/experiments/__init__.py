@@ -2,7 +2,10 @@
 
 Stage 5 Task 6 (plan sections 10, 3.11, 10.1): the application-owned repository,
 reader and unit-of-work ports, the sixteen public operation requests, the Stage 5
-diagnostic factory and the experiment, run and invocation lifecycle services.
+diagnostic factory and the experiment, run and invocation lifecycle services;
+Task 7 (plan sections 8.2-8.5) adds the causal-closure traversal, the retry
+evaluation snapshot assembler, the three-phase ``evaluate_retry`` and the
+idempotent ``create_successor`` with its scheduler-eligibility predicate.
 Concrete port implementations live in Stage 8's ``persistence`` package; Stage 5
 exercises the ports through test-resident doubles only.
 """
@@ -69,6 +72,15 @@ from crypto_lab.experiments.requests import (
     RunTransitionRequest,
     SuccessorCreationRequest,
 )
+from crypto_lab.experiments.retry import (
+    MAX_CAUSAL_CLOSURE_DEPTH,
+    MAX_CAUSAL_CLOSURE_NODES,
+    build_retry_evaluation_snapshot,
+    create_successor,
+    evaluate_retry,
+    resolve_causal_closure,
+    successor_is_due,
+)
 from crypto_lab.experiments.run_service import (
     TRANSITION_RUN_OWNED_TARGETS,
     AttemptCreation,
@@ -84,6 +96,8 @@ __all__ = (
     "IMMUTABLE_INPUT_MISMATCH",
     "INVARIANT_VIOLATION",
     "LINKED_ONLY_INVOCATION_TARGETS",
+    "MAX_CAUSAL_CLOSURE_DEPTH",
+    "MAX_CAUSAL_CLOSURE_NODES",
     "REQUEST_OPERATIONS",
     "RETRY_DECISION_CONFLICT",
     "RETRY_NOT_BEFORE_NOT_REACHED",
@@ -120,19 +134,24 @@ __all__ = (
     "SuccessorCreationRequest",
     "UnitOfWork",
     "begin_linked_launch",
+    "build_retry_evaluation_snapshot",
     "cancel_experiment",
     "create_attempt",
     "create_experiment",
     "create_invocation",
+    "create_successor",
     "enrich_invocation",
+    "evaluate_retry",
     "queue_experiment",
     "replace_experiment_spec",
+    "resolve_causal_closure",
     "run_operation",
     "run_replacement",
     "run_rule_failure",
     "stage5_diagnostic",
     "stage5_failure",
     "start_linked_run",
+    "successor_is_due",
     "transition_experiment",
     "transition_invocation",
     "transition_invocation_and_run",

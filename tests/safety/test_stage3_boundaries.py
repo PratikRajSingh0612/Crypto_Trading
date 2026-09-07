@@ -70,6 +70,7 @@ _ALLOWED_SOURCE_FILES = {
     "experiments/invocation_service.py",
     "experiments/ports.py",
     "experiments/requests.py",
+    "experiments/retry.py",
     "experiments/run_service.py",
     "persistence/__init__.py",
     "process_supervision/__init__.py",

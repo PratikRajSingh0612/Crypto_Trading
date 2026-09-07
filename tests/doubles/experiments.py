@@ -20,10 +20,11 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, cast
 
 from pydantic.experimental.missing_sentinel import MISSING
 
+from crypto_lab.adapters.ports import CommandInvocationRepository
 from crypto_lab.domain.command_invocation import (
     CommandInvocationRecord,
     ProcessIdentity,
@@ -84,7 +85,15 @@ from crypto_lab.experiments.diagnostics import (
     INVARIANT_VIOLATION,
     stage5_failure,
 )
-from crypto_lab.experiments.ports import RetryDecisionInsertOutcome, UnitOfWork
+from crypto_lab.experiments.ports import (
+    DiagnosticReader,
+    EngineRunRepository,
+    ExperimentRepository,
+    RetryDecisionInsertOutcome,
+    RetryDecisionRepository,
+    RuntimeAvailabilityObservationReader,
+    UnitOfWork,
+)
 
 _E: Final = ExperimentState
 _R: Final = EngineRunState
@@ -1457,3 +1466,289 @@ def _conforms(unit_of_work: UnitOfWork) -> UnitOfWork:
 
 
 _PROBE: Final[Callable[[InMemoryUnitOfWork], UnitOfWork]] = _conforms
+
+
+# --------------------------------------------------------------------------
+# Task 7 additions: read-discipline clocks, a call-recording unit of work and the
+# retry fixture material (plan 12 Task 7 focused RED: "a clock double that fails when
+# called and repositories that record every call")
+# --------------------------------------------------------------------------
+
+
+def sequential_diagnostic_id(index: int) -> str:
+    """A canonical ``diag_`` UUID4 whose lexical order is the index order.
+
+    Version nibble ``4`` and variant nibble ``8`` are fixed; the first group is the
+    zero-padded index, so a graph of up to ``0xffffffff`` nodes sorts by index and
+    every ``causal_diagnostic_ids`` tuple built from ascending indexes is already
+    sorted and unique.
+    """
+    if not 0 <= index <= 0xFFFFFFFF:
+        raise ValueError("index must fit eight hexadecimal digits")
+    return f"diag_{index:08x}-0000-4000-8000-000000000000"
+
+
+def sample_allowed_retry_decision(
+    *,
+    experiment_id: str = EXPERIMENT_ID,
+    logical_slot_id: str = SLOT_A,
+    predecessor_run_id: str = RUN_ID,
+    experiment_spec_hash: str = "a" * 64,
+    retry_policy: RetryPolicy | None = None,
+    created_attempt_count: int = 1,
+    predecessor_terminal_state: EngineRunState = _R.FAILED,
+    primary_terminal_diagnostic_id: str = DIAG_ID,
+    predecessor_completed_at_utc: datetime = INSTANT + timedelta(seconds=5),
+    availability_observation_id: str | None = None,
+    decided_at_utc: datetime = INSTANT + timedelta(minutes=1),
+) -> RetryDecisionRecord:
+    """An ``ALLOWED`` decision reserving ``created_attempt_count + 1``.
+
+    ``retry_not_before_utc`` is the predecessor's terminal completion instant plus
+    the policy delay (plan 8.4); the default completion instant equals
+    ``sample_run(<terminal>).updated_at_utc``.
+    """
+    policy = sample_retry_policy() if retry_policy is None else retry_policy
+    payload: dict[str, object] = {
+        "schema_version": "1.0.0",
+        "experiment_id": experiment_id,
+        "logical_slot_id": logical_slot_id,
+        "predecessor_run_id": predecessor_run_id,
+        "experiment_spec_hash": experiment_spec_hash,
+        "retry_policy": policy,
+        "created_attempt_count": created_attempt_count,
+        "predecessor_terminal_state": predecessor_terminal_state,
+        "primary_terminal_diagnostic_id": primary_terminal_diagnostic_id,
+        "outcome": RetryDecisionOutcome.ALLOWED,
+        "retry_not_before_utc": predecessor_completed_at_utc
+        + timedelta(seconds=policy.retry_delay_seconds),
+        "reserved_successor_attempt_number": created_attempt_count + 1,
+        "decided_at_utc": decided_at_utc,
+    }
+    if availability_observation_id is not None:
+        payload["availability_observation_id"] = availability_observation_id
+    return RetryDecisionRecord.model_validate(payload)
+
+
+class FailingClock:
+    """A conforming clock whose every read is a test failure.
+
+    Installed on the paths plan 8.4 phase 1 and 8.5 step 2 declare clock-free
+    (existing-row replay, existing-successor replay): a read raises, so the
+    assertion cannot pass by accident.
+    """
+
+    def now_utc(self) -> datetime:
+        raise AssertionError("the clock must not be read on this path")
+
+
+class CountingClock(FixedClock):
+    """A ``FixedClock`` that counts its reads, so a test can pin exactly one."""
+
+    def __init__(self, instant: datetime) -> None:
+        super().__init__(instant)
+        self.reads = 0
+
+    def now_utc(self) -> datetime:
+        self.reads += 1
+        return super().now_utc()
+
+
+class CallRecorder:
+    """The ordered ``(member, method)`` log shared by a recording root and its
+    transactions."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+
+    def of(self, member: str) -> tuple[str, ...]:
+        """Every method recorded against one member, in call order."""
+        return tuple(method for name, method in self.calls if name == member)
+
+    def repositories(self) -> tuple[tuple[str, str], ...]:
+        """Every repository or reader call, excluding the unit-of-work lifecycle."""
+        return tuple(call for call in self.calls if call[0] != "unit_of_work")
+
+
+class _RecordingMember:
+    """Delegates every attribute to ``target``; records each method call first."""
+
+    def __init__(self, member: str, target: object, recorder: CallRecorder) -> None:
+        self._member = member
+        self._target = target
+        self._recorder = recorder
+
+    def __getattr__(self, name: str) -> Any:
+        attribute = getattr(self._target, name)
+        if not callable(attribute):
+            return attribute
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            self._recorder.calls.append((self._member, name))
+            return attribute(*args, **kwargs)
+
+        return call
+
+
+class RecordingUnitOfWork:
+    """A ``UnitOfWork`` over an ``InMemoryUnitOfWork`` that records every call.
+
+    Structurally the protocol: ``begin()`` returns a recording transaction over
+    the inner ``begin()``; ``commit`` and ``rollback`` delegate; each of the six
+    members is a proxy that appends ``(member, method)`` to the shared
+    ``CallRecorder`` before delegating. A call is recorded whether or not it
+    succeeds, so a test can prove that a path performed no repository read at
+    all. Hooks stay on the inner root; nothing here changes the double's
+    semantics.
+    """
+
+    def __init__(
+        self, inner: InMemoryUnitOfWork, recorder: CallRecorder | None = None
+    ) -> None:
+        self._inner = inner
+        self.recorder = CallRecorder() if recorder is None else recorder
+
+    @property
+    def calls(self) -> tuple[tuple[str, str], ...]:
+        return tuple(self.recorder.calls)
+
+    def begin(self) -> RecordingUnitOfWork:
+        self.recorder.calls.append(("unit_of_work", "begin"))
+        return RecordingUnitOfWork(self._inner.begin(), self.recorder)
+
+    def commit(self) -> Result[None]:
+        self.recorder.calls.append(("unit_of_work", "commit"))
+        return self._inner.commit()
+
+    def rollback(self) -> None:
+        self.recorder.calls.append(("unit_of_work", "rollback"))
+        self._inner.rollback()
+
+    def _member(self, name: str) -> Any:
+        return _RecordingMember(name, getattr(self._inner, name), self.recorder)
+
+    @property
+    def experiments(self) -> ExperimentRepository:
+        return cast("ExperimentRepository", self._member("experiments"))
+
+    @property
+    def engine_runs(self) -> EngineRunRepository:
+        return cast("EngineRunRepository", self._member("engine_runs"))
+
+    @property
+    def command_invocations(self) -> CommandInvocationRepository:
+        return cast("CommandInvocationRepository", self._member("command_invocations"))
+
+    @property
+    def retry_decisions(self) -> RetryDecisionRepository:
+        return cast("RetryDecisionRepository", self._member("retry_decisions"))
+
+    @property
+    def availability_observations(self) -> RuntimeAvailabilityObservationReader:
+        return cast(
+            "RuntimeAvailabilityObservationReader",
+            self._member("availability_observations"),
+        )
+
+    @property
+    def diagnostics(self) -> DiagnosticReader:
+        return cast("DiagnosticReader", self._member("diagnostics"))
+
+
+_RECORDING_PROBE: Final[Callable[[RecordingUnitOfWork], UnitOfWork]] = _conforms
+
+
+class _OverriddenMember:
+    """Delegates every attribute to ``target`` except the supplied method overrides."""
+
+    def __init__(
+        self, target: object, overrides: Mapping[str, Callable[..., object]]
+    ) -> None:
+        self._target = target
+        self._overrides = overrides
+
+    def __getattr__(self, name: str) -> Any:
+        override = self._overrides.get(name)
+        if override is not None:
+            return override
+        return getattr(self._target, name)
+
+
+class MemberOverridingUnitOfWork:
+    """A ``UnitOfWork`` over an ``InMemoryUnitOfWork`` in which one member's named
+    methods are replaced by test-supplied callables.
+
+    Simulates the repository faults and answers the in-memory double cannot produce
+    (a Stage 8 read fault on ``count_attempts`` or ``list_for_adapter``, a
+    ``latest_attempt`` that reports ``MISSING`` beside a stored run, an
+    ``add_attempt`` that loses). Every other member, ``commit`` and ``rollback``
+    delegate; ``begin()`` returns a wrapper over the inner transaction and counts
+    the transactions opened in ``begins`` (shared by the root and its transactions),
+    so a test can pin the reload-once driver's two attempts.
+    """
+
+    def __init__(
+        self,
+        inner: InMemoryUnitOfWork,
+        member: str,
+        overrides: Mapping[str, Callable[..., object]],
+        counter: list[int] | None = None,
+    ) -> None:
+        self._inner = inner
+        self._member = member
+        self._overrides = overrides
+        self._counter = [0] if counter is None else counter
+
+    @property
+    def begins(self) -> int:
+        return self._counter[0]
+
+    def begin(self) -> MemberOverridingUnitOfWork:
+        self._counter[0] += 1
+        return MemberOverridingUnitOfWork(
+            self._inner.begin(), self._member, self._overrides, self._counter
+        )
+
+    def commit(self) -> Result[None]:
+        return self._inner.commit()
+
+    def rollback(self) -> None:
+        self._inner.rollback()
+
+    def _member_of(self, name: str) -> Any:
+        target = getattr(self._inner, name)
+        if name != self._member:
+            return target
+        return _OverriddenMember(target, self._overrides)
+
+    @property
+    def experiments(self) -> ExperimentRepository:
+        return cast("ExperimentRepository", self._member_of("experiments"))
+
+    @property
+    def engine_runs(self) -> EngineRunRepository:
+        return cast("EngineRunRepository", self._member_of("engine_runs"))
+
+    @property
+    def command_invocations(self) -> CommandInvocationRepository:
+        return cast(
+            "CommandInvocationRepository", self._member_of("command_invocations")
+        )
+
+    @property
+    def retry_decisions(self) -> RetryDecisionRepository:
+        return cast("RetryDecisionRepository", self._member_of("retry_decisions"))
+
+    @property
+    def availability_observations(self) -> RuntimeAvailabilityObservationReader:
+        return cast(
+            "RuntimeAvailabilityObservationReader",
+            self._member_of("availability_observations"),
+        )
+
+    @property
+    def diagnostics(self) -> DiagnosticReader:
+        return cast("DiagnosticReader", self._member_of("diagnostics"))
+
+
+_OVERRIDING_PROBE: Final[Callable[[MemberOverridingUnitOfWork], UnitOfWork]] = _conforms
