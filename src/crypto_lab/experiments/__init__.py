@@ -5,11 +5,20 @@ reader and unit-of-work ports, the sixteen public operation requests, the Stage 
 diagnostic factory and the experiment, run and invocation lifecycle services;
 Task 7 (plan sections 8.2-8.5) adds the causal-closure traversal, the retry
 evaluation snapshot assembler, the three-phase ``evaluate_retry`` and the
-idempotent ``create_successor`` with its scheduler-eligibility predicate.
+idempotent ``create_successor`` with its scheduler-eligibility predicate; Task 8
+(plan sections 9.2, 9.4 and 9.5) adds ``build_aggregation_input`` and
+``aggregate_experiment``, the selected-slot terminal aggregation committed through
+the experiment-revision compare-and-swap, with its two verdict-state mappings.
 Concrete port implementations live in Stage 8's ``persistence`` package; Stage 5
 exercises the ports through test-resident doubles only.
 """
 
+from crypto_lab.experiments.aggregation import (
+    TERMINAL_STATE_OF_VERDICT,
+    VERDICT_OF_TERMINAL_STATE,
+    aggregate_experiment,
+    build_aggregation_input,
+)
 from crypto_lab.experiments.diagnostics import (
     CONCURRENCY_CONFLICT,
     IMMUTABLE_INPUT_MISMATCH,
@@ -102,10 +111,12 @@ __all__ = (
     "RETRY_DECISION_CONFLICT",
     "RETRY_NOT_BEFORE_NOT_REACHED",
     "STAGE5_DIAGNOSTIC_CODES",
+    "TERMINAL_STATE_OF_VERDICT",
     "TRANSITION_OWNED_EDGES",
     "TRANSITION_OWNED_TARGETS",
     "TRANSITION_RUN_OWNED_TARGETS",
     "UNRECOGNIZED_PROCESS_EXIT",
+    "VERDICT_OF_TERMINAL_STATE",
     "AttemptCreation",
     "AttemptCreationRequest",
     "CancelExperimentRequest",
@@ -133,7 +144,9 @@ __all__ = (
     "RuntimeAvailabilityObservationReader",
     "SuccessorCreationRequest",
     "UnitOfWork",
+    "aggregate_experiment",
     "begin_linked_launch",
+    "build_aggregation_input",
     "build_retry_evaluation_snapshot",
     "cancel_experiment",
     "create_attempt",

@@ -65,6 +65,7 @@ _ALLOWED_SOURCE_FILES = {
     "domain/time.py",
     "domain/versioning.py",
     "experiments/__init__.py",
+    "experiments/aggregation.py",
     "experiments/diagnostics.py",
     "experiments/experiment_service.py",
     "experiments/invocation_service.py",
