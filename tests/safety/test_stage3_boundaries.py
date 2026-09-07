@@ -50,6 +50,7 @@ _ALLOWED_SOURCE_FILES = {
     "domain/compatibility.py",
     "domain/descriptors.py",
     "domain/diagnostics.py",
+    "domain/engine_run.py",
     "domain/experiment.py",
     "domain/financial.py",
     "domain/hashing.py",
@@ -148,7 +149,6 @@ _DEFERRED_DEFINITIONS = {
     "ComparisonEligibilityService",
     "ContentHasher",
     "DatasetRepository",
-    "EngineRunRecord",
     "EngineRunRepository",
     "EngineRunRequest",
     "EquityPoint",
@@ -619,9 +619,10 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     released so far: Task 1 released `Clock`, `CommandKind` and
     `CommandInvocationState`, giving 62; Task 2 released `RetryPolicy`,
     `ExperimentSpec` and `ExperimentRecord`, giving 59; Task 3 released
-    `CommandInvocationRecord`, giving 58.
+    `CommandInvocationRecord`, giving 58; Task 4 released `EngineRunRecord`,
+    giving 57.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 58
+    assert len(_DEFERRED_DEFINITIONS) == 57
     assert _DEFERRED_DEFINITIONS == {
         "AdapterCatalog",
         "AdapterCatalogEntry",
@@ -651,7 +652,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "ComparisonEligibilityService",
         "ContentHasher",
         "DatasetRepository",
-        "EngineRunRecord",
         "EngineRunRepository",
         "EngineRunRequest",
         "EquityPoint",
