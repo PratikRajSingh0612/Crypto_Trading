@@ -41,6 +41,7 @@ _ALLOWED_SOURCE_FILES = {
     "datasets/hashing.py",
     "datasets/models.py",
     "domain/__init__.py",
+    "domain/aggregation.py",
     "domain/base.py",
     "domain/canonical_json.py",
     "domain/capability_names.py",
