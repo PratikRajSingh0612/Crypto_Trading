@@ -735,7 +735,7 @@ def test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctl
         definition.relative_path.as_posix() for definition in SCHEMA_DEFINITIONS
     )
     identifiers = tuple(definition.schema_id for definition in SCHEMA_DEFINITIONS)
-    assert len(paths) == 20
+    assert len(paths) == 27
     assert len(paths) == len(set(paths))
     assert len(identifiers) == len(set(identifiers))
     assert "protocol/engine-descriptor-v1.schema.json" in paths
@@ -976,7 +976,8 @@ _STAGE4_ROADMAP_ROW = (
     "with the 11 Stage 3 schemas preserved byte-identical — verified offline "
     "on the complete verifier, which passed on its first attempt; GitNexus "
     "remains `DISABLED_WITH_EVIDENCE` with the manual source, reference, and "
-    "diff fallback recorded; Stage 5 not started |"
+    # Stage 5 plan section 2.7: the one clause of this row Task 9 changes.
+    "diff fallback recorded; Stage 5 complete |"
 )
 #: Section 11 item 3, byte-exact including its hard wrapping. Reverting item 3
 #: to the symmetric "within one point" wording removes this sentence. No
@@ -990,6 +991,79 @@ _STAGE4_COVERAGE_SENTENCE = "\n".join(
         "Coverage",
         "   above the Stage 3 baseline is permitted.",
     )
+)
+
+# --- Stage 5 Task 9: the completion-status successors of plan section 2.7 ---------
+#
+# The Stage 5 implementation hash is the Task 8 commit, the last commit that adds
+# Stage 5 behaviour. Plan section 2.7 requires Task 9 to introduce this constant in
+# the same commit that changes the prose and section 14.1 makes Task 9 one commit,
+# so the constant cannot name the Task 9 commit itself (a commit cannot contain its
+# own hash; the Stage 4 rule, roadmap Stage 4 row). Every surface that names the
+# hash also says, in the same sentence, that the seven Stage 5 schemas, the closed
+# 27-schema registry, the two Stage 5 guards, the in-memory flow and the status
+# itself were added by the separate Task 9 commit, which is not the implementation
+# hash; that commit's hash is reported in the completion report and the merge
+# evidence, never written into its own tree.
+STAGE5_IMPLEMENTATION_COMMIT = "71ab94d8e9e13d6895cef9346ed58a711c8819f3"
+STAGE5_PLAN = (
+    "docs/superpowers/plans/2026-08-10-project-1-experiment-run-invocation-retry-"
+    "aggregation-implementation-plan.md"
+)
+_README_STAGE5_STATUS = (
+    "Project 1 Stage 5 is complete. Experiment, engine-run, and "
+    "command-invocation lifecycles, queue-time immutability, revision "
+    "compare-and-swap, the immutable six-gate retry decision with durable delay "
+    "and successor creation, deterministic terminal aggregation, and "
+    "application-owned repository and unit-of-work ports exercised through "
+    "in-memory doubles are implemented. Stage 5 implementation completed at "
+    f"`{STAGE5_IMPLEMENTATION_COMMIT}`; the seven Stage 5 schemas, the reviewed "
+    "27-schema registry, the Stage 5 architecture and safety guards, the "
+    "end-to-end in-memory flow, and this status were added by the separate "
+    "Task 9 commit, which is not the implementation hash. Stage 6 has not "
+    "started."
+)
+_VERIFICATION_STAGE5_STATUS = "\n".join(
+    (
+        "Project 1 Stage 5 is complete. Stage 5 implementation completed at",
+        f"`{STAGE5_IMPLEMENTATION_COMMIT}`; the seven Stage 5 schemas, the",
+        "closed 27-schema registry, the Stage 5 architecture and safety guards, the",
+        "end-to-end in-memory flow, and this status were added by the separate Task 9",
+        "commit, which is not the implementation hash. The closed 27-schema registry",
+        "holds the seven new Stage 5 schemas together with the twenty Stage 3 and",
+        "Stage 4 schemas, preserved byte-identical to `main`. Stage 6 is not started.",
+    )
+)
+_STAGE5_ROADMAP_STATUS_LINE = (
+    "**Status:** Approved planning decomposition; Stages 1 through 5 complete"
+)
+_STAGE5_ROADMAP_PLAN_SENTENCE = (
+    "Stages 1 through 5 have approved detailed implementation plans."
+)
+#: Plan section 2.7: the implementation cell is the plan's, verbatim; the exit-gate
+#: cell, which the plan elides, carries the Task 9 attribution.
+_STAGE5_ROADMAP_ROW = (
+    "| 5 — Experiment, Run, Invocation, Retry, and Aggregation Logic | Approved "
+    "and executed | Implementation complete at "
+    f"`{STAGE5_IMPLEMENTATION_COMMIT}` | Complete; strict lifecycle records and "
+    "exhaustive transition tables for experiments, engine runs, and command "
+    "invocations, queue-time immutability, revision compare-and-swap, the "
+    "immutable six-gate retry decision with durable delay and successor "
+    "creation, deterministic terminal aggregation, and application-owned "
+    "repository and unit-of-work ports exercised through in-memory doubles; "
+    "the closed 27-schema registry — 7 new Stage 5 schemas with the 20 Stage 3 "
+    "and Stage 4 schemas preserved byte-identical — together with the Stage 5 "
+    "architecture and safety guards, the end-to-end in-memory flow, and this "
+    "status were added by the separate Task 9 commit, which is not the "
+    "implementation hash; verified offline on the complete verifier, which "
+    "passed on its first attempt; GitNexus remains `DISABLED_WITH_EVIDENCE` "
+    "with the manual source, reference, and diff fallback recorded; Stage 6 "
+    "not started |"
+)
+_STAGE5_DEFERRED_ROW = (
+    "| 5 — Experiment, Run, Invocation, Retry, and Aggregation Logic | "
+    "Intentionally deferred until Stages 3\u20134 completion | Not started | "
+    "Not evaluated |"
 )
 
 
@@ -1006,8 +1080,12 @@ def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
         / "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
     ).read_text(encoding="utf-8")
     readme = (repository_root / "README.md").read_text(encoding="utf-8")
-    assert _STAGE4_ROADMAP_STATUS_LINE in roadmap
-    assert _STAGE4_ROADMAP_PLAN_SENTENCE in roadmap
+    # Stage 5 plan section 2.7: the Stage 4 successors of these two pins became
+    # the Stage 5 successors in Task 9, here and in every other occurrence.
+    assert _STAGE5_ROADMAP_STATUS_LINE in roadmap
+    assert _STAGE5_ROADMAP_PLAN_SENTENCE in roadmap
+    assert _STAGE4_ROADMAP_STATUS_LINE not in roadmap
+    assert _STAGE4_ROADMAP_PLAN_SENTENCE not in roadmap
     assert (
         "**Approved detailed implementation plan:** "
         "`docs/superpowers/plans/"
@@ -1055,8 +1133,10 @@ def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
     # status-authority rule, and only in the same commit that updates README.md.
     # It becomes that string verbatim -- no additional assertion is added here,
     # because plan step 6 enumerates exactly two Task 8 edits to this module.
-    # Every Stage 3 assertion above it stays verbatim.
-    assert "**Status:** Project 1 Stages 1-4 complete" in readme
+    # Every Stage 3 assertion above it stays verbatim. Stage 5 plan section 2.7
+    # advanced the string to its Stage 5 successor in Task 9.
+    assert "**Status:** Project 1 Stages 1-5 complete" in readme
+    assert "**Status:** Project 1 Stages 1-4 complete" not in readme
 
 
 def test_stage4_plan_approval_status_is_exact(repository_root: Path) -> None:
@@ -1086,23 +1166,41 @@ def test_stage4_plan_approval_status_is_exact(repository_root: Path) -> None:
     # "within one point" band removes this sentence and fails here.
     assert _STAGE4_COVERAGE_SENTENCE in plan
 
-    # Stage 4 implementation is complete, and Stage 5 has not started.
-    assert _STAGE4_ROADMAP_STATUS_LINE in roadmap
-    assert (
-        "| 5 — Experiment, Run, Invocation, Retry, and Aggregation Logic | "
-        "Intentionally deferred until Stages 3\u20134 completion | Not started | "
-        "Not evaluated |"
-    ) in roadmap
+    # Stage 4 implementation is complete; Stage 5 is complete too (Task 9), so the
+    # Stage 5 row is its completion row and the deferred row is gone. A pair, not
+    # a swap, for the same reason as the Stage 4 transition above.
+    assert _STAGE5_ROADMAP_STATUS_LINE in roadmap
+    assert _STAGE5_ROADMAP_ROW in roadmap
+    assert _STAGE5_DEFERRED_ROW not in roadmap
 
 
-def test_stage4_completion_status_is_exact(repository_root: Path) -> None:
-    """One test, three surfaces, so no surface can drift alone.
+def test_stage5_completion_status_is_exact(repository_root: Path) -> None:
+    """One test, three surfaces, so no surface can drift alone (Stage 5 plan 2.7).
 
-    Positive pins are byte-exact, following the hard-wrapped comparison in
-    ``test_readme_uses_only_closed_stage3_launcher_setup``. The two containment
-    assertions close the gap a negative-only guard leaves: they have no
-    phrasing to evade.
+    The Stage 4 test of the same shape became this one in Task 9, with exactly the
+    successors plan section 2.7 tabulates: positive pins are byte-exact, following
+    the hard-wrapped comparison in
+    ``test_readme_uses_only_closed_stage3_launcher_setup``; the Stage 4 hash stays
+    pinned in the roadmap's history row only and keeps its own distinctness
+    assertion; the two containment assertions now forbid any "Stage 6" claim
+    outside the pinned blocks, which is the exact contract that "Stage 6 not
+    started" appears only where it is pinned and no other Stage 6 claim exists.
+    The subtracted Stage 5 blocks are the only place permitted to say
+    "exhaustive". The Stage 6 row and the Stage 5 plan-approval line are pinned by
+    the Task 9-owned ``tests/safety/test_stage5_boundaries.py``.
     """
+    assert re.fullmatch(r"[0-9a-f]{40}", STAGE5_IMPLEMENTATION_COMMIT) is not None
+    assert STAGE5_IMPLEMENTATION_COMMIT not in {
+        STAGE3_TASK8_COMMIT,
+        STAGE3_IMPLEMENTATION_COMMIT,
+        STAGE3_STABILITY_CORRECTION_COMMIT,
+        STAGE4_LAUNCHER_BOOTSTRAP_COMMIT,
+        STAGE4_PLAN_APPROVAL_COMMIT,
+        STAGE4_IMPLEMENTATION_COMMIT,
+        STAGE4_EVALUATOR_CORRECTION_COMMIT,
+        *STAGE4_PLAN_CORRECTION_COMMITS,
+        *STAGE4_REVIEW_FOLLOWUP_COMMITS,
+    }
     assert re.fullmatch(r"[0-9a-f]{40}", STAGE4_IMPLEMENTATION_COMMIT) is not None
     assert STAGE4_IMPLEMENTATION_COMMIT not in {
         STAGE3_TASK8_COMMIT,
@@ -1119,34 +1217,41 @@ def test_stage4_completion_status_is_exact(repository_root: Path) -> None:
     readme = (repository_root / "README.md").read_text(encoding="utf-8")
     guide = (repository_root / STAGE4_VERIFICATION_GUIDE).read_text(encoding="utf-8")
 
-    assert _STAGE4_ROADMAP_STATUS_LINE in roadmap
-    assert _STAGE4_ROADMAP_PLAN_SENTENCE in roadmap
+    assert _STAGE5_ROADMAP_STATUS_LINE in roadmap
+    assert _STAGE5_ROADMAP_PLAN_SENTENCE in roadmap
     assert _STAGE4_ROADMAP_ROW in roadmap
+    assert _STAGE5_ROADMAP_ROW in roadmap
 
-    assert _README_STAGE4_STATUS in readme
-    assert _VERIFICATION_STAGE4_STATUS in guide
+    assert _README_STAGE5_STATUS in readme
+    assert _VERIFICATION_STAGE5_STATUS in guide
     assert _VERIFICATION_CORPUS_QUALIFICATION in guide
     assert _VERIFICATION_NON_GOALS in guide
+    assert _README_STAGE4_STATUS not in readme
+    assert _VERIFICATION_STAGE4_STATUS not in guide
 
     for phrase in _RETIRED_STATUS_PHRASES:
         assert phrase not in readme
         assert phrase not in guide
 
     # The same implementation hash on every surface, asserted separately so
-    # changing it in exactly one file fails here and names that file.
+    # changing it in exactly one file fails here and names that file. The roadmap
+    # keeps the Stage 4 hash in its history row; README and the guide carry the
+    # Stage 5 hash alone.
+    assert STAGE5_IMPLEMENTATION_COMMIT in roadmap
+    assert STAGE5_IMPLEMENTATION_COMMIT in readme
+    assert STAGE5_IMPLEMENTATION_COMMIT in guide
     assert STAGE4_IMPLEMENTATION_COMMIT in roadmap
-    assert STAGE4_IMPLEMENTATION_COMMIT in readme
-    assert STAGE4_IMPLEMENTATION_COMMIT in guide
+    assert STAGE4_IMPLEMENTATION_COMMIT not in readme
+    assert STAGE4_IMPLEMENTATION_COMMIT not in guide
 
     # Containment. Remove the pinned blocks, then scan what is left. Scoped to
     # the two documentation files, never the roadmap: the roadmap carries its
-    # own Stage 5 rows, and "exhaustive" occurs there legitimately in Stage 5's
-    # exit evidence.
-    readme_rest = readme.replace(_README_STAGE4_STATUS, "")
-    guide_rest = guide.replace(_VERIFICATION_STAGE4_STATUS, "").replace(
+    # own Stage 6 rows, and "exhaustive" occurs there legitimately.
+    readme_rest = readme.replace(_README_STAGE5_STATUS, "")
+    guide_rest = guide.replace(_VERIFICATION_STAGE5_STATUS, "").replace(
         _VERIFICATION_CORPUS_QUALIFICATION, ""
     )
-    assert "Stage 5" not in readme_rest
-    assert "Stage 5" not in guide_rest
+    assert "Stage 6" not in readme_rest
+    assert "Stage 6" not in guide_rest
     assert "exhaustiv" not in readme_rest.lower()
     assert "exhaustiv" not in guide_rest.lower()

@@ -90,7 +90,7 @@ The script stops at the first failure and runs, in order:
 10. direct `git diff --check`
 
 A successful partial command does not establish repository acceptance. Schema
-generation checks the closed 20-file registry without writing; distribution
+generation checks the closed 27-file registry without writing; distribution
 verification byte-compares the reviewed source schemas with their sole wheel
 and sdist locations.
 
@@ -123,6 +123,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pyte
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\integration -q
 ```
 
+Stage 5's focused targets are the following. `tests\unit\experiments`,
+`tests\integration\experiments`, `tests\safety\test_stage5_boundaries.py` and the
+Stage 5 modules under `tests\unit\domain` and `tests\property` are new in Stage 5;
+`tests\unit\test_schema_registry.py`, `tests\integration`, `tests\architecture`
+and `tests\safety` are older modules whose contract Stage 5 widened from twenty
+schemas to the final registry count of 27 and extended with the `experiments`
+and `adapters` package boundaries.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\experiments -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\domain tests\unit\configuration -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\property tests\architecture tests\safety tests\integration -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\safety\test_stage5_boundaries.py -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\test_schema_registry.py -q
+```
+
 The `addopts` override removes the repository-wide coverage threshold only
 from a focused diagnostic run. The later complete suite must satisfy the
 configured branch-coverage gate.
@@ -144,7 +160,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 sche
 
 `--write` is an intentional source update reviewed in the schema task. The
 operator must supply the reviewed repository `schemas` root explicitly; the
-generator targets only the 20 fixed lexical descendants, rejects an existing
+generator targets only the 27 fixed lexical descendants, rejects an existing
 symlink root or entry, and refuses every unexpected file without deleting it.
 Stage 7 retains physical ancestor reparse-point and volume containment. The
 `--check` mode writes nothing and fails on a missing, changed, or unexpected
@@ -153,10 +169,11 @@ schema. The distribution check requires one wheel copy under
 to the reviewed source, and rejects every unexpected payload beneath either
 schema prefix.
 
-### The closed 20-file registry
+### The closed 27-file registry
 
 `SCHEMA_DEFINITIONS` holds the eleven Stage 3 entries first, in their original
-order, followed by the nine Stage 4 entries in this order:
+order, then the nine Stage 4 entries, then the seven Stage 5 entries, in this
+order:
 
 | # | Path | `$id` |
 |---|---|---|
@@ -169,6 +186,13 @@ order, followed by the nine Stage 4 entries in this order:
 | 18 | `schemas/capabilities/compatibility-result-v1.schema.json` | `urn:crypto-lab:schema:capabilities:compatibility-result:1.0.0` |
 | 19 | `schemas/capabilities/runtime-availability-observation-v1.schema.json` | `urn:crypto-lab:schema:capabilities:runtime-availability-observation:1.0.0` |
 | 20 | `schemas/capabilities/comparison-eligibility-result-v1.schema.json` | `urn:crypto-lab:schema:capabilities:comparison-eligibility-result:1.0.0` |
+| 21 | `schemas/experiments/experiment-spec-v1.schema.json` | `urn:crypto-lab:schema:experiments:experiment-spec:1.0.0` |
+| 22 | `schemas/experiments/experiment-record-v1.schema.json` | `urn:crypto-lab:schema:experiments:experiment-record:1.0.0` |
+| 23 | `schemas/experiments/engine-run-record-v1.schema.json` | `urn:crypto-lab:schema:experiments:engine-run-record:1.0.0` |
+| 24 | `schemas/experiments/command-invocation-record-v1.schema.json` | `urn:crypto-lab:schema:experiments:command-invocation-record:1.0.0` |
+| 25 | `schemas/experiments/retry-policy-v1.schema.json` | `urn:crypto-lab:schema:experiments:retry-policy:1.0.0` |
+| 26 | `schemas/experiments/retry-decision-record-v1.schema.json` | `urn:crypto-lab:schema:experiments:retry-decision-record:1.0.0` |
+| 27 | `schemas/experiments/experiment-aggregation-result-v1.schema.json` | `urn:crypto-lab:schema:experiments:experiment-aggregation-result:1.0.0` |
 
 Existing entries are never reordered and a published `$id` is never reused: the
 registry order is the generation order and the identifier is a permanent
@@ -199,6 +223,16 @@ gate executable. The other nine had none, and now do.
 Any change to one of these eleven files requires an independently approved
 architecture correction that owns it.
 
+**The nine Stage 4 schemas are frozen in the same way, and Stage 5 leaves all
+twenty earlier files byte-identical.** The `_STAGE3_SHA256` and `_STAGE4_SHA256`
+blocks in `tests/unit/test_schema_registry.py` are re-verified against both the
+live render and the committed files in the Stage 5 tree, the seven new files are
+pinned alongside them in `_STAGE5_SHA256`, keyed on the seven known relative
+paths, and the two digest blocks of the earlier stages are asserted disjoint from
+the Stage 5 paths. Registering seven entries changed none of the twenty published
+byte sequences, which is what makes the Stage 1 relocations of `RetryTerminalState`
+and `CompatibilityOutcome` verifiably byte-neutral.
+
 ### Stage 4 timestamp projections
 
 Every timestamp field reachable from the published Stage 4 schema graph uses the
@@ -222,6 +256,22 @@ timestamp annotation publishes nothing. Registering it later requires an
 explicit timestamp decision, which the guards in
 `tests/unit/test_schema_registry.py` and `tests/unit/domain/test_time.py` force
 rather than assume.
+
+### Stage 5 timestamp projections
+
+Every timestamp field reachable from the seven Stage 5 schemas --
+`created_at_utc`, `updated_at_utc`, `deadline_utc`, `launch_attempted_at_utc`,
+`process_started_at_utc`, `completed_at_utc`, `cleanup_completed_at_utc`,
+`finalization_deadline_utc`, `retry_not_before_utc` and `decided_at_utc` -- uses
+the same calendar- and clock-valid forward view as Stage 4. The registry half of
+`test_every_published_stage_four_timestamp_uses_the_forward_view` in
+`tests/unit/domain/test_time.py` iterates every non-Stage-3 registry entry in both
+generation modes, so it covers the seven Stage 5 entries without modification, and
+the Stage 5 contract tests reject `2026-02-30T00:00:00Z`, `2026-01-01T24:00:00Z`
+and a naive instant against the committed bytes. The Stage 5 records, requests
+and the retry decision are stamped only from the injected `Clock`; no Stage 5
+module reads a wall clock, which `tests/safety/test_stage5_boundaries.py`
+enforces statically.
 
 ### The published expression dispatcher
 
@@ -415,6 +465,66 @@ superset of the runtime, never a subset — which is the property that matters f
 a consumer. Both measurements are recorded in the stage ledger. Re-derive rather
 than cite them if a later stage changes a published Stage 4 record.
 
+### Runtime rules the Stage 5 schemas cannot express
+
+The seven Stage 5 schemas publish every closed enumeration member by member
+(`ExperimentState`, `EngineRunState`, `CommandInvocationState`, `CommandKind`, the
+eight-member `ProcessExitCategory`, `RetryTerminalState`, `RetryDecisionOutcome`,
+`RetryDenialReason`, `AggregationVerdict`, `CompatibilityOutcome` and the four
+execution vocabularies), every numeric bound (`attempt_number` and
+`created_attempt_count` 1..5, `reserved_successor_attempt_number` 2..5,
+`maximum_attempts_per_slot` 1..5, `retry_delay_seconds` 0..300, `slot_ordinal`
+0..7, precisions 0..18, `pid` 1..4294967295, `native_exit_value` in the signed
+and unsigned 32-bit span, `timeout_seconds` 1..604800), every collection bound
+and whole-value `uniqueItems` (nine positions, all exact), every required field
+set in declaration order, `additionalProperties: false` on every object, and the
+`ROUND_HALF_EVEN` and fixed-`true` literals. `tests/unit/test_schema_registry.py`
+asserts each against the committed bytes with an accepting baseline the runtime
+itself produced, and 34 such baselines round-trip through the schema and the
+runtime.
+
+What stays runtime-only is pinned in the other direction by
+`test_the_stage_five_runtime_only_rules_stay_one_directional`: eighteen documents
+that the published bytes accept and the runtime rejects, so the published bytes
+remain a superset of the runtime and a residual cannot silently invert into an
+over-rejection or widen unnoticed. The register:
+
+- state-governed presence: `slot_compatibility` (absent before `QUEUED`) and
+  `cancellation_correlation_id` (present exactly in `CANCELLED`) on
+  `ExperimentRecord`; `predecessor_run_id` and `retry_reason` (present exactly on a
+  successor attempt), `primary_terminal_diagnostic_id` (present exactly in the
+  five non-success terminals) and `availability_observation_id` on
+  `EngineRunRecord`; the eight-row field-shape table, the launch, process, exit
+  and cleanup co-occurrence pairs and the terminal partition on
+  `CommandInvocationRecord`; the outcome-governed fields, the precedence filter
+  and `reserved_successor_attempt_number = created_attempt_count + 1` on
+  `RetryDecisionRecord`. Draft 2020-12 can express state-governed presence with
+  `if`/`then`, but every such rule lives in a Task 2-5 domain model outside Task
+  9's file map, so none is published and each is recorded here;
+- `finalization_deadline_utc` on `EngineRunRecord`: published as an optional
+  property that the Stage 5 runtime always rejects (plan section 3.8 row 15), so
+  Stage 9 can snapshot it without changing the published `$id`;
+- `RetryDecisionRecord.predecessor_terminal_state` publishes the full
+  twelve-member `EngineRunState` and the runtime narrows it to the five
+  non-success terminals (plan section 3.9);
+- the frozen `process_exit_category = f(native_exit_value)` mapping and the
+  command-kind-specific `timeout_seconds` bound: both exactly expressible as small
+  closed `if`/`then` tables and both unpublished for the same file-map reason,
+  recorded as a known gap rather than silently approximated;
+- `spec_hash` recomputation, `deadline_utc = launch_attempted_at_utc +
+  timeout_seconds`, `updated_at_utc >= created_at_utc`, `predecessor_run_id !=
+  run_id` and `primary_diagnostic_id` membership in `diagnostic_ids`: comparisons
+  between two values of one document, inexpressible;
+- sortedness of `approximation_ids`, `diagnostic_ids`, `reason_codes` and the
+  selected-slot ordinals, whose element domains are unbounded; and the fixed
+  `FAILED`, `TIMED_OUT`, `UNAVAILABLE` order of `automatically_retry_terminal_states`,
+  which the runtime normalizes rather than rejects and which is expressible as the
+  closed set of eight arrays but unpublished for the file-map reason;
+- `slot_compatibility` carries no item bound because its runtime bound is
+  alignment with the selected slots, and the inlined released `Money` schema
+  admits a non-positive `starting_balance` that the enclosing record rejects;
+  the released `domain/money-v1` bytes are frozen.
+
 ## Explicit configuration
 
 Configuration sources are compiled defaults, an explicitly named primary TOML
@@ -444,11 +554,13 @@ and outside product, test, build, runtime, verification, and acceptance paths.
 
 ## Stage scope
 
-Project 1 Stage 4 is complete. Stage 4 implementation completed at
-`33f5b1c3b644c1df7e8db0df17dae88c6bcea2ce`; the final status was recorded by
-the separate Task 9 status commit. The closed 20-schema registry holds
-the nine new Stage 4 schemas together with the eleven Stage 3 schemas,
-preserved byte-identical to `main`. Stage 5 is not started.
+Project 1 Stage 5 is complete. Stage 5 implementation completed at
+`71ab94d8e9e13d6895cef9346ed58a711c8819f3`; the seven Stage 5 schemas, the
+closed 27-schema registry, the Stage 5 architecture and safety guards, the
+end-to-end in-memory flow, and this status were added by the separate Task 9
+commit, which is not the implementation hash. The closed 27-schema registry
+holds the seven new Stage 5 schemas together with the twenty Stage 3 and
+Stage 4 schemas, preserved byte-identical to `main`. Stage 6 is not started.
 
 The independent sweeps agree on the falsifiable results: zero
 over-rejections, and zero disagreement between the four schema surfaces.
@@ -469,3 +581,10 @@ wallet, tax or TDS logic, LLM integration, user interface, Docker setup, cloud
 deployment, or server deployment exists anywhere in the repository. Stage 4
 executes no engine, no adapter, no strategy, and no declared engine extension,
 and combines no comparison result into an averaged, voted, or synthetic figure.
+
+Stage 5 launches no process, executes no adapter or engine, opens no database or
+file, persists nothing outside in-memory test doubles, and contacts no network.
+Its retry decisions and aggregation verdicts are deterministic functions of
+recorded facts and the injected clock, never of a wall clock or a random source,
+and `tests/safety/test_stage5_boundaries.py` enforces every one of those
+exclusions statically over the source tree.

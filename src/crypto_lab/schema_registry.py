@@ -1,9 +1,10 @@
-"""Closed deterministic registry for the Stage 3 and Stage 4 JSON Schemas.
+"""Closed deterministic registry for the Stage 3, Stage 4 and Stage 5 JSON Schemas.
 
 The eleven Stage 3 entries come first, in their original order, followed by the
-nine Stage 4 strategy and capability entries. Existing entries are never
-reordered: the order is the generation order, and a published `$id` is a
-permanent contract.
+nine Stage 4 strategy and capability entries and then the seven Stage 5
+experiment, run, invocation, retry and aggregation entries (Stage 5 plan Task 9).
+Existing entries are never reordered: the order is the generation order, and a
+published `$id` is a permanent contract.
 """
 
 from __future__ import annotations
@@ -24,14 +25,19 @@ from crypto_lab.capabilities.models import (
 )
 from crypto_lab.configuration.models import ApplicationConfig
 from crypto_lab.datasets.models import DatasetDescriptor, DatasetPartition
+from crypto_lab.domain.aggregation import ExperimentAggregationResult
 from crypto_lab.domain.canonical_json import canonical_json_bytes
+from crypto_lab.domain.command_invocation import CommandInvocationRecord
 from crypto_lab.domain.descriptors import (
     AdapterDescriptor,
     EngineDescriptor,
     RuntimeAvailabilityObservation,
 )
 from crypto_lab.domain.diagnostics import Diagnostic
+from crypto_lab.domain.engine_run import EngineRunRecord
+from crypto_lab.domain.experiment import ExperimentRecord, ExperimentSpec
 from crypto_lab.domain.records import InstrumentRef, Money, Price, Quantity
+from crypto_lab.domain.retry import RetryDecisionRecord, RetryPolicy
 from crypto_lab.strategy.expressions import EXPRESSION_ADAPTER
 from crypto_lab.strategy.models import StrategySpec
 from crypto_lab.strategy.versioning import StrategyVersion
@@ -146,6 +152,41 @@ SCHEMA_DEFINITIONS: tuple[SchemaDefinition, ...] = (
         PurePosixPath("capabilities/comparison-eligibility-result-v1.schema.json"),
         "urn:crypto-lab:schema:capabilities:comparison-eligibility-result:1.0.0",
         TypeAdapter(ComparisonEligibilityResult),
+    ),
+    SchemaDefinition(
+        PurePosixPath("experiments/experiment-spec-v1.schema.json"),
+        "urn:crypto-lab:schema:experiments:experiment-spec:1.0.0",
+        TypeAdapter(ExperimentSpec),
+    ),
+    SchemaDefinition(
+        PurePosixPath("experiments/experiment-record-v1.schema.json"),
+        "urn:crypto-lab:schema:experiments:experiment-record:1.0.0",
+        TypeAdapter(ExperimentRecord),
+    ),
+    SchemaDefinition(
+        PurePosixPath("experiments/engine-run-record-v1.schema.json"),
+        "urn:crypto-lab:schema:experiments:engine-run-record:1.0.0",
+        TypeAdapter(EngineRunRecord),
+    ),
+    SchemaDefinition(
+        PurePosixPath("experiments/command-invocation-record-v1.schema.json"),
+        "urn:crypto-lab:schema:experiments:command-invocation-record:1.0.0",
+        TypeAdapter(CommandInvocationRecord),
+    ),
+    SchemaDefinition(
+        PurePosixPath("experiments/retry-policy-v1.schema.json"),
+        "urn:crypto-lab:schema:experiments:retry-policy:1.0.0",
+        TypeAdapter(RetryPolicy),
+    ),
+    SchemaDefinition(
+        PurePosixPath("experiments/retry-decision-record-v1.schema.json"),
+        "urn:crypto-lab:schema:experiments:retry-decision-record:1.0.0",
+        TypeAdapter(RetryDecisionRecord),
+    ),
+    SchemaDefinition(
+        PurePosixPath("experiments/experiment-aggregation-result-v1.schema.json"),
+        "urn:crypto-lab:schema:experiments:experiment-aggregation-result:1.0.0",
+        TypeAdapter(ExperimentAggregationResult),
     ),
 )
 

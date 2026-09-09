@@ -16,6 +16,16 @@ A local scanner is used rather than the one in ``test_domain_import_boundary.py`
 that module is specialized to the domain root, is outside this task's file map,
 and generalizing it would change a committed guard for a caller that does not need
 it.
+
+Stage 5 Task 9 adds ``experiments`` and ``adapters`` to the same scanner. The
+``experiments`` prohibited set names the architecturally forbidden edges
+(``persistence``, ``configuration``, ``cli`` and the composition module); its
+allowlist is a **Stage 5 scope closure**, deliberately narrower than the section
+27.1 table, which also permits ``strategy``, ``datasets``, ``artifacts``,
+``process_supervision`` and ``audit``: those are out of Stage 5's scope and are
+asserted absent by ``tests/safety/test_stage5_boundaries.py`` as well, so a later
+stage that adds one of those edges must widen this allowlist explicitly. The
+``adapters`` allowlist is the 27.1 shape: ``domain`` and itself.
 """
 
 from __future__ import annotations
@@ -29,6 +39,8 @@ import pytest
 
 _CAPABILITIES = "capabilities"
 _STRATEGY = "strategy"
+_EXPERIMENTS = "experiments"
+_ADAPTERS = "adapters"
 #: Every central package other than ``domain`` and the scanned package itself.
 #: Plan Task 6 step 11 names ``adapters`` first and then the other eight; ``cli``
 #: is included because a composition root must never be imported by a layer.
@@ -59,6 +71,27 @@ _PROHIBITED_FOR_STRATEGY: tuple[str, ...] = (
 #: ``schema_registry`` sits outside the layered packages and may import inward, so
 #: a layer importing *it* would invert the direction.
 _COMPOSITION_MODULE = "crypto_lab.schema_registry"
+#: Stage 5 plan Task 9: the edges section 27.1 forbids the application layer.
+#: ``configuration`` is prohibited because ``experiments`` may not import it (plan
+#: 2.2 and 2.3: requests carry the material hash by value instead); ``persistence``
+#: because the application never imports a concrete implementation; ``cli`` because
+#: a composition root is never imported by a layer; ``schema_registry`` is repeated
+#: here so the scanner's self-test names it explicitly for this package too.
+_PROHIBITED_FOR_EXPERIMENTS: tuple[str, ...] = (
+    "crypto_lab.persistence",
+    "crypto_lab.configuration",
+    "crypto_lab.cli",
+    _COMPOSITION_MODULE,
+)
+#: Stage 5 plan Task 9: the scope closure of ``experiments`` (module docstring).
+_ALLOWED_FOR_EXPERIMENTS: tuple[str, ...] = (
+    "crypto_lab.domain",
+    "crypto_lab.adapters",
+    "crypto_lab.capabilities",
+    "crypto_lab.experiments",
+)
+#: Section 27.1: ``adapters`` may depend on canonical domain types alone.
+_ALLOWED_FOR_ADAPTERS: tuple[str, ...] = ("crypto_lab.domain", "crypto_lab.adapters")
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -239,6 +272,58 @@ def test_strategy_reaches_only_domain_and_itself(repository_root: Path) -> None:
     assert unexpected == ()
 
 
+def test_experiments_imports_nothing_from_any_prohibited_package(
+    repository_root: Path,
+) -> None:
+    """Stage 5 plan Task 9: the application layer never imports ``persistence``,
+    ``configuration``, ``cli`` or the composition module."""
+    assert (
+        find_package_import_violations(
+            _package_root(repository_root, _EXPERIMENTS),
+            _EXPERIMENTS,
+            _PROHIBITED_FOR_EXPERIMENTS,
+        )
+        == ()
+    )
+
+
+def test_experiments_reaches_only_its_stage_five_allowlist(
+    repository_root: Path,
+) -> None:
+    """The Stage 5 scope closure of the application layer (module docstring).
+
+    Anchored positively on the one cross-package edge Stage 5 actually takes, the
+    ``CommandInvocationRepository`` port that plan section 2.4 places in
+    ``adapters``, so the assertion cannot pass on an empty scan.
+    """
+    reached = _allowed_project_imports(
+        _package_root(repository_root, _EXPERIMENTS), _EXPERIMENTS
+    )
+    unexpected = tuple(
+        name
+        for name in reached
+        if not any(_is_within(name, allowed) for allowed in _ALLOWED_FOR_EXPERIMENTS)
+    )
+    assert unexpected == ()
+    assert "crypto_lab.adapters.ports" in reached
+    assert "crypto_lab.domain.base" in reached
+
+
+def test_adapters_reaches_only_domain_and_itself(repository_root: Path) -> None:
+    """Section 27.1: ``adapters`` depends on canonical domain types alone; the
+    Stage 5 port added to it (plan 2.4) keeps that shape."""
+    reached = _allowed_project_imports(
+        _package_root(repository_root, _ADAPTERS), _ADAPTERS
+    )
+    unexpected = tuple(
+        name
+        for name in reached
+        if not any(_is_within(name, allowed) for allowed in _ALLOWED_FOR_ADAPTERS)
+    )
+    assert unexpected == ()
+    assert "crypto_lab.domain.command_invocation" in reached
+
+
 # --------------------------------------------------------------------------
 # Scanner self-tests -- a guard that cannot fail is not a guard
 # --------------------------------------------------------------------------
@@ -265,6 +350,40 @@ def test_the_scanner_rejects_every_prohibited_package(
     )
 
     assert tuple(item.imported_name for item in violations) == (prohibited_package,)
+
+
+@pytest.mark.parametrize("prohibited_package", _PROHIBITED_FOR_EXPERIMENTS)
+def test_the_scanner_rejects_every_package_prohibited_for_experiments(
+    tmp_path: Path,
+    prohibited_package: str,
+) -> None:
+    """Stage 5 Task 9: the same self-test over the ``experiments`` prohibited set."""
+    package_root = _write_package(
+        tmp_path, _EXPERIMENTS, f"import {prohibited_package}\n"
+    )
+
+    violations = find_package_import_violations(
+        package_root, _EXPERIMENTS, _PROHIBITED_FOR_EXPERIMENTS
+    )
+
+    assert tuple(item.imported_name for item in violations) == (prohibited_package,)
+
+
+def test_the_experiments_allowlist_rejects_a_table_permitted_out_of_scope_edge(
+    tmp_path: Path,
+) -> None:
+    """The allowlist is a scope closure: ``strategy`` is permitted by section 27.1
+    and still outside it, so a planted edge must surface as unexpected."""
+    package_root = _write_package(
+        tmp_path, _EXPERIMENTS, "from crypto_lab.strategy import models\n"
+    )
+
+    reached = _allowed_project_imports(package_root, _EXPERIMENTS)
+
+    assert reached == ("crypto_lab.strategy",)
+    assert not any(
+        _is_within(reached[0], allowed) for allowed in _ALLOWED_FOR_EXPERIMENTS
+    )
 
 
 @pytest.mark.parametrize(

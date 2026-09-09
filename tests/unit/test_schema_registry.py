@@ -28,6 +28,13 @@ from crypto_lab.capabilities.models import (
 )
 from crypto_lab.configuration.models import ApplicationConfig
 from crypto_lab.datasets.models import DatasetDescriptor, DatasetPartition
+from crypto_lab.domain.aggregation import (
+    AggregationVerdict,
+    ExperimentAggregationResult,
+)
+from crypto_lab.domain.base import CanonicalModel
+from crypto_lab.domain.command_invocation import CommandInvocationRecord
+from crypto_lab.domain.compatibility import CompatibilityOutcome
 from crypto_lab.domain.descriptors import (
     _EXECUTABLE_PATH_SCHEMA_PATTERN,
     MAX_EXECUTABLE_PATH_CHARACTERS,
@@ -36,9 +43,19 @@ from crypto_lab.domain.descriptors import (
     RuntimeAvailabilityObservation,
 )
 from crypto_lab.domain.diagnostics import Diagnostic
+from crypto_lab.domain.engine_run import EngineRunRecord
+from crypto_lab.domain.experiment import ExperimentRecord, ExperimentSpec
 from crypto_lab.domain.identifiers import exact_string_schema
+from crypto_lab.domain.lifecycle import (
+    CommandInvocationState,
+    CommandKind,
+    EngineRunState,
+    ExperimentState,
+    ProcessExitCategory,
+)
 from crypto_lab.domain.records import InstrumentRef, Money, Price, Quantity
 from crypto_lab.domain.results import Success
+from crypto_lab.domain.retry import RetryDecisionRecord, RetryPolicy
 from crypto_lab.schema_registry import (
     JSON_SCHEMA_DRAFT,
     SCHEMA_DEFINITIONS,
@@ -53,6 +70,19 @@ from crypto_lab.strategy.models import (
     StrategySpec,
 )
 from crypto_lab.strategy.versioning import StrategyVersion
+from doubles.experiments import (
+    AVAIL_B,
+    EXPERIMENT_ID,
+    SLOT_A,
+    SLOT_B,
+    sample_allowed_retry_decision,
+    sample_experiment,
+    sample_invocation,
+    sample_retry_decision,
+    sample_retry_policy,
+    sample_run,
+    sample_slot_compatibility,
+)
 from generate_schemas import _check, _write
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -118,6 +148,27 @@ _EXPECTED = {
     PurePosixPath(
         "capabilities/comparison-eligibility-result-v1.schema.json"
     ): "urn:crypto-lab:schema:capabilities:comparison-eligibility-result:1.0.0",
+    PurePosixPath(
+        "experiments/experiment-spec-v1.schema.json"
+    ): "urn:crypto-lab:schema:experiments:experiment-spec:1.0.0",
+    PurePosixPath(
+        "experiments/experiment-record-v1.schema.json"
+    ): "urn:crypto-lab:schema:experiments:experiment-record:1.0.0",
+    PurePosixPath(
+        "experiments/engine-run-record-v1.schema.json"
+    ): "urn:crypto-lab:schema:experiments:engine-run-record:1.0.0",
+    PurePosixPath(
+        "experiments/command-invocation-record-v1.schema.json"
+    ): "urn:crypto-lab:schema:experiments:command-invocation-record:1.0.0",
+    PurePosixPath(
+        "experiments/retry-policy-v1.schema.json"
+    ): "urn:crypto-lab:schema:experiments:retry-policy:1.0.0",
+    PurePosixPath(
+        "experiments/retry-decision-record-v1.schema.json"
+    ): "urn:crypto-lab:schema:experiments:retry-decision-record:1.0.0",
+    PurePosixPath(
+        "experiments/experiment-aggregation-result-v1.schema.json"
+    ): "urn:crypto-lab:schema:experiments:experiment-aggregation-result:1.0.0",
 }
 
 
@@ -194,12 +245,12 @@ def _resolve_local_ref(
     return resolved
 
 
-def test_registry_has_exactly_the_closed_twenty_paths_and_ids() -> None:
+def test_registry_has_exactly_the_closed_twenty_seven_paths_and_ids() -> None:
     assert {
         definition.relative_path: definition.schema_id
         for definition in SCHEMA_DEFINITIONS
     } == _EXPECTED
-    assert len(SCHEMA_DEFINITIONS) == 20
+    assert len(SCHEMA_DEFINITIONS) == 27
 
 
 def test_every_schema_is_deterministic_draft_2020_12() -> None:
@@ -716,13 +767,16 @@ def test_generator_rejects_symlinked_entries_without_writing(
         _write(tmp_path, expected)
 
 
-# --- Task 8: the closed twenty-entry registry ----------------------------------
+# --- Task 8: the closed twenty-entry registry, extended to twenty-seven by Stage 5
+#     Task 9 -------------------------------------------------------------------------
 #
 # `_EXPECTED` above is keyed by path, so a set comparison against it proves
 # membership but says nothing about *order*, about which adapter renders which
 # `$id`, or about the bytes on disk. A published `$id` is a permanent contract
-# and the eleven Stage 3 entries are frozen output, so the assertions below pin
-# the ordered tuples, the per-entry adapter, and the on-disk bytes as well.
+# and the eleven Stage 3 and nine Stage 4 entries are frozen output, so the
+# assertions below pin the ordered tuples, the per-entry adapter, and the on-disk
+# bytes as well. Stage 5 (plan section 2.7) appends its seven entries at positions
+# 20-26 and reorders nothing.
 
 _RENDER_MODES: Final[tuple[JsonSchemaMode, ...]] = ("validation", "serialization")
 
@@ -752,9 +806,22 @@ _STAGE4_PATHS: Final = (
     "capabilities/comparison-eligibility-result-v1.schema.json",
 )
 
+#: Stage 5 plan Task 9: the seven experiments entries, appended in this order at
+#: positions 20-26. Every path is a new lexical descendant of `schemas/experiments/`
+#: and every identifier is a new permanent `urn:crypto-lab:schema:experiments:*`.
+_STAGE5_PATHS: Final = (
+    "experiments/experiment-spec-v1.schema.json",
+    "experiments/experiment-record-v1.schema.json",
+    "experiments/engine-run-record-v1.schema.json",
+    "experiments/command-invocation-record-v1.schema.json",
+    "experiments/retry-policy-v1.schema.json",
+    "experiments/retry-decision-record-v1.schema.json",
+    "experiments/experiment-aggregation-result-v1.schema.json",
+)
+
 # Two entries register a module-level adapter singleton rather than a fresh
 # `TypeAdapter`, so identity is the exact assertion for them and the adapted
-# type is the exact assertion for the other eighteen.
+# type is the exact assertion for the other twenty-five. Stage 5 adds no singleton.
 _EXPECTED_ADAPTER_SINGLETONS: Final = {
     "artifacts/artifact-owner-ref-v1.schema.json": ARTIFACT_OWNER_ADAPTER,
     "strategy/expression-v1.schema.json": EXPRESSION_ADAPTER,
@@ -782,6 +849,15 @@ _EXPECTED_ADAPTED_TYPES: Final = {
     ),
     "capabilities/comparison-eligibility-result-v1.schema.json": (
         ComparisonEligibilityResult
+    ),
+    "experiments/experiment-spec-v1.schema.json": ExperimentSpec,
+    "experiments/experiment-record-v1.schema.json": ExperimentRecord,
+    "experiments/engine-run-record-v1.schema.json": EngineRunRecord,
+    "experiments/command-invocation-record-v1.schema.json": CommandInvocationRecord,
+    "experiments/retry-policy-v1.schema.json": RetryPolicy,
+    "experiments/retry-decision-record-v1.schema.json": RetryDecisionRecord,
+    "experiments/experiment-aggregation-result-v1.schema.json": (
+        ExperimentAggregationResult
     ),
 }
 
@@ -908,24 +984,41 @@ def test_the_eleven_stage_three_entries_keep_their_original_leading_order() -> N
 
 
 def test_the_nine_stage_four_entries_are_appended_in_the_approved_order() -> None:
-    assert _ordered_paths()[11:] == _STAGE4_PATHS
+    """Stage 5 appends after them; positions 11-19 stay exactly the Stage 4 nine."""
+    assert _ordered_paths()[11:20] == _STAGE4_PATHS
     assert len(_STAGE4_PATHS) == 9
+
+
+def test_the_seven_stage_five_entries_are_appended_in_the_approved_order() -> None:
+    """Stage 5 plan Task 9: positions 20-26, in the plan's order, and nothing after."""
+    assert _ordered_paths()[20:] == _STAGE5_PATHS
+    assert len(_STAGE5_PATHS) == 7
+    assert tuple(
+        definition.schema_id for definition in SCHEMA_DEFINITIONS[20:]
+    ) == tuple(_EXPECTED[PurePosixPath(name)] for name in _STAGE5_PATHS)
+    assert all(name.startswith("experiments/") for name in _STAGE5_PATHS)
+    assert all(
+        _EXPECTED[PurePosixPath(name)].startswith("urn:crypto-lab:schema:experiments:")
+        for name in _STAGE5_PATHS
+    )
 
 
 def test_the_ordered_path_and_identifier_tuples_are_exact_and_unique() -> None:
     paths = _ordered_paths()
     identifiers = tuple(definition.schema_id for definition in SCHEMA_DEFINITIONS)
-    assert paths == _STAGE3_PATHS + _STAGE4_PATHS
+    assert paths == _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS
     assert identifiers == tuple(
-        _EXPECTED[PurePosixPath(name)] for name in _STAGE3_PATHS + _STAGE4_PATHS
+        _EXPECTED[PurePosixPath(name)]
+        for name in _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS
     )
-    assert len(paths) == 20
-    assert len(set(paths)) == 20
-    assert len(set(identifiers)) == 20
+    assert len(paths) == 27
+    assert len(set(paths)) == 27
+    assert len(set(identifiers)) == 27
 
 
 def test_every_registry_entry_carries_its_exact_adapter() -> None:
-    assert len(_EXPECTED_ADAPTER_SINGLETONS) + len(_EXPECTED_ADAPTED_TYPES) == 20
+    assert len(_EXPECTED_ADAPTER_SINGLETONS) + len(_EXPECTED_ADAPTED_TYPES) == 27
+    assert not any(name in _EXPECTED_ADAPTER_SINGLETONS for name in _STAGE5_PATHS)
     for definition in SCHEMA_DEFINITIONS:
         name = definition.relative_path.as_posix()
         singleton = _EXPECTED_ADAPTER_SINGLETONS.get(name)
@@ -940,14 +1033,17 @@ def test_every_rendered_schema_equals_its_committed_generated_file() -> None:
     """Generated bytes are reviewed source, so the file is the contract."""
     rendered = render_schema_files()
     root = _REPOSITORY_ROOT / "schemas"
-    assert len(rendered) == 20
+    assert len(rendered) == 27
     for path, contents in rendered.items():
         target = root.joinpath(*path.parts)
         assert target.is_file(), path
         assert target.read_bytes() == contents, path
 
 
-def test_the_schemas_directory_holds_exactly_the_twenty_registered_files() -> None:
+def test_the_schemas_directory_holds_exactly_the_twenty_seven_registered_files() -> (
+    None
+):
+    """Two directions: every registered file exists, and no unregistered file does."""
     root = _REPOSITORY_ROOT / "schemas"
     found = tuple(
         sorted(
@@ -956,12 +1052,13 @@ def test_the_schemas_directory_holds_exactly_the_twenty_registered_files() -> No
             if candidate.is_file()
         )
     )
-    assert found == tuple(sorted(_STAGE3_PATHS + _STAGE4_PATHS))
+    assert found == tuple(sorted(_STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS))
+    assert len(found) == 27
 
 
 def test_every_committed_schema_file_is_valid_draft_2020_12_json() -> None:
     root = _REPOSITORY_ROOT / "schemas"
-    for name in _STAGE3_PATHS + _STAGE4_PATHS:
+    for name in _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS:
         document = json.loads((root / name).read_bytes())
         assert isinstance(document, dict), name
         assert document["$schema"] == JSON_SCHEMA_DRAFT, name
@@ -2606,8 +2703,8 @@ def test_the_stage_three_digests_are_keyed_on_paths_not_on_a_count() -> None:
 # so the digest gate covers all twenty existing schemas before any other Stage 5
 # change lands. Each value was derived from the working tree at the Stage 5 base
 # commit and confirmed equal to the corresponding `main` blob in both directions.
-# The Stage-5-absent half of the key guard belongs to Task 9, once `_STAGE5_PATHS`
-# and the seven Stage 5 entries exist.
+# Task 9 added the Stage-5-absent half of the key guard once `_STAGE5_PATHS` and
+# the seven Stage 5 entries existed.
 
 _STAGE4_SHA256: Final[dict[str, str]] = {
     "strategy/strategy-spec-v1.schema.json": (
@@ -2656,6 +2753,8 @@ def test_the_stage_four_digests_are_keyed_on_paths_not_on_a_count() -> None:
         assert name in _STAGE4_SHA256, name
     for name in _STAGE3_PATHS:
         assert name not in _STAGE4_SHA256, name
+    for name in _STAGE5_PATHS:
+        assert name not in _STAGE4_SHA256, name
 
 
 def test_the_two_relocation_bearing_entries_render_their_pinned_bytes() -> None:
@@ -2698,3 +2797,1002 @@ def test_the_two_relocation_bearing_entries_render_their_pinned_bytes() -> None:
     assert outcome["description"].startswith(
         "The four approved outcomes of specification sections 11.5 and 13.4."
     )
+
+
+# --- Stage 5 Task 9: the seven experiments schemas are pinned the same way -------
+#
+# Plan section 2.7 assigns this block to Task 9: seven digests keyed on
+# `_STAGE5_PATHS`, with key equality, `== 7` and Stage-3-and-Stage-4-absent
+# assertions, so a renamed, dropped or hand-edited Stage 5 file fails rather than
+# passing vacuously. Each value was derived from the `schema-generate-write` output
+# of the Task 9 tree after every byte of the seven files had been read and reviewed
+# (docs/development/verification.md, "Generated bytes are reviewed source"); the
+# twenty pre-existing digests above were re-verified unchanged in the same tree.
+
+_STAGE5_SHA256: Final[dict[str, str]] = {
+    "experiments/experiment-spec-v1.schema.json": (
+        "d1c7880abdd0ba067fda4aed408d46b679e62eda6eb1f7fa01ac1e5af57f6e6b"
+    ),
+    "experiments/experiment-record-v1.schema.json": (
+        "5b832b7d6406e38ab36a1c36746e033d84b32d44b457aeb3cb64e24a7259eb9b"
+    ),
+    "experiments/engine-run-record-v1.schema.json": (
+        "41131b755a3a66aa21834652b6fc7f5cc606741b51e95d4b26d4de3c56ce01cc"
+    ),
+    "experiments/command-invocation-record-v1.schema.json": (
+        "295ef1eaa92b74f60aab3344c146c76ccbfefe3c1c5d795283d4bfc7308e1916"
+    ),
+    "experiments/retry-policy-v1.schema.json": (
+        "7f08b5cfbcf4e832292b32a55f98c281a4e2abcd298f595ae058381dfa240841"
+    ),
+    "experiments/retry-decision-record-v1.schema.json": (
+        "fa9b4b073f7ec0d375d8f518ee4f89248bfd8621b92c6e18db191f832f256b82"
+    ),
+    "experiments/experiment-aggregation-result-v1.schema.json": (
+        "1dbbb90ba16e4d2085b2d1c6992d2fdb514e95fd20b2388aa81ec9f99b2d1db8"
+    ),
+}
+
+
+def test_the_seven_stage_five_schema_files_match_their_reviewed_digests() -> None:
+    """The one assertion a simultaneous Stage 5 model change and regeneration fails."""
+    assert tuple(sorted(_STAGE5_SHA256)) == tuple(sorted(_STAGE5_PATHS))
+    assert len(_STAGE5_SHA256) == 7
+    for name, expected in _STAGE5_SHA256.items():
+        actual = hashlib.sha256((_COMMITTED_ROOT / name).read_bytes()).hexdigest()
+        assert actual == expected, name
+
+
+def test_the_stage_five_digests_are_keyed_on_paths_not_on_a_count() -> None:
+    """A renamed or dropped Stage 5 file must fail rather than pass vacuously."""
+    for name in _STAGE5_PATHS:
+        assert (_COMMITTED_ROOT / name).is_file(), name
+        assert name in _STAGE5_SHA256, name
+    for name in _STAGE3_PATHS + _STAGE4_PATHS:
+        assert name not in _STAGE5_SHA256, name
+    assert not set(_STAGE5_SHA256) & set(_STAGE3_SHA256)
+    assert not set(_STAGE5_SHA256) & set(_STAGE4_SHA256)
+
+
+def test_the_twenty_pre_existing_schemas_are_byte_identical_after_stage_five() -> None:
+    """Plan 2.5 and Task 9: registering seven entries changed none of the twenty.
+
+    Both the live render and the committed file are held to the pinned digests,
+    so neither a model drift that regeneration would publish nor a hand edit of
+    a released file can hide behind the Stage 5 extension.
+    """
+    frozen = {**_STAGE3_SHA256, **_STAGE4_SHA256}
+    assert len(frozen) == 20
+    rendered = render_schema_files()
+    for name, expected in frozen.items():
+        path = PurePosixPath(name)
+        assert hashlib.sha256(rendered[path]).hexdigest() == expected, name
+        committed = hashlib.sha256((_COMMITTED_ROOT / name).read_bytes()).hexdigest()
+        assert committed == expected, name
+
+
+# --- Stage 5 Task 9: the published contracts of the seven schemas ------------------
+#
+# Asserted against the committed bytes on disk, as the Stage 4 contract tests are,
+# so a hand-edited file cannot pass on the strength of the live render. Positive
+# documents are built by the Stage 5 in-memory fixture material and dumped through
+# the runtime, so every accepting baseline is a document the runtime itself
+# accepts; every negative table is paired with that baseline, so a rejection can
+# never be an artifact of an already-invalid document.
+
+_STAGE5_CLOSED_ENUMS: Final[dict[str, dict[str, tuple[str, ...]]]] = {
+    "experiments/experiment-spec-v1.schema.json": {
+        "SlippageModel": ("NONE", "FIXED_BASIS_POINTS"),
+        "SignalToOrderTiming": ("NEXT_BAR_OPEN", "SAME_BAR_CLOSE"),
+        "BarOrderPriority": ("EXITS_BEFORE_ENTRIES", "ENTRIES_BEFORE_EXITS"),
+        "FillConvention": ("FULL_FILL", "PARTIAL_FILLS_ALLOWED"),
+        "ComparisonLevel": ("LEVEL_1", "LEVEL_2", "LEVEL_3"),
+        "RetryTerminalState": ("FAILED", "TIMED_OUT", "UNAVAILABLE"),
+    },
+    "experiments/experiment-record-v1.schema.json": {
+        "ExperimentState": (
+            "DRAFT",
+            "VALIDATED",
+            "QUEUED",
+            "RUNNING",
+            "COMPLETED",
+            "COMPLETED_WITH_WARNINGS",
+            "FAILED",
+            "CANCELLED",
+        ),
+        "CompatibilityOutcome": (
+            "SUPPORTED",
+            "SUPPORTED_WITH_APPROXIMATION",
+            "NOT_APPLICABLE",
+            "UNAVAILABLE",
+        ),
+        "RetryTerminalState": ("FAILED", "TIMED_OUT", "UNAVAILABLE"),
+    },
+    "experiments/engine-run-record-v1.schema.json": {
+        "EngineRunState": (
+            "PENDING",
+            "VALIDATING",
+            "READY",
+            "STARTING",
+            "RUNNING",
+            "SUCCEEDED",
+            "SUCCEEDED_WITH_WARNINGS",
+            "FAILED",
+            "CANCELLED",
+            "TIMED_OUT",
+            "NOT_APPLICABLE",
+            "UNAVAILABLE",
+        ),
+        "RetryTerminalState": ("FAILED", "TIMED_OUT", "UNAVAILABLE"),
+    },
+    "experiments/command-invocation-record-v1.schema.json": {
+        "CommandInvocationState": (
+            "PENDING",
+            "STARTING",
+            "RUNNING",
+            "EXITED",
+            "FAILED_TO_START",
+            "CANCELLED",
+            "TIMED_OUT",
+            "PROTOCOL_FAILED",
+        ),
+        "CommandKind": ("DESCRIBE", "VALIDATE", "RUN"),
+        # Plan section 6 and Task 9: the eight v1 members, asserted member by
+        # member; there is no `UNKNOWN_AFTER_RESTART`.
+        "ProcessExitCategory": (
+            "SUCCESS",
+            "VALIDATION_FAILURE",
+            "NOT_APPLICABLE",
+            "UNAVAILABLE",
+            "RUNTIME_FAILURE",
+            "CANCELLED",
+            "TIMED_OUT",
+            "PROTOCOL_VIOLATION",
+        ),
+    },
+    "experiments/retry-policy-v1.schema.json": {
+        "RetryTerminalState": ("FAILED", "TIMED_OUT", "UNAVAILABLE"),
+    },
+    "experiments/retry-decision-record-v1.schema.json": {
+        "RetryDecisionOutcome": ("ALLOWED", "DENIED"),
+        "RetryDenialReason": (
+            "ATTEMPT_BUDGET_EXHAUSTED",
+            "TERMINAL_STATE_NOT_RETRYABLE",
+            "PRIMARY_DIAGNOSTIC_NOT_RETRIABLE",
+            "HARD_BLOCKED_OUTCOME",
+            "EXPERIMENT_TERMINAL",
+            "AVAILABILITY_OBSERVATION_NOT_FRESH",
+        ),
+        # Plan section 3.9: field 8 publishes the full twelve-member enum and the
+        # runtime narrows it to the five non-success terminals (recorded residual).
+        "EngineRunState": (
+            "PENDING",
+            "VALIDATING",
+            "READY",
+            "STARTING",
+            "RUNNING",
+            "SUCCEEDED",
+            "SUCCEEDED_WITH_WARNINGS",
+            "FAILED",
+            "CANCELLED",
+            "TIMED_OUT",
+            "NOT_APPLICABLE",
+            "UNAVAILABLE",
+        ),
+        "RetryTerminalState": ("FAILED", "TIMED_OUT", "UNAVAILABLE"),
+    },
+    "experiments/experiment-aggregation-result-v1.schema.json": {
+        "AggregationVerdict": (
+            "NOT_YET_TERMINAL",
+            "COMPLETED",
+            "COMPLETED_WITH_WARNINGS",
+            "FAILED",
+            "CANCELLED",
+        ),
+    },
+}
+
+#: Plan sections 3.4-3.10: the field order of every top-level record is
+#: contractual, and `required` is emitted in declaration order, so the exact
+#: tuples pin both the required set and the order.
+_STAGE5_REQUIRED: Final[dict[str, tuple[str, ...]]] = {
+    "experiments/experiment-spec-v1.schema.json": (
+        "schema_version",
+        "strategy_version_hash",
+        "dataset_version_hash",
+        "selected_engine_slots",
+        "starting_balance",
+        "fee_assumptions",
+        "slippage_assumptions",
+        "execution_assumptions",
+        "comparison_level",
+        "retry_policy",
+        "configuration_hash",
+        "created_at_utc",
+    ),
+    "experiments/experiment-record-v1.schema.json": (
+        "schema_version",
+        "experiment_id",
+        "spec",
+        "spec_hash",
+        "state",
+        "created_at_utc",
+        "updated_at_utc",
+        "revision",
+    ),
+    "experiments/engine-run-record-v1.schema.json": (
+        "schema_version",
+        "run_id",
+        "experiment_id",
+        "logical_slot_id",
+        "attempt_number",
+        "attempt_token_hash",
+        "state",
+        "adapter",
+        "engine",
+        "request_hash",
+        "created_at_utc",
+        "updated_at_utc",
+        "revision",
+    ),
+    "experiments/command-invocation-record-v1.schema.json": (
+        "schema_version",
+        "invocation_id",
+        "command_kind",
+        "adapter_name",
+        "adapter_version",
+        "request_hash",
+        "timeout_seconds",
+        "state",
+        "process_created",
+        "cleanup_complete",
+        "diagnostic_ids",
+        "created_at_utc",
+        "updated_at_utc",
+        "revision",
+    ),
+    "experiments/retry-policy-v1.schema.json": (
+        "schema_version",
+        "maximum_attempts_per_slot",
+        "automatically_retry_terminal_states",
+        "retry_delay_seconds",
+        "require_fresh_availability_observation_for_unavailable",
+    ),
+    "experiments/retry-decision-record-v1.schema.json": (
+        "schema_version",
+        "experiment_id",
+        "logical_slot_id",
+        "predecessor_run_id",
+        "experiment_spec_hash",
+        "retry_policy",
+        "created_attempt_count",
+        "predecessor_terminal_state",
+        "primary_terminal_diagnostic_id",
+        "outcome",
+        "decided_at_utc",
+    ),
+    "experiments/experiment-aggregation-result-v1.schema.json": (
+        "schema_version",
+        "experiment_id",
+        "verdict",
+        "reason_codes",
+    ),
+}
+
+#: The state-governed fields each record publishes as optional properties (plan
+#: sections 3.6-3.9): present in `properties`, absent from `required`.
+_STAGE5_OPTIONAL: Final[dict[str, tuple[str, ...]]] = {
+    "experiments/experiment-spec-v1.schema.json": (),
+    "experiments/experiment-record-v1.schema.json": (
+        "slot_compatibility",
+        "cancellation_correlation_id",
+    ),
+    "experiments/engine-run-record-v1.schema.json": (
+        "predecessor_run_id",
+        "retry_reason",
+        "primary_terminal_diagnostic_id",
+        "availability_observation_id",
+        "finalization_deadline_utc",
+    ),
+    "experiments/command-invocation-record-v1.schema.json": (
+        "run_id",
+        "deadline_utc",
+        "launch_attempted_at_utc",
+        "process_started_at_utc",
+        "pid_identity",
+        "completed_at_utc",
+        "native_exit_value",
+        "process_exit_category",
+        "cleanup_completed_at_utc",
+        "stderr_artifact_id",
+        "primary_diagnostic_id",
+    ),
+    "experiments/retry-policy-v1.schema.json": (),
+    "experiments/retry-decision-record-v1.schema.json": (
+        "denial_reason",
+        "hard_block_error_code",
+        "availability_observation_id",
+        "retry_not_before_utc",
+        "reserved_successor_attempt_number",
+    ),
+    "experiments/experiment-aggregation-result-v1.schema.json": (),
+}
+
+#: Every Stage 5 position that carries `uniqueItems: true`. All nine are
+#: WHOLE-VALUE exact: the runtime rejects any repeated item (`approximation_ids`,
+#: `diagnostic_ids`, `reason_codes` and the retry states are unique by rule, and
+#: distinct ordinals make every accepted `selected_engine_slots` member distinct).
+_STAGE5_UNIQUE_POINTERS: Final[tuple[tuple[str, str], ...]] = (
+    ("experiments/experiment-spec-v1.schema.json", "/properties/selected_engine_slots"),
+    (
+        "experiments/experiment-spec-v1.schema.json",
+        "/$defs/RetryPolicy/properties/automatically_retry_terminal_states",
+    ),
+    (
+        "experiments/experiment-record-v1.schema.json",
+        "/$defs/ExperimentSpec/properties/selected_engine_slots",
+    ),
+    (
+        "experiments/experiment-record-v1.schema.json",
+        "/$defs/RetryPolicy/properties/automatically_retry_terminal_states",
+    ),
+    (
+        "experiments/experiment-record-v1.schema.json",
+        "/$defs/SlotCompatibility/properties/approximation_ids",
+    ),
+    (
+        "experiments/command-invocation-record-v1.schema.json",
+        "/properties/diagnostic_ids",
+    ),
+    (
+        "experiments/retry-policy-v1.schema.json",
+        "/properties/automatically_retry_terminal_states",
+    ),
+    (
+        "experiments/retry-decision-record-v1.schema.json",
+        "/$defs/RetryPolicy/properties/automatically_retry_terminal_states",
+    ),
+    (
+        "experiments/experiment-aggregation-result-v1.schema.json",
+        "/properties/reason_codes",
+    ),
+)
+
+
+def _stage5_unique_items_pointers() -> tuple[tuple[str, str], ...]:
+    found: list[tuple[str, str]] = []
+
+    def walk(node: object, name: str, pointer: str) -> None:
+        if isinstance(node, dict):
+            if node.get("uniqueItems") is True:
+                found.append((name, pointer))
+            for key, value in node.items():
+                walk(value, name, f"{pointer}/{key}")
+        elif isinstance(node, list):
+            for index, value in enumerate(node):
+                walk(value, name, f"{pointer}/{index}")
+
+    documents = _committed_schemas()
+    for name in _STAGE5_PATHS:
+        walk(documents[PurePosixPath(name)], name, "")
+    return tuple(found)
+
+
+def _closed_objects(node: object) -> tuple[dict[str, Any], ...]:
+    """Every object schema reachable in the document, for the `extra="forbid"` pin."""
+    found: list[dict[str, Any]] = []
+    if isinstance(node, dict):
+        if node.get("type") == "object" and "properties" in node:
+            found.append(cast(dict[str, Any], node))
+        for value in node.values():
+            found.extend(_closed_objects(value))
+    elif isinstance(node, list):
+        for value in node:
+            found.extend(_closed_objects(value))
+    return tuple(found)
+
+
+def test_the_stage_five_schemas_publish_their_closed_enums() -> None:
+    documents = _committed_schemas()
+    for name, enums in _STAGE5_CLOSED_ENUMS.items():
+        definitions = documents[PurePosixPath(name)]["$defs"]
+        for title, members in enums.items():
+            node = definitions[title]
+            assert node["type"] == "string", (name, title)
+            assert node["title"] == title, (name, title)
+            assert tuple(node["enum"]) == members, (name, title)
+            assert len(set(members)) == len(members), (name, title)
+        # `RetryTerminalState` renders with no `description` everywhere it appears
+        # (plan 2.5 constraint 2), exactly as in the released configuration schema.
+        if "RetryTerminalState" in enums:
+            assert set(definitions["RetryTerminalState"]) == {"enum", "title", "type"}
+    exit_categories = _STAGE5_CLOSED_ENUMS[
+        "experiments/command-invocation-record-v1.schema.json"
+    ]["ProcessExitCategory"]
+    assert len(exit_categories) == 8
+    assert "UNKNOWN_AFTER_RESTART" not in exit_categories
+    assert tuple(member.value for member in ProcessExitCategory) == exit_categories
+
+
+def test_the_stage_five_schemas_publish_their_required_and_optional_fields() -> None:
+    documents = _committed_schemas()
+    for name in _STAGE5_PATHS:
+        document = documents[PurePosixPath(name)]
+        required = _STAGE5_REQUIRED[name]
+        optional = _STAGE5_OPTIONAL[name]
+        assert tuple(document["required"]) == required, name
+        assert set(document["properties"]) == set(required) | set(optional), name
+        assert not set(required) & set(optional), name
+        assert document["properties"]["schema_version"] == {
+            "const": "1.0.0",
+            "title": "Schema Version",
+            "type": "string",
+        }, name
+        assert document["title"] == _EXPECTED_ADAPTED_TYPES[name].__name__, name
+        for node in _closed_objects(document):
+            assert node["additionalProperties"] is False, (name, node.get("title"))
+
+
+def test_the_stage_five_unique_items_census_is_exactly_the_nine_positions() -> None:
+    documents = _committed_schemas()
+    for name, pointer in _STAGE5_UNIQUE_POINTERS:
+        node = _resolve_pointer(documents[PurePosixPath(name)], pointer)
+        assert node["type"] == "array", (name, pointer)
+        assert node["uniqueItems"] is True, (name, pointer)
+    published = _stage5_unique_items_pointers()
+    assert set(published) == set(_STAGE5_UNIQUE_POINTERS)
+    assert len(published) == 9
+    assert len(set(_STAGE5_UNIQUE_POINTERS)) == 9
+
+
+def test_every_stage_five_schema_is_identical_in_both_generation_modes() -> None:
+    """The published file is `mode="serialization"`; validation must agree.
+
+    A mode-dependent projection would mean the reviewed bytes describe only one
+    of the two projections these models can emit, so the two are compared
+    directly rather than assumed equal, for every Stage 5 entry.
+    """
+    for name in _STAGE5_PATHS:
+        adapter: TypeAdapter[Any] = TypeAdapter(_EXPECTED_ADAPTED_TYPES[name])
+        emitted = {mode: adapter.json_schema(mode=mode) for mode in _RENDER_MODES}
+        assert emitted["validation"] == emitted["serialization"], name
+        published = dict(_committed(name))
+        del published["$schema"]
+        del published["$id"]
+        assert emitted["serialization"] == published, name
+
+
+def _dumped(record: object) -> dict[str, Any]:
+    """The runtime's own JSON projection; `MISSING` fields are omitted, not null."""
+    assert isinstance(record, CanonicalModel)
+    return record.model_dump(mode="json")
+
+
+def _stage5_baselines() -> dict[str, tuple[dict[str, Any], ...]]:
+    """Runtime-accepted documents, several states each, for every Stage 5 schema."""
+    experiments = (
+        sample_experiment(ExperimentState.DRAFT),
+        sample_experiment(ExperimentState.VALIDATED),
+        sample_experiment(ExperimentState.QUEUED),
+        sample_experiment(ExperimentState.RUNNING),
+        sample_experiment(ExperimentState.COMPLETED),
+        sample_experiment(ExperimentState.CANCELLED),
+        sample_experiment(ExperimentState.CANCELLED, include_compatibility=True),
+        sample_experiment(
+            ExperimentState.QUEUED,
+            slot_compatibility=sample_slot_compatibility(
+                outcomes={
+                    SLOT_A: CompatibilityOutcome.SUPPORTED_WITH_APPROXIMATION,
+                    SLOT_B: CompatibilityOutcome.NOT_APPLICABLE,
+                }
+            ),
+        ),
+    )
+    runs = (
+        sample_run(EngineRunState.PENDING),
+        sample_run(EngineRunState.VALIDATING),
+        sample_run(EngineRunState.READY),
+        sample_run(EngineRunState.RUNNING),
+        sample_run(EngineRunState.SUCCEEDED),
+        sample_run(EngineRunState.FAILED),
+        sample_run(EngineRunState.NOT_APPLICABLE),
+        sample_run(EngineRunState.UNAVAILABLE),
+        sample_run(EngineRunState.SUCCEEDED_WITH_WARNINGS, attempt_number=2),
+    )
+    invocations = (
+        sample_invocation(CommandInvocationState.PENDING, kind=CommandKind.DESCRIBE),
+        sample_invocation(CommandInvocationState.STARTING, kind=CommandKind.VALIDATE),
+        sample_invocation(CommandInvocationState.RUNNING, kind=CommandKind.VALIDATE),
+        sample_invocation(CommandInvocationState.EXITED, kind=CommandKind.RUN),
+        sample_invocation(
+            CommandInvocationState.EXITED, kind=CommandKind.RUN, native_exit_value=99
+        ),
+        sample_invocation(CommandInvocationState.FAILED_TO_START),
+        sample_invocation(
+            CommandInvocationState.CANCELLED, via=CommandInvocationState.PENDING
+        ),
+        sample_invocation(
+            CommandInvocationState.TIMED_OUT, via=CommandInvocationState.STARTING
+        ),
+        sample_invocation(CommandInvocationState.PROTOCOL_FAILED),
+    )
+    policies = (
+        sample_retry_policy(),
+        sample_retry_policy(
+            maximum_attempts_per_slot=1,
+            automatically_retry_terminal_states=(),
+            retry_delay_seconds=0,
+        ),
+    )
+    decisions = (
+        sample_retry_decision(),
+        sample_allowed_retry_decision(),
+        sample_allowed_retry_decision(
+            predecessor_terminal_state=EngineRunState.UNAVAILABLE,
+            availability_observation_id=AVAIL_B,
+        ),
+    )
+    results = (
+        ExperimentAggregationResult(
+            schema_version="1.0.0",
+            experiment_id=EXPERIMENT_ID,
+            verdict=AggregationVerdict.COMPLETED,
+            reason_codes=(),
+        ),
+        ExperimentAggregationResult(
+            schema_version="1.0.0",
+            experiment_id=EXPERIMENT_ID,
+            verdict=AggregationVerdict.COMPLETED_WITH_WARNINGS,
+            reason_codes=(
+                "EXPERIMENT.SLOT_SUCCEEDED_WITH_WARNINGS",
+                "EXPERIMENT.SLOT_USED_APPROXIMATION",
+            ),
+        ),
+    )
+    return {
+        "experiments/experiment-spec-v1.schema.json": tuple(
+            _dumped(record.spec) for record in experiments[:1]
+        ),
+        "experiments/experiment-record-v1.schema.json": tuple(
+            _dumped(record) for record in experiments
+        ),
+        "experiments/engine-run-record-v1.schema.json": tuple(
+            _dumped(record) for record in runs
+        ),
+        "experiments/command-invocation-record-v1.schema.json": tuple(
+            _dumped(record) for record in invocations
+        ),
+        "experiments/retry-policy-v1.schema.json": tuple(
+            _dumped(record) for record in policies
+        ),
+        "experiments/retry-decision-record-v1.schema.json": tuple(
+            _dumped(record) for record in decisions
+        ),
+        "experiments/experiment-aggregation-result-v1.schema.json": tuple(
+            _dumped(record) for record in results
+        ),
+    }
+
+
+def test_every_stage_five_baseline_the_runtime_accepts_is_accepted_on_disk() -> None:
+    """The over-rejection half: no runtime-valid record is refused by its schema."""
+    baselines = _stage5_baselines()
+    assert set(baselines) == set(_STAGE5_PATHS)
+    total = 0
+    for name, documents in baselines.items():
+        validator = _validator(name)
+        assert documents, name
+        for document in documents:
+            validator.validate(document)
+            # Round trip: the dumped document is exactly what the runtime re-reads.
+            _runtime_accepts(name, document)
+            total += 1
+    assert total == 34
+
+
+def _runtime_adapter(name: str) -> TypeAdapter[Any]:
+    return TypeAdapter(_EXPECTED_ADAPTED_TYPES[name])
+
+
+def _runtime_accepts(name: str, document: dict[str, Any]) -> None:
+    """JSON-mode validation: the strict models read JSON, not coerced Python."""
+    _runtime_adapter(name).validate_json(json.dumps(document))
+
+
+def _runtime_rejects(name: str, document: dict[str, Any]) -> None:
+    with pytest.raises(PydanticValidationError):
+        _runtime_adapter(name).validate_json(json.dumps(document))
+
+
+def _baseline(name: str, index: int = 0) -> dict[str, Any]:
+    """A deep copy of one runtime-accepted baseline, safe to mutate."""
+    return cast(
+        dict[str, Any], json.loads(json.dumps(_stage5_baselines()[name][index]))
+    )
+
+
+def _nested(base: dict[str, Any], key: str, **changes: object) -> dict[str, Any]:
+    """`base` with the nested object at `key` shallowly updated."""
+    return {**base, key: {**base[key], **changes}}
+
+
+def _without(base: dict[str, Any], key: str) -> dict[str, Any]:
+    return {name: value for name, value in base.items() if name != key}
+
+
+_SPEC: Final = "experiments/experiment-spec-v1.schema.json"
+_RECORD: Final = "experiments/experiment-record-v1.schema.json"
+_RUN: Final = "experiments/engine-run-record-v1.schema.json"
+_INVOCATION: Final = "experiments/command-invocation-record-v1.schema.json"
+_POLICY: Final = "experiments/retry-policy-v1.schema.json"
+_DECISION: Final = "experiments/retry-decision-record-v1.schema.json"
+_RESULT: Final = "experiments/experiment-aggregation-result-v1.schema.json"
+_APPX: Final = f"appx_{_UUID_TAIL}"
+_DIAG: Final = f"diag_{_UUID_TAIL}"
+
+
+def test_the_committed_experiment_spec_schema_rejects_every_expressible_violation() -> (
+    None
+):
+    validator = _validator(_SPEC)
+    spec = _baseline(_SPEC)
+    validator.validate(spec)
+    slots = cast(list[dict[str, Any]], spec["selected_engine_slots"])
+    ninth = [json.loads(json.dumps(slots[0])) for _ in range(9)]
+    policy = cast(dict[str, Any], spec["retry_policy"])
+    cases: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("unknown field", {**spec, "engine_count": 2}),
+        ("wrong envelope version", {**spec, "schema_version": "1.0.1"}),
+        ("no selected slot", {**spec, "selected_engine_slots": []}),
+        ("nine selected slots", {**spec, "selected_engine_slots": ninth}),
+        ("repeated slot item", {**spec, "selected_engine_slots": [*slots, slots[0]]}),
+        (
+            "slot ordinal above seven",
+            {**spec, "selected_engine_slots": [{**slots[0], "slot_ordinal": 8}]},
+        ),
+        (
+            "price precision above eighteen",
+            _nested(spec, "execution_assumptions", price_precision=19),
+        ),
+        (
+            "rounding mode outside the literal",
+            _nested(spec, "execution_assumptions", rounding_mode="ROUND_HALF_UP"),
+        ),
+        ("negative fee rate", _nested(spec, "fee_assumptions", maker_fee_rate="-0.1")),
+        ("float fee rate", _nested(spec, "fee_assumptions", taker_fee_rate=0.1)),
+        (
+            "slippage model outside the enum",
+            _nested(spec, "slippage_assumptions", model="LINEAR"),
+        ),
+        (
+            "attempt budget above five",
+            {**spec, "retry_policy": {**policy, "maximum_attempts_per_slot": 6}},
+        ),
+        (
+            "attempt budget below one",
+            {**spec, "retry_policy": {**policy, "maximum_attempts_per_slot": 0}},
+        ),
+        (
+            "retry delay above three hundred",
+            {**spec, "retry_policy": {**policy, "retry_delay_seconds": 301}},
+        ),
+        (
+            "duplicate retry state",
+            _nested(
+                spec,
+                "retry_policy",
+                automatically_retry_terminal_states=["FAILED", "FAILED"],
+            ),
+        ),
+        (
+            "foreign retry state",
+            _nested(
+                spec,
+                "retry_policy",
+                automatically_retry_terminal_states=["CANCELLED"],
+            ),
+        ),
+        (
+            "fresh-availability requirement relaxed",
+            _nested(
+                spec,
+                "retry_policy",
+                require_fresh_availability_observation_for_unavailable=False,
+            ),
+        ),
+        ("malformed strategy hash", {**spec, "strategy_version_hash": "A" * 64}),
+        ("short dataset hash", {**spec, "dataset_version_hash": "1" * 63}),
+        ("impossible instant", {**spec, "created_at_utc": "2026-02-30T00:00:00Z"}),
+        ("naive instant", {**spec, "created_at_utc": "2026-08-10T00:00:00"}),
+        ("comparison level outside the enum", {**spec, "comparison_level": "LEVEL_4"}),
+        (
+            "money without its envelope",
+            {
+                **spec,
+                "starting_balance": _without(
+                    spec["starting_balance"], "schema_version"
+                ),
+            },
+        ),
+    )
+    assert len(cases) == 23
+    for label, document in cases:
+        _rejects(validator, document, label)
+        _runtime_rejects(_SPEC, document)
+
+
+def test_the_committed_experiment_record_schema_rejects_every_expressible_violation() -> (  # noqa: E501
+    None
+):
+    validator = _validator(_RECORD)
+    record = _baseline(_RECORD, 2)  # QUEUED, so `slot_compatibility` is present
+    validator.validate(record)
+    compatibility = cast(list[dict[str, Any]], record["slot_compatibility"])
+    approximated = {
+        **compatibility[0],
+        "outcome": "SUPPORTED_WITH_APPROXIMATION",
+        "approximation_ids": [_APPX, _APPX],
+    }
+    cases: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("unknown field", {**record, "owner": "me"}),
+        ("state outside the enum", {**record, "state": "PAUSED"}),
+        ("negative revision", {**record, "revision": -1}),
+        ("float revision", {**record, "revision": 1.5}),
+        ("malformed experiment id", {**record, "experiment_id": "exp_not-a-uuid"}),
+        (
+            "correlation id with whitespace",
+            {**record, "state": "CANCELLED", "cancellation_correlation_id": "c 1"},
+        ),
+        (
+            "compatibility outcome outside the enum",
+            {**record, "slot_compatibility": [{**compatibility[0], "outcome": "X"}]},
+        ),
+        (
+            "duplicate approximation identifiers",
+            {**record, "slot_compatibility": [approximated, compatibility[1]]},
+        ),
+        ("spec missing", _without(record, "spec")),
+    )
+    assert len(cases) == 9
+    for label, document in cases:
+        _rejects(validator, document, label)
+        _runtime_rejects(_RECORD, document)
+
+
+def test_the_committed_engine_run_record_schema_rejects_every_expressible_violation() -> (  # noqa: E501
+    None
+):
+    validator = _validator(_RUN)
+    run = _baseline(_RUN, 5)  # FAILED
+    validator.validate(run)
+    cases: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("unknown field", {**run, "pid": 4321}),
+        ("attempt number zero", {**run, "attempt_number": 0}),
+        ("attempt number six", {**run, "attempt_number": 6}),
+        ("state outside the enum", {**run, "state": "PAUSED"}),
+        ("retry reason outside the enum", {**run, "retry_reason": "CANCELLED"}),
+        (
+            "malformed predecessor id",
+            {**run, "predecessor_run_id": f"exp_{_UUID_TAIL}"},
+        ),
+        (
+            "impossible finalization deadline",
+            {**run, "finalization_deadline_utc": "2026-01-01T24:00:00Z"},
+        ),
+        ("adapter without a version", {**run, "adapter": {"adapter_name": "a.b"}}),
+    )
+    assert len(cases) == 8
+    for label, document in cases:
+        _rejects(validator, document, label)
+        _runtime_rejects(_RUN, document)
+
+
+def test_the_committed_command_invocation_schema_rejects_every_expressible_violation() -> (  # noqa: E501
+    None
+):
+    validator = _validator(_INVOCATION)
+    exited = _baseline(_INVOCATION, 3)  # RUN, EXITED with native exit 0
+    validator.validate(exited)
+    cases: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("unknown field", {**exited, "exit_code": 0}),
+        ("timeout below one", {**exited, "timeout_seconds": 0}),
+        ("timeout above the run bound", {**exited, "timeout_seconds": 604801}),
+        ("native exit below the span", {**exited, "native_exit_value": -2147483649}),
+        ("native exit above the span", {**exited, "native_exit_value": 4294967296}),
+        ("fractional native exit", {**exited, "native_exit_value": 0.5}),
+        (
+            "exit category outside the eight",
+            {**exited, "process_exit_category": "UNKNOWN_AFTER_RESTART"},
+        ),
+        ("command kind outside the enum", {**exited, "command_kind": "INSPECT"}),
+        ("state outside the enum", {**exited, "state": "SUSPENDED"}),
+        ("pid zero", _nested(exited, "pid_identity", pid=0)),
+        (
+            "executable path with a leading space",
+            _nested(exited, "pid_identity", executable_path=" C:\\a.exe"),
+        ),
+        ("duplicate diagnostic identifiers", {**exited, "diagnostic_ids": [_DIAG] * 2}),
+        ("string process_created", {**exited, "process_created": "true"}),
+    )
+    assert len(cases) == 13
+    for label, document in cases:
+        _rejects(validator, document, label)
+        _runtime_rejects(_INVOCATION, document)
+
+
+def test_the_committed_retry_and_aggregation_schemas_reject_every_expressible_violation() -> (  # noqa: E501
+    None
+):
+    policy_validator = _validator(_POLICY)
+    decision_validator = _validator(_DECISION)
+    result_validator = _validator(_RESULT)
+    policy = _baseline(_POLICY)
+    allowed = _baseline(_DECISION, 1)
+    result = _baseline(_RESULT, 1)
+    policy_validator.validate(policy)
+    decision_validator.validate(allowed)
+    result_validator.validate(result)
+    states = "automatically_retry_terminal_states"
+    policy_cases: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("unknown field", {**policy, "backoff": "exponential"}),
+        ("four retry states", {**policy, states: ["FAILED"] * 4}),
+        ("retry states as a string", {**policy, states: "FAILED"}),
+        ("delay below zero", {**policy, "retry_delay_seconds": -1}),
+        ("missing delay", _without(policy, "retry_delay_seconds")),
+    )
+    decision_cases: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("unknown field", {**allowed, "successor_run_id": f"run_{_UUID_TAIL}"}),
+        ("outcome outside the enum", {**allowed, "outcome": "DEFERRED"}),
+        ("denial reason outside the enum", {**allowed, "denial_reason": "VETO"}),
+        ("reserved number one", {**allowed, "reserved_successor_attempt_number": 1}),
+        ("reserved number six", {**allowed, "reserved_successor_attempt_number": 6}),
+        ("created count zero", {**allowed, "created_attempt_count": 0}),
+        ("created count six", {**allowed, "created_attempt_count": 6}),
+        ("lowercase hard-block code", {**allowed, "hard_block_error_code": "core.x"}),
+        (
+            "impossible not-before instant",
+            {**allowed, "retry_not_before_utc": "2100-02-29T00:00:00Z"},
+        ),
+        (
+            "policy missing its envelope",
+            {
+                **allowed,
+                "retry_policy": _without(allowed["retry_policy"], "schema_version"),
+            },
+        ),
+    )
+    many = [f"EXPERIMENT.CODE_{index:02d}" for index in range(33)]
+    result_cases: tuple[tuple[str, dict[str, Any]], ...] = (
+        ("unknown field", {**result, "score": 1}),
+        ("verdict outside the enum", {**result, "verdict": "PARTIAL"}),
+        ("duplicate reason codes", {**result, "reason_codes": ["EXPERIMENT.X"] * 2}),
+        ("lowercase reason code", {**result, "reason_codes": ["experiment.slot"]}),
+        ("unnamespaced reason code", {**result, "reason_codes": ["FAILED"]}),
+        ("thirty-three reason codes", {**result, "reason_codes": many}),
+    )
+    assert (len(policy_cases), len(decision_cases), len(result_cases)) == (5, 10, 6)
+    for label, document in policy_cases:
+        _rejects(policy_validator, document, label)
+        _runtime_rejects(_POLICY, document)
+    for label, document in decision_cases:
+        _rejects(decision_validator, document, label)
+        _runtime_rejects(_DECISION, document)
+    for label, document in result_cases:
+        _rejects(result_validator, document, label)
+        _runtime_rejects(_RESULT, document)
+
+
+def test_the_stage_five_runtime_only_rules_stay_one_directional() -> None:
+    """The recorded residuals: the published bytes are a superset of the runtime.
+
+    Each document below is ACCEPTED by the committed schema and REJECTED by the
+    runtime validator, which is the safe direction (no runtime-valid record is
+    refused). They are pinned so a residual cannot silently invert into an
+    over-rejection or widen unnoticed; docs/development/verification.md records
+    each one. `finalization_deadline_utc` is the plan's own Task 9 residual: it is
+    published as an optional property that the Stage 5 runtime always rejects.
+    """
+    spec = _baseline(_SPEC)
+    draft = _baseline(_RECORD, 0)
+    queued = _baseline(_RECORD, 2)
+    ready = _baseline(_RUN, 2)
+    failed = _baseline(_RUN, 5)
+    exited = _baseline(_INVOCATION, 3)
+    denied = _baseline(_DECISION, 0)
+    allowed = _baseline(_DECISION, 1)
+    result = _baseline(_RESULT, 1)
+    slots = cast(list[dict[str, Any]], spec["selected_engine_slots"])
+    swapped = [{**slots[0], "slot_ordinal": 1}, {**slots[1], "slot_ordinal": 0}]
+    residuals: tuple[tuple[str, str, dict[str, Any]], ...] = (
+        (
+            _SPEC,
+            "non-positive starting balance (the released Money schema is frozen)",
+            _nested(spec, "starting_balance", amount="0"),
+        ),
+        (_SPEC, "slot ordinals not 0..n-1", {**spec, "selected_engine_slots": swapped}),
+        (
+            _SPEC,
+            "basis points present under slippage model NONE",
+            {**spec, "slippage_assumptions": {"model": "NONE", "basis_points": "5"}},
+        ),
+        (
+            _RECORD,
+            "slot_compatibility present before QUEUED",
+            {**draft, "slot_compatibility": queued["slot_compatibility"]},
+        ),
+        (
+            _RECORD,
+            "cancellation_correlation_id outside CANCELLED",
+            {**queued, "cancellation_correlation_id": "cancel-1"},
+        ),
+        (
+            _RECORD,
+            "spec_hash disagreeing with the spec",
+            {**queued, "spec_hash": "f" * 64},
+        ),
+        (
+            _RECORD,
+            "updated_at_utc before created_at_utc",
+            {**queued, "updated_at_utc": "2000-01-01T00:00:00Z"},
+        ),
+        (
+            _RUN,
+            "finalization_deadline_utc present (plan 3.8 row 15, Task 9)",
+            {**ready, "finalization_deadline_utc": "2026-09-08T00:00:00Z"},
+        ),
+        (
+            _RUN,
+            "successor without predecessor and reason",
+            {**ready, "attempt_number": 2},
+        ),
+        (
+            _RUN,
+            "non-success terminal without primary_terminal_diagnostic_id",
+            _without(failed, "primary_terminal_diagnostic_id"),
+        ),
+        (
+            _INVOCATION,
+            "process_exit_category disagreeing with the frozen native-exit mapping",
+            {**exited, "process_exit_category": "CANCELLED"},
+        ),
+        (
+            _INVOCATION,
+            "timeout above the DESCRIBE bound (the schema carries the RUN envelope)",
+            {**exited, "command_kind": "DESCRIBE", "timeout_seconds": 301},
+        ),
+        (
+            _INVOCATION,
+            "primary_diagnostic_id outside diagnostic_ids",
+            {**exited, "primary_diagnostic_id": _DIAG, "diagnostic_ids": []},
+        ),
+        (
+            _INVOCATION,
+            "deadline_utc not launch_attempted_at_utc + timeout_seconds",
+            {**exited, "deadline_utc": "2026-09-07T12:00:02Z"},
+        ),
+        (
+            _DECISION,
+            "DENIED decision carrying retry_not_before_utc",
+            {**denied, "retry_not_before_utc": allowed["retry_not_before_utc"]},
+        ),
+        (
+            _DECISION,
+            "reserved_successor_attempt_number not created_attempt_count + 1",
+            {**allowed, "reserved_successor_attempt_number": 3},
+        ),
+        (
+            _DECISION,
+            "predecessor_terminal_state SUCCEEDED (plan 3.9 residual)",
+            {**allowed, "predecessor_terminal_state": "SUCCEEDED"},
+        ),
+        (
+            _RESULT,
+            "unsorted reason codes (unbounded domain, sortedness inexpressible)",
+            {**result, "reason_codes": list(reversed(result["reason_codes"]))},
+        ),
+    )
+    assert len(residuals) == 18
+    for name, label, document in residuals:
+        _validator(name).validate(document)
+        _runtime_rejects(name, document)
+        assert label

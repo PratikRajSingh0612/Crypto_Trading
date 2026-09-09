@@ -372,7 +372,7 @@ def test_terminal_outcome_matches_roadmap_status(repository_root: Path) -> None:
         repository_root
         / "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
     ).read_text(encoding="utf-8")
-    assert "Stages 1 through 4 have approved detailed implementation plans." in roadmap
+    assert "Stages 1 through 5 have approved detailed implementation plans." in roadmap
     assert "Only Stage 1 has a detailed implementation plan" not in roadmap
     approved_stage_2_plan = (
         "**Approved detailed implementation plan:** "
@@ -404,7 +404,7 @@ def test_terminal_outcome_matches_roadmap_status(repository_root: Path) -> None:
         return
 
     assert (
-        "**Status:** Approved planning decomposition; Stages 1 through 4 complete"
+        "**Status:** Approved planning decomposition; Stages 1 through 5 complete"
         in roadmap
     )
     if route == "ENABLED":
