@@ -19,8 +19,10 @@ _ALLOWED_SOURCE_FILES = {
     "__init__.py",
     "adapters/__init__.py",
     "adapters/catalog.py",
+    "adapters/commands.py",
     "adapters/descriptors.py",
     "adapters/diagnostics.py",
+    "adapters/envelopes.py",
     "adapters/limits.py",
     "adapters/paths.py",
     "adapters/ports.py",
@@ -136,8 +138,6 @@ _FORBIDDEN_PATH_ACCESS = {
 _PROHIBITED_OS_ATTRIBUTES = frozenset({"getenv", "environ", "putenv", "unsetenv"})
 _PROHIBITED_CONTROL_LITERAL = "PYDANTIC_DISABLE_PLUGINS"
 _DEFERRED_DEFINITIONS = {
-    "AdapterCommand",
-    "AdapterCommandRequestEnvelope",
     "AdapterResultManifest",
     "AdapterValidationResult",
     "ArtifactFinalizationPurpose",
@@ -161,7 +161,6 @@ _DEFERRED_DEFINITIONS = {
     "ComparisonEligibilityService",
     "ContentHasher",
     "DatasetRepository",
-    "EngineRunRequest",
     "EquityPoint",
     "EvidenceFinalizationRequest",
     "Fee",
@@ -634,12 +633,12 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     through 6, each in the task that first defines it, so the pinned count reads
     fifty-three minus the names released so far: Task 1 released
     `SemanticStatus`, `ValidationOutcome`, `AdapterCatalog` and
-    `AdapterCatalogEntry`, giving 49.
+    `AdapterCatalogEntry`, giving 49; Task 2 released
+    `AdapterCommandRequestEnvelope`, `EngineRunRequest` and `AdapterCommand`,
+    giving 46.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 49
+    assert len(_DEFERRED_DEFINITIONS) == 46
     assert _DEFERRED_DEFINITIONS == {
-        "AdapterCommand",
-        "AdapterCommandRequestEnvelope",
         "AdapterResultManifest",
         "AdapterValidationResult",
         "ArtifactFinalizationPurpose",
@@ -663,7 +662,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "ComparisonEligibilityService",
         "ContentHasher",
         "DatasetRepository",
-        "EngineRunRequest",
         "EquityPoint",
         "EvidenceFinalizationRequest",
         "Fee",
@@ -714,7 +712,9 @@ def test_each_normative_deferred_symbol_is_detected_by_the_stage3_guard(
         "AdapterResultManifest",
         "CandidateArtifactState",
         "CanonicalOrder",
-        "EngineRunRequest",
+        # Stage 6 plan section 2.6: Task 2 released `EngineRunRequest` and
+        # swapped in a still-deferred name so seven live cases remain.
+        "RunManifest",
         "PortfolioSnapshot",
         "RunEvent",
         # Stage 6 plan section 2.6: Task 1 released `ValidationOutcome` and
