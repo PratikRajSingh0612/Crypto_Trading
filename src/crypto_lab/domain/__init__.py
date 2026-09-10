@@ -109,6 +109,7 @@ from crypto_lab.domain.hashing import (
     sha256_bytes,
 )
 from crypto_lab.domain.identifiers import (
+    AdapterManifestId,
     ArtifactId,
     AssetCode,
     AttemptToken,
@@ -123,6 +124,7 @@ from crypto_lab.domain.identifiers import (
     InvocationId,
     LogicalSlotId,
     NormalizedIdentifier,
+    RequestId,
     RunId,
     Sha256,
     StrategyId,
@@ -210,6 +212,7 @@ __all__ = (
     "TERMINAL_EXPERIMENT_STATES",
     "AdapterDescriptor",
     "AdapterIdentity",
+    "AdapterManifestId",
     "AggregationVerdict",
     "ApproximationPolicy",
     "ArtifactId",
@@ -278,6 +281,7 @@ __all__ = (
     "Quantity",
     "QueueFreezeCheck",
     "QueueFreezeViolation",
+    "RequestId",
     "Result",
     "RetryDecisionOutcome",
     "RetryDecisionRecord",

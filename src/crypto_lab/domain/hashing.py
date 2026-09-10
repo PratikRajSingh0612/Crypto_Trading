@@ -10,7 +10,14 @@ from pydantic import JsonValue
 
 from crypto_lab.domain.base import CanonicalModel
 from crypto_lab.domain.canonical_json import canonical_json_bytes
-from crypto_lab.domain.identifiers import Sha256
+from crypto_lab.domain.identifiers import (
+    CandidateArtifactId,
+    InvocationId,
+    RequestId,
+    RunId,
+    Sha256,
+    validate_prefixed_uuid4,
+)
 
 _ATTEMPT_TOKEN_DOMAIN = b"crypto_lab:attempt-token:v1"
 
@@ -24,6 +31,11 @@ class HashingProfile(StrEnum):
     STRATEGY_VERSION_V1 = "strategy-version/v1"
     EXPERIMENT_CONFIGURATION_V1 = "experiment-configuration/v1"
     EXPERIMENT_SPEC_V1 = "experiment-spec/v1"
+    # Stage 6 plan section 4: the four protocol profiles.
+    ADAPTER_REQUEST_V1 = "adapter-request/v1"
+    RUN_EVENT_CONTENT_V1 = "run-event-content/v1"
+    SANITIZED_ADAPTER_RESULT_MANIFEST_V1 = "sanitized-adapter-result-manifest/v1"
+    CANDIDATE_ARTIFACT_IDENTITY_V1 = "candidate-artifact-identity/v1"
 
 
 class CanonicalHashEnvelope(CanonicalModel):
@@ -75,3 +87,51 @@ def attempt_token_hash(token: str) -> Sha256:
     if not token or len(token) > 1024:
         raise ValueError("attempt token length must be 1 through 1024")
     return sha256_bytes(_ATTEMPT_TOKEN_DOMAIN + b"\x00" + token.encode("utf-8"))
+
+
+def request_id_for(anchor: RunId | InvocationId) -> RequestId:
+    """Derive the ``req_`` request identity of one run or describe anchor.
+
+    Stage 6 plan section 4: ``req_`` + ``_uuid4_shaped(sha256_bytes(anchor))``,
+    derived rather than drawn, so no ``IdentitySource`` method exists for it.
+    A run's ``VALIDATE`` and ``RUN`` requests anchor on the run identity and a
+    describe request on its invocation identity; the distinct prefixes make a
+    collision between the two families impossible. Any other anchor is refused.
+    """
+    if type(anchor) is not str:
+        raise TypeError("request anchor must be a built-in string")
+    prefix = "run_" if anchor.startswith("run_") else "inv_"
+    validate_prefixed_uuid4(anchor, prefix)
+    return f"req_{_uuid4_shaped(sha256_bytes(anchor.encode('utf-8')))}"
+
+
+def candidate_artifact_id_for(
+    run_id: RunId,
+    invocation_id: InvocationId,
+    relative_path: str,
+) -> CandidateArtifactId:
+    """Derive the ``cand_`` identity of one declared candidate artifact.
+
+    Stage 6 plan section 4: ``cand_`` + ``_uuid4_shaped(profile_hash(...))``
+    under ``CANDIDATE_ARTIFACT_IDENTITY_V1`` over the run, the run-command
+    invocation and the declared relative path, so a restart derives the same
+    identity. The path is a plain ``str`` because ``domain`` may not import the
+    ``adapters`` path alias; the adapter grammar is applied by the caller.
+    """
+    if (
+        type(run_id) is not str
+        or type(invocation_id) is not str
+        or type(relative_path) is not str
+    ):
+        raise TypeError("candidate identity inputs must be built-in strings")
+    if not relative_path:
+        raise ValueError("candidate relative path must not be empty")
+    validate_prefixed_uuid4(run_id, "run_")
+    validate_prefixed_uuid4(invocation_id, "inv_")
+    payload: dict[str, JsonValue] = {
+        "run_id": run_id,
+        "invocation_id": invocation_id,
+        "relative_path": relative_path,
+    }
+    digest = profile_hash(HashingProfile.CANDIDATE_ARTIFACT_IDENTITY_V1, payload)
+    return f"cand_{_uuid4_shaped(digest)}"

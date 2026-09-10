@@ -526,17 +526,26 @@ def test_compatibility_outcome_is_relocated_into_domain_with_its_docstring() -> 
 
 def test_the_two_stage_five_hashing_profiles_exist_and_reach_no_schema() -> None:
     """Plan section 2.5 constraint 4: safe only because nothing published reaches
-    `HashingProfile`, which is why the absence is asserted over every render."""
+    `HashingProfile`, which is why the absence is asserted over every render.
+
+    The test name is historical and kept. Stage 6 plan section 4 adds four
+    members in Task 1 (8 -> 12), and Stage 6 plan section 2.6 requires their
+    four value strings to join this render scan for the same reason.
+    """
     assert HashingProfile.EXPERIMENT_CONFIGURATION_V1.value == (
         "experiment-configuration/v1"
     )
     assert HashingProfile.EXPERIMENT_SPEC_V1.value == "experiment-spec/v1"
-    assert len(HashingProfile) == 8
-    assert len({member.value for member in HashingProfile}) == 8
+    assert len(HashingProfile) == 12
+    assert len({member.value for member in HashingProfile}) == 12
     for path, contents in render_schema_files().items():
         assert b"HashingProfile" not in contents, path
         assert b"experiment-configuration/v1" not in contents, path
         assert b"experiment-spec/v1" not in contents, path
+        assert b"adapter-request/v1" not in contents, path
+        assert b"run-event-content/v1" not in contents, path
+        assert b"sanitized-adapter-result-manifest/v1" not in contents, path
+        assert b"candidate-artifact-identity/v1" not in contents, path
 
 
 # --- Ambient-source guard -----------------------------------------------------

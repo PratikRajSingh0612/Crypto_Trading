@@ -6,6 +6,7 @@ from jsonschema.exceptions import ValidationError as JsonSchemaValidationError
 from pydantic import TypeAdapter, ValidationError
 
 from crypto_lab.domain.identifiers import (
+    AdapterManifestId,
     ArtifactId,
     AssetCode,
     AttemptToken,
@@ -20,6 +21,7 @@ from crypto_lab.domain.identifiers import (
     InvocationId,
     LogicalSlotId,
     NormalizedIdentifier,
+    RequestId,
     RunId,
     Sha256,
     StrategyId,
@@ -41,6 +43,10 @@ _ID_CASES: list[tuple[TypeAdapter[str], str]] = [
     (TypeAdapter(AuditEventId), "audit_"),
     (TypeAdapter(DatasetPartitionId), "part_"),
     (TypeAdapter(LogicalSlotId), "slot_"),
+    # Stage 6 plan section 4: the two Task 1 aliases, the derived `req_` request
+    # identity and the adapter-minted, format-checked `amf_` manifest identity.
+    (TypeAdapter(RequestId), "req_"),
+    (TypeAdapter(AdapterManifestId), "amf_"),
 ]
 
 

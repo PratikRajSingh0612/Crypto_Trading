@@ -18,9 +18,14 @@ from crypto_lab.schema_registry import SCHEMA_DEFINITIONS
 _ALLOWED_SOURCE_FILES = {
     "__init__.py",
     "adapters/__init__.py",
+    "adapters/catalog.py",
     "adapters/descriptors.py",
+    "adapters/diagnostics.py",
+    "adapters/limits.py",
+    "adapters/paths.py",
     "adapters/ports.py",
     "adapters/versioning.py",
+    "adapters/vocabulary.py",
     "artifacts/__init__.py",
     "artifacts/ownership.py",
     "audit/__init__.py",
@@ -131,8 +136,6 @@ _FORBIDDEN_PATH_ACCESS = {
 _PROHIBITED_OS_ATTRIBUTES = frozenset({"getenv", "environ", "putenv", "unsetenv"})
 _PROHIBITED_CONTROL_LITERAL = "PYDANTIC_DISABLE_PLUGINS"
 _DEFERRED_DEFINITIONS = {
-    "AdapterCatalog",
-    "AdapterCatalogEntry",
     "AdapterCommand",
     "AdapterCommandRequestEnvelope",
     "AdapterResultManifest",
@@ -178,8 +181,6 @@ _DEFERRED_DEFINITIONS = {
     "RunEvent",
     "RunManifest",
     "SanitizedAdapterResultManifest",
-    "SemanticStatus",
-    "ValidationOutcome",
     "ingest_dataset",
     "negotiate_protocol",
     "normalize_dataset",
@@ -628,11 +629,15 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     `CommandInvocationRecord`, giving 58; Task 4 released `EngineRunRecord`,
     giving 57; Task 6 released `ExperimentRepository`, `EngineRunRepository`,
     `UnitOfWork` and `CommandInvocationRepository`, giving 53.
+
+    The Stage 6 plan's section 2.6 releases sixteen names across Tasks 1
+    through 6, each in the task that first defines it, so the pinned count reads
+    fifty-three minus the names released so far: Task 1 released
+    `SemanticStatus`, `ValidationOutcome`, `AdapterCatalog` and
+    `AdapterCatalogEntry`, giving 49.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 53
+    assert len(_DEFERRED_DEFINITIONS) == 49
     assert _DEFERRED_DEFINITIONS == {
-        "AdapterCatalog",
-        "AdapterCatalogEntry",
         "AdapterCommand",
         "AdapterCommandRequestEnvelope",
         "AdapterResultManifest",
@@ -678,8 +683,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "RunEvent",
         "RunManifest",
         "SanitizedAdapterResultManifest",
-        "SemanticStatus",
-        "ValidationOutcome",
         "ingest_dataset",
         "negotiate_protocol",
         "normalize_dataset",
@@ -714,7 +717,9 @@ def test_each_normative_deferred_symbol_is_detected_by_the_stage3_guard(
         "EngineRunRequest",
         "PortfolioSnapshot",
         "RunEvent",
-        "ValidationOutcome",
+        # Stage 6 plan section 2.6: Task 1 released `ValidationOutcome` and
+        # swapped in a still-deferred name so seven live cases remain.
+        "ProcessSupervisor",
     ],
 )
 def test_representative_later_stage_type_mutations_are_blocked(name: str) -> None:

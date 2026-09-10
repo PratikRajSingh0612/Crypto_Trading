@@ -102,6 +102,14 @@ def _logical_slot_id(value: str) -> str:
     return validate_prefixed_uuid4(value, "slot_")
 
 
+def _request_id(value: str) -> str:
+    return validate_prefixed_uuid4(value, "req_")
+
+
+def _adapter_manifest_id(value: str) -> str:
+    return validate_prefixed_uuid4(value, "amf_")
+
+
 type ExperimentId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^exp_{_UUID4}$"),
@@ -192,6 +200,21 @@ type LogicalSlotId = Annotated[
     AfterValidator(_logical_slot_id),
     WithJsonSchema(exact_string_schema(rf"^slot_{_UUID4}$")),
 ]
+#: Stage 6 plan section 4: derived by ``request_id_for`` in ``domain/hashing.py``
+#: from the run or describe-invocation anchor, never drawn.
+type RequestId = Annotated[
+    str,
+    StringConstraints(strict=True, pattern=rf"^req_{_UUID4}$"),
+    AfterValidator(_request_id),
+    WithJsonSchema(exact_string_schema(rf"^req_{_UUID4}$")),
+]
+#: Stage 6 plan section 4: adapter-minted and format-checked only.
+type AdapterManifestId = Annotated[
+    str,
+    StringConstraints(strict=True, pattern=rf"^amf_{_UUID4}$"),
+    AfterValidator(_adapter_manifest_id),
+    WithJsonSchema(exact_string_schema(rf"^amf_{_UUID4}$")),
+]
 type Sha256 = Annotated[
     str,
     StringConstraints(strict=True, pattern=r"^[0-9a-f]{64}$"),
@@ -236,7 +259,8 @@ _CORRELATION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
 #: The raw attempt token of one run attempt (Stage 5 plan section 3.3).
 #: Temporary sensitive correlation material: it is hashed by
 #: ``attempt_token_hash`` before it reaches any persisted record and is never a
-#: field of one, so no registered schema publishes this projection.
+#: field of one, so no registered schema for a persisted record publishes this
+#: projection; the three temporary wire contracts of Stage 6 do.
 type AttemptToken = Annotated[
     str,
     StringConstraints(
