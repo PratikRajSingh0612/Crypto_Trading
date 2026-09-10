@@ -24,6 +24,7 @@ _ALLOWED_SOURCE_FILES = {
     "adapters/diagnostics.py",
     "adapters/envelopes.py",
     "adapters/limits.py",
+    "adapters/negotiation.py",
     "adapters/paths.py",
     "adapters/ports.py",
     "adapters/versioning.py",
@@ -148,7 +149,6 @@ _DEFERRED_DEFINITIONS = {
     "ArtifactSourceRole",
     "AuditSink",
     "AuditEvent",
-    "BootstrapDescriptorEnvelope",
     "CancellationToken",
     "CandidateArtifact",
     "CandidateArtifactRepository",
@@ -165,7 +165,6 @@ _DEFERRED_DEFINITIONS = {
     "EvidenceFinalizationRequest",
     "Fee",
     "FinalizationResult",
-    "NegotiationResult",
     "MetricValue",
     "MonotonicInstant",
     "OrderSide",
@@ -181,7 +180,6 @@ _DEFERRED_DEFINITIONS = {
     "RunManifest",
     "SanitizedAdapterResultManifest",
     "ingest_dataset",
-    "negotiate_protocol",
     "normalize_dataset",
     "place_order",
 }
@@ -635,9 +633,10 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     `SemanticStatus`, `ValidationOutcome`, `AdapterCatalog` and
     `AdapterCatalogEntry`, giving 49; Task 2 released
     `AdapterCommandRequestEnvelope`, `EngineRunRequest` and `AdapterCommand`,
-    giving 46.
+    giving 46; Task 3 released `BootstrapDescriptorEnvelope`,
+    `NegotiationResult` and `negotiate_protocol`, giving 43.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 46
+    assert len(_DEFERRED_DEFINITIONS) == 43
     assert _DEFERRED_DEFINITIONS == {
         "AdapterResultManifest",
         "AdapterValidationResult",
@@ -649,7 +648,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "ArtifactSourceRole",
         "AuditSink",
         "AuditEvent",
-        "BootstrapDescriptorEnvelope",
         "CancellationToken",
         "CandidateArtifact",
         "CandidateArtifactRepository",
@@ -666,7 +664,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "EvidenceFinalizationRequest",
         "Fee",
         "FinalizationResult",
-        "NegotiationResult",
         "MetricValue",
         "MonotonicInstant",
         "OrderSide",
@@ -682,7 +679,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "RunManifest",
         "SanitizedAdapterResultManifest",
         "ingest_dataset",
-        "negotiate_protocol",
         "normalize_dataset",
         "place_order",
     }

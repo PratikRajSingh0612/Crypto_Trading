@@ -4,9 +4,11 @@ Stage 6 Task 1 adds the closed protocol vocabularies, the compiled protocol
 limits, the textual candidate-path grammar, the explicit adapter catalog and
 the closed Stage 6 diagnostic table; Task 2 adds the command-discriminated
 request envelopes, the request material and its identity, and the adapter
-command contract. Every module in this package imports ``crypto_lab.domain``
-and this package alone (specification 27.1), and none launches a process,
-reads the filesystem, the environment or a clock.
+command contract; Task 3 adds the bootstrap descriptor envelope, the core
+protocol support, pure version negotiation, the describe output parse and the
+availability-observation projection. Every module in this package imports
+``crypto_lab.domain`` and this package alone (specification 27.1), and none
+launches a process, reads the filesystem, the environment or a clock.
 """
 
 from crypto_lab.adapters.catalog import (
@@ -49,6 +51,18 @@ from crypto_lab.adapters.limits import (
     RESULT_MANIFEST_RELATIVE_PATH,
     ProtocolLimits,
 )
+from crypto_lab.adapters.negotiation import (
+    CORE_PROTOCOL_SUPPORT,
+    BootstrapDescriptorEnvelope,
+    CoreProtocolSupport,
+    DescriptorHeader,
+    DescriptorParse,
+    NegotiationResult,
+    describe_availability_observation,
+    negotiate_protocol,
+    negotiated_versions_of,
+    parse_bootstrap_descriptor,
+)
 from crypto_lab.adapters.paths import (
     RelativeCandidatePath,
     validate_relative_candidate_path,
@@ -67,6 +81,7 @@ from crypto_lab.adapters.vocabulary import (
 )
 
 __all__ = (
+    "CORE_PROTOCOL_SUPPORT",
     "NEGOTIABLE_SCHEMA_NAMES",
     "PROTOCOL_LIMITS_DEFAULT",
     "PROTOCOL_VERSION",
@@ -78,13 +93,18 @@ __all__ = (
     "AdapterCommandRequestEnvelope",
     "AdapterDescriptor",
     "AdapterDiagnosticCategory",
+    "BootstrapDescriptorEnvelope",
     "CommandInvocationRepository",
+    "CoreProtocolSupport",
     "DescribeRequestPayload",
+    "DescriptorHeader",
+    "DescriptorParse",
     "EngineDescriptor",
     "EngineRunRequest",
     "FrozenAdapterCatalog",
     "NegotiatedVersions",
     "NegotiationOutcome",
+    "NegotiationResult",
     "OperatingSystem",
     "ProtocolEventType",
     "ProtocolIntegrityStatus",
@@ -101,7 +121,11 @@ __all__ = (
     "argument_array",
     "build_engine_run_request",
     "build_request_envelope",
+    "describe_availability_observation",
     "highest_common_stable_version",
+    "negotiate_protocol",
+    "negotiated_versions_of",
+    "parse_bootstrap_descriptor",
     "payload_hash_of",
     "request_envelope_bytes",
     "request_hash_of",
