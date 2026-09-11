@@ -278,6 +278,11 @@ def test_the_protocol_operation_inventory_is_exactly_plan_section_ten() -> None:
         "count_attempts",
         "latest_attempt",
         "get_by_attempt_number",
+        # Stage 6 plan section 7.5: `append_event` is specification 8.2 verbatim and
+        # `list_events` the declared extension `InvocationEventLedger.from_events`
+        # reads; both joined in Stage 6 Task 4 with the `RunEvent` they carry.
+        "append_event",
+        "list_events",
     }
     assert members(RetryDecisionRepository) == {
         "get_by_predecessor",
@@ -302,8 +307,10 @@ def test_the_protocol_operation_inventory_is_exactly_plan_section_ten() -> None:
         "availability_observations",
         "diagnostics",
     }
-    # Plan section 1.4: `append_event` waits for Stage 6's `RunEvent`.
-    assert not hasattr(EngineRunRepository, "append_event")
+    # Stage 5 plan section 1.4 deferred `append_event` to Stage 6's `RunEvent`; Stage 6
+    # plan section 7.5 delivers it together with `list_events` in Task 4.
+    assert hasattr(EngineRunRepository, "append_event")
+    assert hasattr(EngineRunRepository, "list_events")
 
 
 def test_retry_decision_insert_outcome_is_a_nested_value_object() -> None:

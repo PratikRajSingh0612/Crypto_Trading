@@ -23,10 +23,12 @@ _ALLOWED_SOURCE_FILES = {
     "adapters/descriptors.py",
     "adapters/diagnostics.py",
     "adapters/envelopes.py",
+    "adapters/events.py",
     "adapters/limits.py",
     "adapters/negotiation.py",
     "adapters/paths.py",
     "adapters/ports.py",
+    "adapters/sanitization.py",
     "adapters/versioning.py",
     "adapters/vocabulary.py",
     "artifacts/__init__.py",
@@ -173,10 +175,8 @@ _DEFERRED_DEFINITIONS = {
     "PositionSnapshot",
     "PositionEffect",
     "ProcessSupervisor",
-    "ProtocolEventEnvelope",
     "ResultFinalizationRequest",
     "Result",
-    "RunEvent",
     "RunManifest",
     "SanitizedAdapterResultManifest",
     "ingest_dataset",
@@ -634,9 +634,10 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     `AdapterCatalogEntry`, giving 49; Task 2 released
     `AdapterCommandRequestEnvelope`, `EngineRunRequest` and `AdapterCommand`,
     giving 46; Task 3 released `BootstrapDescriptorEnvelope`,
-    `NegotiationResult` and `negotiate_protocol`, giving 43.
+    `NegotiationResult` and `negotiate_protocol`, giving 43; Task 4 released
+    `ProtocolEventEnvelope` and `RunEvent`, giving 41.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 43
+    assert len(_DEFERRED_DEFINITIONS) == 41
     assert _DEFERRED_DEFINITIONS == {
         "AdapterResultManifest",
         "AdapterValidationResult",
@@ -672,10 +673,8 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "PositionSnapshot",
         "PositionEffect",
         "ProcessSupervisor",
-        "ProtocolEventEnvelope",
         "ResultFinalizationRequest",
         "Result",
-        "RunEvent",
         "RunManifest",
         "SanitizedAdapterResultManifest",
         "ingest_dataset",
@@ -712,7 +711,9 @@ def test_each_normative_deferred_symbol_is_detected_by_the_stage3_guard(
         # swapped in a still-deferred name so seven live cases remain.
         "RunManifest",
         "PortfolioSnapshot",
-        "RunEvent",
+        # Stage 6 plan section 2.6: Task 4 released `RunEvent` and swapped in a
+        # still-deferred name so seven live cases remain.
+        "ArtifactRef",
         # Stage 6 plan section 2.6: Task 1 released `ValidationOutcome` and
         # swapped in a still-deferred name so seven live cases remain.
         "ProcessSupervisor",

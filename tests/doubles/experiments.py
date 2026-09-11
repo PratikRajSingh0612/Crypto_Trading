@@ -24,6 +24,7 @@ from typing import Any, Final, Protocol, cast
 
 from pydantic.experimental.missing_sentinel import MISSING
 
+from crypto_lab.adapters.events import RunEvent
 from crypto_lab.adapters.ports import CommandInvocationRepository
 from crypto_lab.domain.command_invocation import (
     CommandInvocationRecord,
@@ -736,15 +737,18 @@ class _View[K, R]:
 class InMemoryBackingStore:
     """The explicit shared store a rebuilt unit of work observes.
 
-    Holds the six live tables. Only a committed transaction writes the four
+    Holds the seven live tables. Only a committed transaction writes the five
     repository tables; the two reader tables are seeded here because the ports
-    over them are read-only. Every inspection accessor returns a fresh sorted
-    tuple, never a live collection.
+    over them are read-only. ``run_events`` (Stage 6 plan 7.5) is keyed by
+    ``(invocation_id, sequence)`` with an ``event_id`` uniqueness index checked at
+    commit. Every inspection accessor returns a fresh sorted tuple, never a live
+    collection.
     """
 
     def __init__(self) -> None:
         self.experiments: _Table[str, ExperimentRecord] = _Table()
         self.engine_runs: _Table[str, EngineRunRecord] = _Table()
+        self.run_events: _Table[tuple[str, int], RunEvent] = _Table()
         self.command_invocations: _Table[str, CommandInvocationRecord] = _Table()
         self.retry_decisions: _Table[tuple[str, str], RetryDecisionRecord] = _Table()
         self.availability_observations: _Table[str, RuntimeAvailabilityObservation] = (
@@ -771,6 +775,10 @@ class InMemoryBackingStore:
 
     def committed_engine_runs(self) -> tuple[EngineRunRecord, ...]:
         live = self.engine_runs.live
+        return tuple(live[key] for key in sorted(live))
+
+    def committed_run_events(self) -> tuple[RunEvent, ...]:
+        live = self.run_events.live
         return tuple(live[key] for key in sorted(live))
 
     def committed_command_invocations(self) -> tuple[CommandInvocationRecord, ...]:
@@ -948,10 +956,18 @@ class InMemoryExperimentRepository:
 
 
 class InMemoryEngineRunRepository:
-    """Dict keyed by ``run_id`` with the attempt uniqueness index (plan 11)."""
+    """Dict keyed by ``run_id`` with the attempt uniqueness index (plan 11), plus the
+    ``run_events`` dict keyed by ``(invocation_id, sequence)`` with the ``event_id``
+    uniqueness index (Stage 6 plan 7.5)."""
 
-    def __init__(self, view: _View[str, EngineRunRecord], failures: _Failures) -> None:
+    def __init__(
+        self,
+        view: _View[str, EngineRunRecord],
+        event_view: _View[tuple[str, int], RunEvent],
+        failures: _Failures,
+    ) -> None:
         self._view = view
+        self._event_view = event_view
         self._failures = failures
 
     def get(self, run_id: str) -> Result[EngineRunRecord]:
@@ -1039,6 +1055,43 @@ class InMemoryEngineRunRepository:
                 return Success(outcome="SUCCESS", value=record)
         absent: Any = MISSING
         return Success(outcome="SUCCESS", value=absent)
+
+    def append_event(self, event: RunEvent) -> Result[RunEvent]:
+        """Stage 6 plan 7.5: idempotent on an identical event, a conflict on a
+        different content under one key or an ``event_id`` reused under another."""
+        if not isinstance(event, RunEvent):
+            raise TypeError("event must be a RunEvent")
+        key = (event.invocation_id, event.sequence)
+        existing = self._event_view.authoritative(key)
+        if existing is not None:
+            if existing.content_hash == event.content_hash:
+                return Success[RunEvent](outcome="SUCCESS", value=existing)
+            return self._failures.conflict(
+                f"event {event.sequence} of invocation {event.invocation_id} is "
+                "already stored with another content hash",
+                invocation_id=event.invocation_id,
+            )
+        for candidate in self._event_view.index_candidates():
+            if candidate.event_id == event.event_id:
+                return self._failures.conflict(
+                    f"event {event.event_id} is already stored at sequence "
+                    f"{candidate.sequence} of invocation {candidate.invocation_id}",
+                    invocation_id=event.invocation_id,
+                )
+        self._event_view.put(key, event)
+        return Success[RunEvent](outcome="SUCCESS", value=event)
+
+    def list_events(self, invocation_id: str) -> Result[tuple[RunEvent, ...]]:
+        """Every stored event of the invocation, sequence-ordered."""
+        matching = sorted(
+            (
+                record
+                for record in self._event_view.values()
+                if record.invocation_id == invocation_id
+            ),
+            key=lambda record: record.sequence,
+        )
+        return Success[tuple[RunEvent, ...]](outcome="SUCCESS", value=tuple(matching))
 
 
 class InMemoryRetryDecisionRepository:
@@ -1264,6 +1317,11 @@ def _open_invocation_index_key(record: CommandInvocationRecord) -> object | None
     return (record.run_id, record.command_kind)
 
 
+def _event_id_index_key(record: RunEvent) -> str:
+    """Stage 6 plan 7.5: one ``event_id`` under one ``(invocation_id, sequence)``."""
+    return record.event_id
+
+
 class _Bound:
     """The six repositories of one active transaction."""
 
@@ -1272,6 +1330,7 @@ class _Bound:
     ) -> None:
         self.experiment_view = _View(store.experiments)
         self.run_view = _View(store.engine_runs)
+        self.event_view = _View(store.run_events)
         self.invocation_view = _View(store.command_invocations)
         self.decision_view = _View(store.retry_decisions)
         self.observation_view = _View(store.availability_observations)
@@ -1279,7 +1338,9 @@ class _Bound:
         self.experiments = InMemoryExperimentRepository(
             self.experiment_view, failures, hooks
         )
-        self.engine_runs = InMemoryEngineRunRepository(self.run_view, failures)
+        self.engine_runs = InMemoryEngineRunRepository(
+            self.run_view, self.event_view, failures
+        )
         self.command_invocations = InMemoryCommandInvocationRepository(
             self.invocation_view, failures
         )
@@ -1296,12 +1357,14 @@ class _Bound:
     ) -> tuple[
         _View[str, ExperimentRecord],
         _View[str, EngineRunRecord],
+        _View[tuple[str, int], RunEvent],
         _View[str, CommandInvocationRecord],
         _View[tuple[str, str], RetryDecisionRecord],
     ]:
         return (
             self.experiment_view,
             self.run_view,
+            self.event_view,
             self.invocation_view,
             self.decision_view,
         )
@@ -1405,8 +1468,10 @@ class InMemoryUnitOfWork:
             return _Failures(self._clock).conflict(
                 "a row changed by this transaction moved before commit"
             )
-        if bound.run_view.index_collides(_attempt_index_key) or (
-            bound.invocation_view.index_collides(_open_invocation_index_key)
+        if (
+            bound.run_view.index_collides(_attempt_index_key)
+            or bound.invocation_view.index_collides(_open_invocation_index_key)
+            or bound.event_view.index_collides(_event_id_index_key)
         ):
             self.rollback()
             return _Failures(self._clock).conflict(

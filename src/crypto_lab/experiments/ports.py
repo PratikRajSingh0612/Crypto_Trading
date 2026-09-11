@@ -14,8 +14,11 @@ because a named Stage 5 rule reads it: ``count_attempts``, ``latest_attempt`` an
 ``get_by_attempt_number`` (plan 8.1, 5, 9.2); ``RetryDecisionRepository`` (plan
 8.4); ``RuntimeAvailabilityObservationReader.list_for_adapter`` (plan 8.2 gate 6);
 ``DiagnosticReader.get`` and ``get_many`` (plan 6 unrecognized exit, plan 8.2
-closure). ``EngineRunRepository.append_event`` is deliberately absent: its
-``RunEvent`` parameter is a Stage 6 adapter-protocol contract (plan 1.4).
+closure); ``EngineRunRepository.list_events`` (Stage 6 plan 7.5, the read
+``InvocationEventLedger.from_events`` performs so a restart cannot duplicate an
+accepted event). ``EngineRunRepository.append_event`` is specification 8.2 verbatim;
+Stage 5 plan 1.4 deferred it to the stage that defines its ``RunEvent`` parameter,
+and Stage 6 Task 4 adds both together.
 
 Task-local readings, declared here rather than inferred silently:
 
@@ -57,6 +60,14 @@ Task-local readings, declared here rather than inferred silently:
   unique index of each row the transaction inserted or replaced, so two
   transactions inserting distinct identities that collide on an index cannot
   both publish (specification 23.3).
+- ``append_event`` (Stage 6 plan 7.5) is idempotent when an identical
+  ``(invocation_id, sequence, content_hash)`` already exists -- the stored event is
+  returned and nothing is written -- and is ``PERSISTENCE.CONCURRENCY_CONFLICT`` when
+  the key exists with another ``content_hash`` or the ``event_id`` exists under
+  another key; otherwise it inserts. Whether a conflicting duplicate is a protocol
+  violation is the ledger's classification; the repository only refuses to store
+  two different events under one key. ``list_events`` is sequence-ordered and empty
+  for an invocation without events.
 """
 
 from __future__ import annotations
@@ -65,6 +76,7 @@ from typing import Protocol, runtime_checkable
 
 from pydantic.experimental.missing_sentinel import MISSING
 
+from crypto_lab.adapters.events import RunEvent
 from crypto_lab.adapters.ports import CommandInvocationRepository
 from crypto_lab.domain.base import CanonicalModel
 from crypto_lab.domain.descriptors import RuntimeAvailabilityObservation
@@ -75,6 +87,7 @@ from crypto_lab.domain.identifiers import (
     AvailabilityObservationId,
     DiagnosticId,
     ExperimentId,
+    InvocationId,
     LogicalSlotId,
     NormalizedIdentifier,
     RunId,
@@ -144,6 +157,21 @@ class EngineRunRepository(Protocol):
         attempt_number: int,
     ) -> Result[EngineRunRecord | MISSING]:  # type: ignore[valid-type]
         """The slot's attempt with that number, or ``MISSING`` when it has none."""
+
+    def append_event(self, event: RunEvent) -> Result[RunEvent]:
+        """Specification 8.2 (Stage 6 plan 7.5): store one sanitized event.
+
+        Idempotent when an identical ``(invocation_id, sequence, content_hash)``
+        exists (the stored event is returned, nothing is written);
+        ``PERSISTENCE.CONCURRENCY_CONFLICT`` when the key exists with another
+        ``content_hash`` or the ``event_id`` exists under another key."""
+
+    def list_events(
+        self,
+        invocation_id: InvocationId,
+    ) -> Result[tuple[RunEvent, ...]]:
+        """Every stored event of the invocation, sequence-ordered; empty for an
+        invocation without events (the declared extension of Stage 6 plan 7.5)."""
 
 
 class RetryDecisionInsertOutcome(CanonicalModel):
