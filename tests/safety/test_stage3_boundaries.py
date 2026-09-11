@@ -25,6 +25,7 @@ _ALLOWED_SOURCE_FILES = {
     "adapters/envelopes.py",
     "adapters/events.py",
     "adapters/limits.py",
+    "adapters/manifests.py",
     "adapters/negotiation.py",
     "adapters/paths.py",
     "adapters/ports.py",
@@ -141,8 +142,6 @@ _FORBIDDEN_PATH_ACCESS = {
 _PROHIBITED_OS_ATTRIBUTES = frozenset({"getenv", "environ", "putenv", "unsetenv"})
 _PROHIBITED_CONTROL_LITERAL = "PYDANTIC_DISABLE_PLUGINS"
 _DEFERRED_DEFINITIONS = {
-    "AdapterResultManifest",
-    "AdapterValidationResult",
     "ArtifactFinalizationPurpose",
     "ArtifactFinalizer",
     "ArtifactOwnerKind",
@@ -178,7 +177,6 @@ _DEFERRED_DEFINITIONS = {
     "ResultFinalizationRequest",
     "Result",
     "RunManifest",
-    "SanitizedAdapterResultManifest",
     "ingest_dataset",
     "normalize_dataset",
     "place_order",
@@ -635,12 +633,12 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     `AdapterCommandRequestEnvelope`, `EngineRunRequest` and `AdapterCommand`,
     giving 46; Task 3 released `BootstrapDescriptorEnvelope`,
     `NegotiationResult` and `negotiate_protocol`, giving 43; Task 4 released
-    `ProtocolEventEnvelope` and `RunEvent`, giving 41.
+    `ProtocolEventEnvelope` and `RunEvent`, giving 41; Task 5 released
+    `AdapterValidationResult`, `AdapterResultManifest` and
+    `SanitizedAdapterResultManifest`, giving 38.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 41
+    assert len(_DEFERRED_DEFINITIONS) == 38
     assert _DEFERRED_DEFINITIONS == {
-        "AdapterResultManifest",
-        "AdapterValidationResult",
         "ArtifactFinalizationPurpose",
         "ArtifactFinalizer",
         "ArtifactOwnerKind",
@@ -676,7 +674,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "ResultFinalizationRequest",
         "Result",
         "RunManifest",
-        "SanitizedAdapterResultManifest",
         "ingest_dataset",
         "normalize_dataset",
         "place_order",
@@ -704,7 +701,9 @@ def test_each_normative_deferred_symbol_is_detected_by_the_stage3_guard(
 @pytest.mark.parametrize(
     "name",
     [
-        "AdapterResultManifest",
+        # Stage 6 plan section 2.6: Task 5 released `AdapterResultManifest` and
+        # swapped in a still-deferred name so seven live cases remain.
+        "CandidateArtifact",
         "CandidateArtifactState",
         "CanonicalOrder",
         # Stage 6 plan section 2.6: Task 2 released `EngineRunRequest` and

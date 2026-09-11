@@ -8,7 +8,9 @@ command contract; Task 3 adds the bootstrap descriptor envelope, the core
 protocol support, pure version negotiation, the describe output parse and the
 availability-observation projection; Task 4 adds the protocol events, the
 sanitized run event and its content identity, the staged line parser, the
-invocation event ledger and the raw-token sanitization helpers. Every module in
+invocation event ledger and the raw-token sanitization helpers; Task 5 adds the
+validation result, the adapter result manifest, their byte-level parsers and the
+core-sanitized manifest with its identity. Every module in
 this package imports ``crypto_lab.domain`` and this package alone (specification
 27.1), and none launches a process, reads the filesystem, the environment or an
 ambient clock.
@@ -79,6 +81,24 @@ from crypto_lab.adapters.limits import (
     RESULT_MANIFEST_RELATIVE_PATH,
     ProtocolLimits,
 )
+from crypto_lab.adapters.manifests import (
+    AdapterResultManifest,
+    AdapterValidationResult,
+    CandidateArtifactDeclaration,
+    CandidateMetric,
+    ManifestParse,
+    OutputHeader,
+    RunProvenance,
+    SanitizedAdapterResultManifest,
+    SanitizedCandidateArtifactDeclaration,
+    ValidationResultParse,
+    parse_result_manifest,
+    parse_validation_result,
+    redact_validation_result,
+    sanitize_result_manifest,
+    sanitized_manifest_hash,
+    validation_result_hash,
+)
 from crypto_lab.adapters.negotiation import (
     CORE_PROTOCOL_SUPPORT,
     BootstrapDescriptorEnvelope,
@@ -133,10 +153,14 @@ __all__ = (
     "AdapterDescriptor",
     "AdapterDiagnostic",
     "AdapterDiagnosticCategory",
+    "AdapterResultManifest",
+    "AdapterValidationResult",
     "ArtifactDeclarationRecord",
     "ArtifactProducedPayload",
     "BootstrapDescriptorEnvelope",
     "BoundedStderrCapture",
+    "CandidateArtifactDeclaration",
+    "CandidateMetric",
     "CommandInvocationRepository",
     "ContaminationSample",
     "CoreProtocolSupport",
@@ -155,11 +179,13 @@ __all__ = (
     "HeartbeatPayload",
     "InvocationEventLedger",
     "LineOutcome",
+    "ManifestParse",
     "MediaType",
     "NegotiatedVersions",
     "NegotiationOutcome",
     "NegotiationResult",
     "OperatingSystem",
+    "OutputHeader",
     "ProgressPayload",
     "ProtocolEventEnvelope",
     "ProtocolEventSummary",
@@ -172,12 +198,16 @@ __all__ = (
     "ResourceObservation",
     "RunConfigurationSnapshot",
     "RunEvent",
+    "RunProvenance",
+    "SanitizedAdapterResultManifest",
+    "SanitizedCandidateArtifactDeclaration",
     "SanitizedEngineRunRequest",
     "SemanticStatus",
     "Stage6DiagnosticPosture",
     "StderrCapture",
     "SupportedSchemaVersion",
     "ValidationOutcome",
+    "ValidationResultParse",
     "WarningPayload",
     "WorkDirectoryReference",
     "argument_array",
@@ -191,16 +221,22 @@ __all__ = (
     "negotiated_versions_of",
     "parse_bootstrap_descriptor",
     "parse_protocol_line",
+    "parse_result_manifest",
+    "parse_validation_result",
     "payload_hash_of",
     "redact_attempt_token",
     "redact_payload",
+    "redact_validation_result",
     "request_envelope_bytes",
     "request_hash_of",
     "request_material_hash",
     "run_event_content_hash",
     "sanitize_engine_run_request",
+    "sanitize_result_manifest",
+    "sanitized_manifest_hash",
     "stage6_diagnostic",
     "stage6_failure",
     "token_present",
     "validate_relative_candidate_path",
+    "validation_result_hash",
 )
