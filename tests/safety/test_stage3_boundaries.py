@@ -24,11 +24,13 @@ _ALLOWED_SOURCE_FILES = {
     "adapters/diagnostics.py",
     "adapters/envelopes.py",
     "adapters/events.py",
+    "adapters/exit_codes.py",
     "adapters/limits.py",
     "adapters/manifests.py",
     "adapters/negotiation.py",
     "adapters/paths.py",
     "adapters/ports.py",
+    "adapters/reconciliation.py",
     "adapters/sanitization.py",
     "adapters/versioning.py",
     "adapters/vocabulary.py",
@@ -158,7 +160,6 @@ _DEFERRED_DEFINITIONS = {
     "CandidateFinalization",
     "CanonicalFill",
     "CanonicalOrder",
-    "CommandResult",
     "ComparisonEligibilityService",
     "ContentHasher",
     "DatasetRepository",
@@ -635,9 +636,10 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     `NegotiationResult` and `negotiate_protocol`, giving 43; Task 4 released
     `ProtocolEventEnvelope` and `RunEvent`, giving 41; Task 5 released
     `AdapterValidationResult`, `AdapterResultManifest` and
-    `SanitizedAdapterResultManifest`, giving 38.
+    `SanitizedAdapterResultManifest`, giving 38; Task 6 released
+    `CommandResult`, giving 37.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 38
+    assert len(_DEFERRED_DEFINITIONS) == 37
     assert _DEFERRED_DEFINITIONS == {
         "ArtifactFinalizationPurpose",
         "ArtifactFinalizer",
@@ -655,7 +657,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "CandidateFinalization",
         "CanonicalFill",
         "CanonicalOrder",
-        "CommandResult",
         "ComparisonEligibilityService",
         "ContentHasher",
         "DatasetRepository",

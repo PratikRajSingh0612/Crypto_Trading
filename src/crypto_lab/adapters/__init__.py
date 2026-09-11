@@ -10,7 +10,9 @@ availability-observation projection; Task 4 adds the protocol events, the
 sanitized run event and its content identity, the staged line parser, the
 invocation event ledger and the raw-token sanitization helpers; Task 5 adds the
 validation result, the adapter result manifest, their byte-level parsers and the
-core-sanitized manifest with its identity. Every module in
+core-sanitized manifest with its identity; Task 6 adds the per-command semantic
+exit table, the three command reconcilers with their verdict, and the transient
+``CommandResult`` projection. Every module in
 this package imports ``crypto_lab.domain`` and this package alone (specification
 27.1), and none launches a process, reads the filesystem, the environment or an
 ambient clock.
@@ -21,7 +23,7 @@ from crypto_lab.adapters.catalog import (
     AdapterCatalogEntry,
     FrozenAdapterCatalog,
 )
-from crypto_lab.adapters.commands import AdapterCommand, argument_array
+from crypto_lab.adapters.commands import AdapterCommand, CommandResult, argument_array
 from crypto_lab.adapters.descriptors import (
     AdapterDescriptor,
     EngineDescriptor,
@@ -75,6 +77,7 @@ from crypto_lab.adapters.events import (
     parse_protocol_line,
     run_event_content_hash,
 )
+from crypto_lab.adapters.exit_codes import SemanticExitReading, semantic_exit_reading
 from crypto_lab.adapters.limits import (
     PROTOCOL_LIMITS_DEFAULT,
     PROTOCOL_VERSION,
@@ -116,6 +119,14 @@ from crypto_lab.adapters.paths import (
     validate_relative_candidate_path,
 )
 from crypto_lab.adapters.ports import CommandInvocationRepository
+from crypto_lab.adapters.reconciliation import (
+    CandidateObservation,
+    ReconciliationRuleViolation,
+    SemanticReconciliation,
+    reconcile_describe,
+    reconcile_run,
+    reconcile_validate,
+)
 from crypto_lab.adapters.sanitization import (
     REDACTION_PLACEHOLDER,
     BoundedStderrCapture,
@@ -161,7 +172,9 @@ __all__ = (
     "BoundedStderrCapture",
     "CandidateArtifactDeclaration",
     "CandidateMetric",
+    "CandidateObservation",
     "CommandInvocationRepository",
+    "CommandResult",
     "ContaminationSample",
     "CoreProtocolSupport",
     "DescribeRequestPayload",
@@ -193,6 +206,7 @@ __all__ = (
     "ProtocolIntegrityStatus",
     "ProtocolLimits",
     "ProtocolWarning",
+    "ReconciliationRuleViolation",
     "ReconciliationVerdict",
     "RelativeCandidatePath",
     "ResourceObservation",
@@ -202,6 +216,8 @@ __all__ = (
     "SanitizedAdapterResultManifest",
     "SanitizedCandidateArtifactDeclaration",
     "SanitizedEngineRunRequest",
+    "SemanticExitReading",
+    "SemanticReconciliation",
     "SemanticStatus",
     "Stage6DiagnosticPosture",
     "StderrCapture",
@@ -224,6 +240,9 @@ __all__ = (
     "parse_result_manifest",
     "parse_validation_result",
     "payload_hash_of",
+    "reconcile_describe",
+    "reconcile_run",
+    "reconcile_validate",
     "redact_attempt_token",
     "redact_payload",
     "redact_validation_result",
@@ -234,6 +253,7 @@ __all__ = (
     "sanitize_engine_run_request",
     "sanitize_result_manifest",
     "sanitized_manifest_hash",
+    "semantic_exit_reading",
     "stage6_diagnostic",
     "stage6_failure",
     "token_present",

@@ -63,6 +63,8 @@ PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab.adapters.events",
     "crypto_lab.adapters.sanitization",
     "crypto_lab.adapters.manifests",
+    "crypto_lab.adapters.exit_codes",
+    "crypto_lab.adapters.reconciliation",
     "crypto_lab.experiments",
     "crypto_lab.experiments.ports",
     "crypto_lab.experiments.requests",
