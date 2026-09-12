@@ -1,4 +1,5 @@
-"""The sixteen public operation requests of Stage 5 (plan section 3.11).
+"""The sixteen public operation requests of Stage 5 (plan section 3.11) and the
+seventeenth, Stage 6 Task 7's ``SemanticOutcomeRequest`` (Stage 6 plan 3.12).
 
 Top-level canonical models carrying ``schema_version``, not published as schemas.
 Each carries stable identity and expected revisions only, exactly one per plan
@@ -8,6 +9,16 @@ caller-built authoritative snapshot, a caller-selected outcome, denial material,
 authoritative terminal fact; every such value is derived by the operation from
 repository reads (plan 3.2 sources **A** and **D**). ``process_exit_category`` is
 never a request field: it is derived from ``native_exit_value`` (plan 6).
+
+Stage 6 Task 7 adds ``SemanticOutcomeRequest`` (Stage 6 plan 3.12, 10): the two
+authoritative identities with their expected revisions plus the supervisor's
+already-parsed adapter material -- the typed parse outcome, the ledger's bounded
+event summary, the caller-observed candidate files, the negotiated versions and the
+parser's rejection diagnostic. It carries no verdict, run target, diagnostic,
+finalization eligibility or re-derivable hash; the operation recomputes each through
+the pure Task 6 reconcilers. It is the one ``experiments`` request whose
+``parsed_output`` may carry the raw attempt token (a trust-class-W manifest), so it
+is transient: never persisted, logged, hashed or rendered (Stage 6 plan 13).
 
 Task-local readings, declared here:
 
@@ -30,7 +41,13 @@ Task-local readings, declared here:
   with the selected slots (omit, duplicate, misorder) is plan 7 check 6 and is
   reported by ``queue_experiment`` as ``CORE.IMMUTABLE_INPUT_MISMATCH``.
 - ``REQUEST_OPERATIONS`` records the one-to-one request-to-operation inventory so
-  a test can assert it at sixteen.
+  a test can assert it at sixteen (seventeen after Stage 6 Task 7).
+- ``SemanticOutcomeRequest.parsed_output`` admits either parse outcome or absence;
+  whether the parse outcome matches the invocation's command kind is an operation
+  rule checked against the loaded invocation, because the request carries no kind.
+  ``candidate_observations`` is bounded at ``MAX_CANDIDATE_OBSERVATIONS`` (the
+  union of event-declared and manifest-declared paths) and unique on
+  ``relative_path``; the reconciler restates the same bound.
 """
 
 from __future__ import annotations
@@ -41,6 +58,11 @@ from typing import Annotated, Final, Literal, Self
 from pydantic import Field, field_validator, model_validator
 from pydantic.experimental.missing_sentinel import MISSING
 
+from crypto_lab.adapters.envelopes import NegotiatedVersions
+from crypto_lab.adapters.events import ProtocolEventSummary
+from crypto_lab.adapters.limits import MAX_CANDIDATE_ARTIFACTS
+from crypto_lab.adapters.manifests import ManifestParse, ValidationResultParse
+from crypto_lab.adapters.reconciliation import CandidateObservation
 from crypto_lab.domain.base import CanonicalModel
 from crypto_lab.domain.command_invocation import (
     MAX_DIAGNOSTIC_IDS,
@@ -49,7 +71,7 @@ from crypto_lab.domain.command_invocation import (
     NativeExitValue,
     ProcessStartFacts,
 )
-from crypto_lab.domain.diagnostics import ErrorCode
+from crypto_lab.domain.diagnostics import Diagnostic, ErrorCode
 from crypto_lab.domain.experiment import (
     MAX_SELECTED_ENGINE_SLOTS,
     ExperimentSpecDraft,
@@ -80,6 +102,10 @@ type Revision = Annotated[int, Field(strict=True, ge=0)]
 type DiagnosticIds = Annotated[
     tuple[DiagnosticId, ...], Field(max_length=MAX_DIAGNOSTIC_IDS)
 ]
+
+#: Stage 6 plan 3.12: the union of event-declared and manifest-declared candidate
+#: paths one semantic-outcome request may carry.
+MAX_CANDIDATE_OBSERVATIONS: Final = 2 * MAX_CANDIDATE_ARTIFACTS
 
 
 def _is_missing(value: object) -> bool:
@@ -298,7 +324,47 @@ class ExperimentAggregationRequest(CanonicalModel):
     expected_revision: Revision
 
 
-#: Plan 3.11: exactly one request per plan 10.1 operation, sixteen each.
+class SemanticOutcomeRequest(CanonicalModel):
+    """Stage 6 plan 3.12 ``apply_command_semantic_outcome`` (Stage 6 Task 7).
+
+    The seventeenth request: the ``EXITED`` invocation and its run with their
+    expected revisions, the typed parse outcome of the command's output file
+    (``MISSING`` when no output file existed; a ``ManifestParse`` only for a ``RUN``,
+    a ``ValidationResultParse`` only for a ``VALIDATE`` -- checked by the operation
+    against the loaded invocation), the ledger's ``ProtocolEventSummary``, the
+    caller-observed candidate files (the union of event-declared and
+    manifest-declared paths, unique on ``relative_path``), the token-free versions
+    the supervisor handed the adapter, and the parser's rejection diagnostic,
+    present exactly when ``CommandResult.protocol_integrity`` is ``VIOLATED``. No
+    verdict, run target, diagnostic, eligibility or hash is caller-selected.
+    """
+
+    schema_version: Literal["1.0.0"]
+    invocation_id: InvocationId
+    expected_invocation_revision: Revision
+    run_id: RunId
+    expected_run_revision: Revision
+    parsed_output: ValidationResultParse | ManifestParse | MISSING = MISSING  # type: ignore[valid-type]
+    protocol_summary: ProtocolEventSummary
+    candidate_observations: tuple[CandidateObservation, ...] = Field(
+        max_length=MAX_CANDIDATE_OBSERVATIONS
+    )
+    negotiated_versions: NegotiatedVersions
+    protocol_failure: Diagnostic | MISSING = MISSING  # type: ignore[valid-type]
+
+    @field_validator("candidate_observations")
+    @classmethod
+    def validate_candidate_observations(
+        cls, value: tuple[CandidateObservation, ...]
+    ) -> tuple[CandidateObservation, ...]:
+        paths = [item.relative_path for item in value]
+        if len(set(paths)) != len(paths):
+            raise ValueError("candidate observations must be unique on relative_path")
+        return value
+
+
+#: Plan 3.11: exactly one request per plan 10.1 operation, sixteen each, plus the
+#: seventeenth of Stage 6 plan 3.12, appended last.
 REQUEST_OPERATIONS: Final[Mapping[type[CanonicalModel], str]] = {
     ExperimentCreationRequest: "create_experiment",
     ExperimentSpecReplacementRequest: "replace_experiment_spec",
@@ -316,4 +382,5 @@ REQUEST_OPERATIONS: Final[Mapping[type[CanonicalModel], str]] = {
     RetryEvaluationRequest: "evaluate_retry",
     SuccessorCreationRequest: "create_successor",
     ExperimentAggregationRequest: "aggregate_experiment",
+    SemanticOutcomeRequest: "apply_command_semantic_outcome",
 }

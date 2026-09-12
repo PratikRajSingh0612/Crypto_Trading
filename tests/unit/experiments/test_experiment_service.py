@@ -67,6 +67,7 @@ from crypto_lab.experiments.requests import (
     LinkedStartRequest,
     RetryEvaluationRequest,
     RunTransitionRequest,
+    SemanticOutcomeRequest,
     SuccessorCreationRequest,
 )
 from doubles.experiments import (
@@ -188,7 +189,8 @@ def _replacement(
 
 
 # --------------------------------------------------------------------------
-# The sixteen requests (plan section 3.11)
+# The sixteen requests (plan section 3.11) and the seventeenth, Stage 6 Task 7's
+# `SemanticOutcomeRequest` (Stage 6 plan sections 2.6 and 3.12)
 # --------------------------------------------------------------------------
 
 
@@ -209,6 +211,7 @@ _OPERATION_NAMES = (
     "evaluate_retry",
     "create_successor",
     "aggregate_experiment",
+    "apply_command_semantic_outcome",
 )
 _FIELD_ORDERS: dict[type[CanonicalModel], tuple[str, ...]] = {
     ExperimentCreationRequest: ("spec_draft", "material_base_configuration_hash"),
@@ -302,6 +305,17 @@ _FIELD_ORDERS: dict[type[CanonicalModel], tuple[str, ...]] = {
         "request_hash",
     ),
     ExperimentAggregationRequest: ("experiment_id", "expected_revision"),
+    SemanticOutcomeRequest: (
+        "invocation_id",
+        "expected_invocation_revision",
+        "run_id",
+        "expected_run_revision",
+        "parsed_output",
+        "protocol_summary",
+        "candidate_observations",
+        "negotiated_versions",
+        "protocol_failure",
+    ),
 }
 #: Plan section 3.11's closing sentence, as field names no request may carry.
 _AUTHORITATIVE_FIELD_NAMES = frozenset(
@@ -431,10 +445,12 @@ def _sample_requests() -> tuple[CanonicalModel, ...]:
 
 
 def test_the_request_inventory_is_one_to_one_with_the_sixteen_operations() -> None:
-    assert len(REQUEST_OPERATIONS) == 16
+    # The test name is historical: Stage 6 Task 7 adds the seventeenth request,
+    # `SemanticOutcomeRequest` -> `apply_command_semantic_outcome` (plan 2.6, 3.12).
+    assert len(REQUEST_OPERATIONS) == 17
     assert set(REQUEST_OPERATIONS) == set(_FIELD_ORDERS)
     assert tuple(REQUEST_OPERATIONS.values()) == _OPERATION_NAMES
-    assert len(set(REQUEST_OPERATIONS.values())) == 16
+    assert len(set(REQUEST_OPERATIONS.values())) == 17
     for request_type in REQUEST_OPERATIONS:
         assert issubclass(request_type, CanonicalModel)
         assert request_type.__module__ == "crypto_lab.experiments.requests"

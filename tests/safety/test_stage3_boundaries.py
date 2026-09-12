@@ -86,6 +86,7 @@ _ALLOWED_SOURCE_FILES = {
     "experiments/requests.py",
     "experiments/retry.py",
     "experiments/run_service.py",
+    "experiments/semantic_outcome.py",
     "persistence/__init__.py",
     "process_supervision/__init__.py",
     "schema_registry.py",

@@ -74,6 +74,7 @@ PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab.experiments.invocation_service",
     "crypto_lab.experiments.retry",
     "crypto_lab.experiments.aggregation",
+    "crypto_lab.experiments.semantic_outcome",
     "crypto_lab.datasets",
     "crypto_lab.datasets.models",
     "crypto_lab.datasets.hashing",

@@ -9,8 +9,12 @@ idempotent ``create_successor`` with its scheduler-eligibility predicate; Task 8
 (plan sections 9.2, 9.4 and 9.5) adds ``build_aggregation_input`` and
 ``aggregate_experiment``, the selected-slot terminal aggregation committed through
 the experiment-revision compare-and-swap, with its two verdict-state mappings.
-Concrete port implementations live in Stage 8's ``persistence`` package; Stage 5
-exercises the ports through test-resident doubles only.
+Stage 6 Task 7 (Stage 6 plan sections 3.12 and 10) adds the seventeenth request,
+``SemanticOutcomeRequest``, the ``SemanticOutcome`` projection and
+``apply_command_semantic_outcome``, the one operation that applies a Task 6
+reconciliation to the run and invocation records through the same ports. Concrete
+port implementations live in Stage 8's ``persistence`` package; Stages 5 and 6
+exercise the ports through test-resident doubles only.
 """
 
 from crypto_lab.experiments.aggregation import (
@@ -79,6 +83,7 @@ from crypto_lab.experiments.requests import (
     LinkedStartRequest,
     RetryEvaluationRequest,
     RunTransitionRequest,
+    SemanticOutcomeRequest,
     SuccessorCreationRequest,
 )
 from crypto_lab.experiments.retry import (
@@ -97,6 +102,10 @@ from crypto_lab.experiments.run_service import (
     run_replacement,
     run_rule_failure,
     transition_run,
+)
+from crypto_lab.experiments.semantic_outcome import (
+    SemanticOutcome,
+    apply_command_semantic_outcome,
 )
 
 __all__ = (
@@ -142,9 +151,12 @@ __all__ = (
     "RetryEvaluationRequest",
     "RunTransitionRequest",
     "RuntimeAvailabilityObservationReader",
+    "SemanticOutcome",
+    "SemanticOutcomeRequest",
     "SuccessorCreationRequest",
     "UnitOfWork",
     "aggregate_experiment",
+    "apply_command_semantic_outcome",
     "begin_linked_launch",
     "build_aggregation_input",
     "build_retry_evaluation_snapshot",
