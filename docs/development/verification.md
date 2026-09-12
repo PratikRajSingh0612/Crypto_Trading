@@ -90,7 +90,7 @@ The script stops at the first failure and runs, in order:
 10. direct `git diff --check`
 
 A successful partial command does not establish repository acceptance. Schema
-generation checks the closed 27-file registry without writing; distribution
+generation checks the closed 35-file registry without writing; distribution
 verification byte-compares the reviewed source schemas with their sole wheel
 and sdist locations.
 
@@ -128,7 +128,7 @@ Stage 5's focused targets are the following. `tests\unit\experiments`,
 Stage 5 modules under `tests\unit\domain` and `tests\property` are new in Stage 5;
 `tests\unit\test_schema_registry.py`, `tests\integration`, `tests\architecture`
 and `tests\safety` are older modules whose contract Stage 5 widened from twenty
-schemas to the final registry count of 27 and extended with the `experiments`
+schemas to 27 and extended with the `experiments`
 and `adapters` package boundaries.
 
 ```powershell
@@ -136,6 +136,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pyte
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\domain tests\unit\configuration -q
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\property tests\architecture tests\safety tests\integration -q
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\safety\test_stage5_boundaries.py -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\test_schema_registry.py -q
+```
+
+Stage 6's focused targets are the following. `tests\unit\adapters`,
+`tests\contract` (the offline harness and the 52-row contract matrix over the
+executable fake adapters under `tests\fake_adapters`),
+`tests\integration\adapters` and `tests\safety\test_stage6_boundaries.py` are
+new in Stage 6; `tests\unit\test_schema_registry.py`, `tests\integration`,
+`tests\architecture` and `tests\safety` are older modules whose contract Stage 6
+widened from 27 schemas to the final registry count of 35 and extended with the
+Stage 6 boundary guard.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\adapters -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\contract -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\safety\test_stage6_boundaries.py -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\integration -q
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\test_schema_registry.py -q
 ```
 
@@ -160,7 +177,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 sche
 
 `--write` is an intentional source update reviewed in the schema task. The
 operator must supply the reviewed repository `schemas` root explicitly; the
-generator targets only the 27 fixed lexical descendants, rejects an existing
+generator targets only the 35 fixed lexical descendants, rejects an existing
 symlink root or entry, and refuses every unexpected file without deleting it.
 Stage 7 retains physical ancestor reparse-point and volume containment. The
 `--check` mode writes nothing and fails on a missing, changed, or unexpected
@@ -169,11 +186,11 @@ schema. The distribution check requires one wheel copy under
 to the reviewed source, and rejects every unexpected payload beneath either
 schema prefix.
 
-### The closed 27-file registry
+### The closed 35-file registry
 
 `SCHEMA_DEFINITIONS` holds the eleven Stage 3 entries first, in their original
-order, then the nine Stage 4 entries, then the seven Stage 5 entries, in this
-order:
+order, then the nine Stage 4 entries, then the seven Stage 5 entries, then the
+eight Stage 6 protocol entries, in this order:
 
 | # | Path | `$id` |
 |---|---|---|
@@ -193,6 +210,14 @@ order:
 | 25 | `schemas/experiments/retry-policy-v1.schema.json` | `urn:crypto-lab:schema:experiments:retry-policy:1.0.0` |
 | 26 | `schemas/experiments/retry-decision-record-v1.schema.json` | `urn:crypto-lab:schema:experiments:retry-decision-record:1.0.0` |
 | 27 | `schemas/experiments/experiment-aggregation-result-v1.schema.json` | `urn:crypto-lab:schema:experiments:experiment-aggregation-result:1.0.0` |
+| 28 | `schemas/protocol/bootstrap-descriptor-envelope-v1.schema.json` | `urn:crypto-lab:schema:protocol:bootstrap-descriptor-envelope:1.0.0` |
+| 29 | `schemas/protocol/negotiation-result-v1.schema.json` | `urn:crypto-lab:schema:protocol:negotiation-result:1.0.0` |
+| 30 | `schemas/protocol/adapter-command-request-envelope-v1.schema.json` | `urn:crypto-lab:schema:protocol:adapter-command-request-envelope:1.0.0` |
+| 31 | `schemas/protocol/protocol-event-envelope-v1.schema.json` | `urn:crypto-lab:schema:protocol:protocol-event-envelope:1.0.0` |
+| 32 | `schemas/protocol/run-event-v1.schema.json` | `urn:crypto-lab:schema:protocol:run-event:1.0.0` |
+| 33 | `schemas/protocol/adapter-validation-result-v1.schema.json` | `urn:crypto-lab:schema:protocol:adapter-validation-result:1.0.0` |
+| 34 | `schemas/protocol/adapter-result-manifest-v1.schema.json` | `urn:crypto-lab:schema:protocol:adapter-result-manifest:1.0.0` |
+| 35 | `schemas/protocol/sanitized-adapter-result-manifest-v1.schema.json` | `urn:crypto-lab:schema:protocol:sanitized-adapter-result-manifest:1.0.0` |
 
 Existing entries are never reordered and a published `$id` is never reused: the
 registry order is the generation order and the identifier is a permanent
@@ -233,6 +258,22 @@ the Stage 5 paths. Registering seven entries changed none of the twenty publishe
 byte sequences, which is what makes the Stage 1 relocations of `RetryTerminalState`
 and `CompatibilityOutcome` verifiably byte-neutral.
 
+**The seven Stage 5 schemas are frozen in the same way, and Stage 6 leaves all
+twenty-seven earlier files byte-identical.** The `_STAGE3_SHA256`,
+`_STAGE4_SHA256` and `_STAGE5_SHA256` blocks in
+`tests/unit/test_schema_registry.py` are re-verified against both the live
+render and the committed files in the Stage 6 tree, the eight new files are
+pinned alongside them in `_STAGE6_SHA256`, keyed on the eight known relative
+paths, and the three earlier digest blocks are asserted disjoint from the
+Stage 6 paths. Registering eight entries changed none of the twenty-seven
+published byte sequences. Three of the eight are temporary token-bearing wire
+contracts (`adapter-command-request-envelope` through its run payload,
+`protocol-event-envelope` and `adapter-result-manifest`): they describe what an
+adapter reads or writes, are trust class W and are never persisted; `run-event`
+and `sanitized-adapter-result-manifest` are the core-preserved forms and carry
+only `attempt_token_hash`; `bootstrap-descriptor-envelope`,
+`negotiation-result` and `adapter-validation-result` are token-free by contract.
+
 ### Stage 4 timestamp projections
 
 Every timestamp field reachable from the published Stage 4 schema graph uses the
@@ -272,6 +313,24 @@ and a naive instant against the committed bytes. The Stage 5 records, requests
 and the retry decision are stamped only from the injected `Clock`; no Stage 5
 module reads a wall clock, which `tests/safety/test_stage5_boundaries.py`
 enforces statically.
+
+### Stage 6 timestamp projections
+
+Every timestamp field reachable from the eight Stage 6 schemas --
+`created_at_utc` and `deadline_utc` on the request envelope and `created_at_utc`
+on its run payload, `timestamp_utc` on the event envelope, `timestamp_utc` and
+`received_at_utc` on the sanitized `RunEvent`, `validated_at_utc` on the
+validation result, and `started_at_utc` and `completed_at_utc` on both
+manifests -- uses the same calendar- and clock-valid forward view as Stages 4
+and 5, rendered byte-identically in every file that carries it. The registry
+half of `test_every_published_stage_four_timestamp_uses_the_forward_view` covers
+the eight entries without modification; the bootstrap envelope and the
+negotiation result carry no timestamp. The Stage 6 contract tests reject
+`2026-02-30T00:00:00Z`, `2026-01-01T24:00:00Z`, `2026-04-31T00:00:00Z` and a
+naive instant against the committed bytes. Every Stage 6 instant is stamped
+from the injected `Clock`; no Stage 6 module reads a wall clock, which
+`tests/safety/test_stage6_boundaries.py` enforces statically over the fourteen
+Stage 6 modules.
 
 ### The published expression dispatcher
 
@@ -525,6 +584,97 @@ over-rejection or widen unnoticed. The register:
   admits a non-positive `starting_balance` that the enclosing record rejects;
   the released `domain/money-v1` bytes are frozen.
 
+### Runtime rules the Stage 6 schemas cannot express
+
+The eight Stage 6 schemas publish every closed enumeration member by member
+(`SemanticStatus`, `ValidationOutcome`, `ProtocolEventType`,
+`NegotiationOutcome`, `AdapterDiagnosticCategory`, `CommandKind`,
+`DiagnosticSeverity`, `ComparisonLevel`, `OperatingSystem` and, through the
+request envelope's configuration snapshot, `SlippageModel`,
+`SignalToOrderTiming`, `BarOrderPriority` and `FillConvention`), every numeric
+bound (`sequence` 1..1000000, `attempt_number` 1..5, `timeout_seconds`
+1..604800 with the per-command maxima 300, 1800 and 604800, the protocol limit
+floors and ceilings, the 53-bit counters and sizes), every collection bound and
+whole-value `uniqueItems` (forty positions: thirty-six exact and four
+key-based partial tightenings recorded below), every identifier prefix
+and SHA-256 shape, the reserved-device-stem and trailing-dot rules of the
+relative candidate path grammar, the adapter-namespace prefix of every
+`error_code` and `warning_code`, every required field set in declaration order
+and `additionalProperties: false` on every object.
+`tests/unit/test_schema_registry.py` asserts each against the committed bytes
+with accepting baselines the runtime itself produced: 33 documents built through
+the committed builders and parsers and 21 captured from the fake adapters' own
+outputs of the first three contract rows (the describe output, the request
+envelope files, the raw stdout lines, the stored `RunEvent`s, the validation
+output, the manifest file and the reconciled sanitized manifest), 54 in all,
+each round-tripping through the schema and the runtime.
+
+The cross-field rules Draft 2020-12 can express are published as shallow
+`if`/`then` clauses and are therefore exact in both directions: the
+`NEGOTIATED`/`FAILED` biconditionals over `outcome` (selected values present
+exactly when negotiated, at least one reason code exactly when failed); the
+command-to-payload pairing and the per-command `timeout_seconds` maximum on the
+request envelope; the event-type-to-payload pairing on both the wire envelope
+and the sanitized `RunEvent`; `value_status` `DEFINED` exactly when `value` is
+present; `SUCCEEDED` with no warning, `SUCCEEDED_WITH_WARNINGS` with at least
+one, and every non-success status with at least one diagnostic and no candidate
+on both manifests; a non-`VALID` validation outcome with at least one
+diagnostic; and `ResourceObservation` with at least one field present. The
+exact five negotiable schema names by position are published as `prefixItems`.
+
+What stays runtime-only is pinned in the other direction by
+`test_the_stage_six_runtime_only_rules_stay_one_directional`: 28 documents that
+the published bytes accept and the runtime rejects, so the published bytes
+remain a superset of the runtime and a residual cannot silently invert into an
+over-rejection or widen unnoticed. The register:
+
+- hash recomputation, inexpressible: `descriptor_payload_hash`,
+  `payload_hash`, `request_hash`, `content_hash`, `result_hash` and
+  `sanitized_adapter_result_manifest_hash`; `wire_event_hash` is provenance the
+  runtime does not recompute and is deliberately not a residual;
+- comparisons between two values of one document: the bootstrap header
+  mirroring its nested descriptor and the descriptor's vocabulary being among
+  the declared vocabularies; a selected protocol version being a candidate;
+  `payload.request_id == request_id`, `comparison_level ==
+  configuration_snapshot.comparison_level` and `deadline_utc == created_at_utc
+  + timeout_seconds` on the request envelope; `total_units >= completed_units`;
+  `completed_at_utc >= started_at_utc`; and `candidate_artifact_ids` equal to
+  the declaration identities;
+- the missing-heartbeat threshold at least twice the heartbeat interval, the
+  positive `starting_balance` on the shared released `Money` schema, and
+  `ProgressPayload.percentage <= 100` on a decimal string;
+- sortedness of collections whose element domains are unbounded or numeric:
+  `approximations`, `causal_event_ids`, `reason_codes`, and the numerically
+  sorted version tuples of the bootstrap envelope, the negotiation result and
+  the describe payload's `core_supported_protocol_versions` on the request
+  envelope (lexically sorted strings pass the bytes);
+- uniqueness of declarations on `relative_path` and of metrics on
+  `metric_name`, published as whole-value `uniqueItems`, a sound partial
+  tightening; and
+- the recursive `DiagnosticDetailValue`: the published bytes bound each level
+  (64 keys or items, 2048-character strings, 64-bit integers) and the runtime
+  additionally bounds the total depth and node count.
+
+Declared readings recorded with the register: `NegotiationResult.reason_codes`
+is the deviation from specification 11.3's field name `diagnostics`; the
+`RUN_EVENT_CONTENT_V1` hashing profile excludes `received_at_utc` and
+`wire_event_hash`, which is what makes the replay rule satisfiable; the
+canonical value forms an adapter must emit for the stdlib-reproducible hashes
+are the canonical JSON rules; adapter diagnostics are cited from core
+diagnostics through `details`, not `causal_diagnostic_ids`; the describe member
+of `CommandResult.parsed_output` is the bootstrap envelope, not the bare
+descriptor; and `list_events` is a declared port extension.
+
+Schema tractability is measured on the committed bytes in a bounded child
+process over a 31-document matrix (every dispatch branch, the wrong branch and
+an unknown discriminator on the three dispatching schemas, the recursive
+detail value at depth eight and breadth 64 with an invalid leaf at the deepest
+point, and both manifests at their widest bounded breadth with an invalid
+value at the deepest position): every verdict is the expected one under a
+coarse hang ceiling, and the cost per byte stays linear. The measurements are
+recorded in the stage ledger; re-derive rather than cite them if a later stage
+changes a published Stage 6 record.
+
 ## Explicit configuration
 
 Configuration sources are compiled defaults, an explicitly named primary TOML
@@ -554,13 +704,15 @@ and outside product, test, build, runtime, verification, and acceptance paths.
 
 ## Stage scope
 
-Project 1 Stage 5 is complete. Stage 5 implementation completed at
-`71ab94d8e9e13d6895cef9346ed58a711c8819f3`; the seven Stage 5 schemas, the
-closed 27-schema registry, the Stage 5 architecture and safety guards, the
-end-to-end in-memory flow, and this status were added by the separate Task 9
-commit, which is not the implementation hash. The closed 27-schema registry
-holds the seven new Stage 5 schemas together with the twenty Stage 3 and
-Stage 4 schemas, preserved byte-identical to `main`. Stage 6 is not started.
+Project 1 Stage 6 is complete. Stage 6 implementation completed at
+`539e96bbba4cad0747dba5dc12ea3d74318d1c83`; the eight Stage 6 protocol
+schemas, the closed 35-schema registry, the Stage 6 boundary guard, the
+end-to-end protocol flow, and this status were added by the separate Task 9
+commit, which is not the implementation hash. The fake adapters run only
+through the test-resident harness, never through a production supervisor.
+The closed 35-schema registry holds the eight new Stage 6 schemas together
+with the twenty-seven Stage 3, 4 and 5 schemas, preserved byte-identical to
+`main`. Stage 7 is not started.
 
 The independent sweeps agree on the falsifiable results: zero
 over-rejections, and zero disagreement between the four schema surfaces.
@@ -588,3 +740,14 @@ Its retry decisions and aggregation verdicts are deterministic functions of
 recorded facts and the injected clock, never of a wall clock or a random source,
 and `tests/safety/test_stage5_boundaries.py` enforces every one of those
 exclusions statically over the source tree.
+
+Stage 6 launches only the executable fake adapters, as child processes of the
+test-resident offline harness and never through a production supervisor; it
+opens no database, contacts no network, persists nothing outside in-memory
+test doubles, treats every adapter output as untrusted until reconciled,
+redacts every raw attempt token before a core record exists, and commits no
+success run state. `tests/safety/test_stage6_boundaries.py` enforces the
+fourteen Stage 6 modules' exclusions statically, pins the exact four classes
+that may carry a raw-token field, the ten `subprocess` importers and the
+no-shell rule over the whole test tree, and records the roadmap's Stage 6
+completion.

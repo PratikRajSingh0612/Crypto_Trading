@@ -1,10 +1,10 @@
 # Crypto Trading Lab
 
-**Status:** Project 1 Stages 1-5 complete
+**Status:** Project 1 Stages 1-6 complete
 
-Crypto Trading Lab is a personal, local-only Windows project for building an engine-neutral research and simulated-trading foundation. Stage 1 supplies the Python scaffold and offline workflow; Stage 2 records GitNexus as `DISABLED_WITH_EVIDENCE`; Stage 3 completes the strict canonical-value, explicit-configuration, deterministic-hashing, dataset-metadata, structural-descriptor, artifact-ownership, and generated-schema foundation; Stage 4 adds portable strategy specification, static validation, a deterministic reference feature evaluator, strategy versioning and hashing, the capability vocabulary and compatibility resolver, and the comparison-eligibility predicate; Stage 5 adds the experiment, engine-run, and command-invocation lifecycles with closed transition tables, queue-time immutability, revision compare-and-swap, the immutable six-gate retry decision with durable delay, deterministic terminal aggregation, and application-owned repository ports exercised through in-memory doubles. None of these stages adds an engine, an exchange connection, or a runtime service.
+Crypto Trading Lab is a personal, local-only Windows project for building an engine-neutral research and simulated-trading foundation. Stage 1 supplies the Python scaffold and offline workflow; Stage 2 records GitNexus as `DISABLED_WITH_EVIDENCE`; Stage 3 completes the strict canonical-value, explicit-configuration, deterministic-hashing, dataset-metadata, structural-descriptor, artifact-ownership, and generated-schema foundation; Stage 4 adds portable strategy specification, static validation, a deterministic reference feature evaluator, strategy versioning and hashing, the capability vocabulary and compatibility resolver, and the comparison-eligibility predicate; Stage 5 adds the experiment, engine-run, and command-invocation lifecycles with closed transition tables, queue-time immutability, revision compare-and-swap, the immutable six-gate retry decision with durable delay, deterministic terminal aggregation, and application-owned repository ports exercised through in-memory doubles; Stage 6 adds the adapter protocol: explicit adapter catalog contracts, bootstrap descriptors and negotiation, command-discriminated request envelopes, invocation-scoped stdout events, validation results, adapter result manifests reconciled into core-sanitized manifests, stable exit mappings, raw-token redaction, and executable fake adapters exercised through a test-resident offline harness. None of these stages adds an engine, an exchange connection, or a runtime service.
 
-Project 1 Stage 5 is complete. Experiment, engine-run, and command-invocation lifecycles, queue-time immutability, revision compare-and-swap, the immutable six-gate retry decision with durable delay and successor creation, deterministic terminal aggregation, and application-owned repository and unit-of-work ports exercised through in-memory doubles are implemented. Stage 5 implementation completed at `71ab94d8e9e13d6895cef9346ed58a711c8819f3`; the seven Stage 5 schemas, the reviewed 27-schema registry, the Stage 5 architecture and safety guards, the end-to-end in-memory flow, and this status were added by the separate Task 9 commit, which is not the implementation hash. Stage 6 has not started.
+Project 1 Stage 6 is complete. Explicit adapter catalog contracts, bootstrap descriptors and protocol negotiation, command-discriminated request envelopes, invocation-scoped stdout events with sequence, replay, and identity rules, validation results, untrusted adapter result manifests reconciled into core-sanitized manifests, stable exit mappings, raw-token redaction, and executable fake adapters covering the contract matrix are implemented. Stage 6 implementation completed at `539e96bbba4cad0747dba5dc12ea3d74318d1c83`; the eight Stage 6 protocol schemas, the closed 35-schema registry, the Stage 6 boundary guard, the end-to-end protocol flow, and this status were added by the separate Task 9 commit, which is not the implementation hash. The fake adapters run only through the test-resident harness, never through a production supervisor. Stage 7 has not started.
 
 ## Planned future engine adapters
 
@@ -36,6 +36,8 @@ Project 1 contains no real trading engine, Binance integration, market-data down
 Stage 4 adds none of them. It declares strategies, capabilities, and comparison eligibility as data and validates them; it executes no engine, no adapter, no strategy, and no declared engine extension, places no order, simulates no fill, keeps no portfolio account, persists nothing, and combines no comparison result into an averaged, voted, or synthetic figure.
 
 Stage 5 adds none of them either. It records experiment, engine-run, and command-invocation lifecycles, retry decisions, and aggregation verdicts as strict data over in-memory test doubles; it launches no process, executes no adapter or engine, opens no database or file, contacts no network, and derives every decision from recorded facts and an injected clock rather than from a wall clock or a random source.
+
+Stage 6 adds none of them either. It defines the adapter protocol as strict data and exercises it only through executable fake adapters launched by a test-resident harness: no real engine or adapter, no production process supervision, no shell invocation, no network or credentials, no database, no final artifact registration, and no success run state; every adapter output is untrusted until reconciled, and every raw attempt token is redacted before any core record exists.
 
 ## Prerequisites
 
@@ -87,9 +89,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 sche
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 schema-generate-check
 ```
 
-The registry is closed at **27** schemas: the eleven Stage 3 files, which
-Stages 4 and 5 leave byte-identical, followed by the nine Stage 4 files below,
-which Stage 5 also leaves byte-identical.
+The registry is closed at **35** schemas: the eleven Stage 3 files, which
+Stages 4, 5 and 6 leave byte-identical, followed by the nine Stage 4 files
+below, which Stages 5 and 6 also leave byte-identical.
 
 ```text
 schemas/strategy/strategy-spec-v1.schema.json
@@ -115,14 +117,34 @@ schemas/experiments/retry-decision-record-v1.schema.json
 schemas/experiments/experiment-aggregation-result-v1.schema.json
 ```
 
+The eight Stage 6 protocol files follow them, in registry order; Stage 6
+leaves the twenty-seven earlier files byte-identical:
+
+```text
+schemas/protocol/bootstrap-descriptor-envelope-v1.schema.json
+schemas/protocol/negotiation-result-v1.schema.json
+schemas/protocol/adapter-command-request-envelope-v1.schema.json
+schemas/protocol/protocol-event-envelope-v1.schema.json
+schemas/protocol/run-event-v1.schema.json
+schemas/protocol/adapter-validation-result-v1.schema.json
+schemas/protocol/adapter-result-manifest-v1.schema.json
+schemas/protocol/sanitized-adapter-result-manifest-v1.schema.json
+```
+
+Three of the eight describe temporary adapter-facing wire records that
+carry the raw attempt token (the request envelope through its run payload,
+the protocol event envelope, and the adapter result manifest); they are
+never persisted. The sanitized `RunEvent` and the sanitized manifest are
+the core-preserved forms and carry only the token's hash.
+
 Generated schemas are reviewed canonical source artifacts, not incidental
 build output: every byte is read before it is committed, and a published `$id`
-is a permanent contract. The complete verifier checks that exactly those 27
+is a permanent contract. The complete verifier checks that exactly those 35
 schemas are packaged once in the wheel and once in the sdist with identical
 bytes.
 
-Every timestamp field reachable from the published Stage 4 and Stage 5 schema
-graphs uses the calendar- and clock-valid forward schema view, so an impossible
+Every timestamp field reachable from the published Stage 4, Stage 5 and Stage 6
+schema graphs uses the calendar- and clock-valid forward schema view, so an impossible
 instant such as `2026-02-30T00:00:00Z`, `2026-01-01T24:00:00Z`,
 `2026-01-01T00:60:00Z`, or `2026-01-01T00:00:60Z` is rejected by the published
 schema as well as by the runtime. The three released Stage 3 `$id`s keep their

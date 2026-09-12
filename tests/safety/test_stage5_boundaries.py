@@ -56,6 +56,7 @@ from typing import Final
 import pytest
 from test_stage3_boundaries import (
     _ALLOWED_SOURCE_FILES,
+    _README_STAGE6_STATUS,
     _environment_access_violations,
     _import_aliases,
     _imported_roots,
@@ -123,7 +124,9 @@ _STAGE5_PLAN: Final = (
 )
 _ROADMAP: Final = "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
 _VERIFICATION_GUIDE: Final = "docs/development/verification.md"
-#: The roadmap's Stage 6 row, which Stage 5 completion leaves exactly as it was.
+#: The roadmap's deferred Stage 6 row, which Stage 5 completion left exactly as it
+#: was and which Stage 6 completion retired (Stage 6 plan section 2.6); its
+#: completion successor is pinned by ``tests/safety/test_stage6_boundaries.py``.
 _STAGE6_ROADMAP_ROW: Final = (
     "| 6 — Adapter Protocol and Fake-Adapter Contract Harness | Intentionally "
     "deferred until Stages 3 and 5 completion | Not started | Not evaluated |"
@@ -460,22 +463,27 @@ def test_the_roadmap_records_stage_five_approved_and_stage_six_not_started(
 
     Section 2.7 is the single authority for every edit to a Stage 1-4 test file,
     so the untabulated pins live here, in the Task 9-owned guard: the roadmap's
-    Stage 5 plan line agrees with its own "Stages 1 through 5 have approved
-    detailed implementation plans" sentence; the Stage 6 row is still "Not started
-    | Not evaluated"; README no longer calls Stage 5 pending and claims no later
-    stage (the verification guide legitimately records Stage 7 and Stage 9
-    deferrals of frozen residuals, so only its Stage 5 pending phrase is denied).
+    Stage 5 plan line is the approved form; the deferred Stage 6 row is gone
+    (Stage 6 plan section 2.6: the positive became this negative, and the Stage 6
+    completion row and the Stage 7 deferred row are pinned by the Stage 6 guard);
+    README no longer calls Stage 5 pending and, outside its pinned Stage 6 status
+    block, claims no stage later than Stage 7 (the Stage 7 containment itself is
+    the Stage 3 guard's; the verification guide legitimately records Stage 7 and
+    Stage 9 deferrals of frozen residuals, so only its Stage 5 pending phrase is
+    denied here).
     """
     roadmap = (repository_root / _ROADMAP).read_text(encoding="utf-8")
     readme = (repository_root / "README.md").read_text(encoding="utf-8")
     guide = (repository_root / _VERIFICATION_GUIDE).read_text(encoding="utf-8")
     assert f"**Approved detailed implementation plan:** `{_STAGE5_PLAN}`." in roadmap
     assert f"**Planned detailed implementation plan:** `{_STAGE5_PLAN}`." not in roadmap
-    assert _STAGE6_ROADMAP_ROW in roadmap
+    assert _STAGE6_ROADMAP_ROW not in roadmap
     assert "Stage 5 has not started" not in readme
     assert "Stage 5 is not started" not in guide
-    for later in ("Stage 7", "Stage 8", "Stage 9", "Stage 10"):
-        assert later not in readme
+    assert _README_STAGE6_STATUS in readme
+    readme_rest = readme.replace(_README_STAGE6_STATUS, "")
+    for later in ("Stage 8", "Stage 9", "Stage 10"):
+        assert later not in readme_rest
 
 
 # --------------------------------------------------------------------------

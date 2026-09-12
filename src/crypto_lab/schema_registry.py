@@ -1,10 +1,14 @@
-"""Closed deterministic registry for the Stage 3, Stage 4 and Stage 5 JSON Schemas.
+"""Closed deterministic registry for the Stage 3 to Stage 6 JSON Schemas.
 
 The eleven Stage 3 entries come first, in their original order, followed by the
-nine Stage 4 strategy and capability entries and then the seven Stage 5
-experiment, run, invocation, retry and aggregation entries (Stage 5 plan Task 9).
-Existing entries are never reordered: the order is the generation order, and a
-published `$id` is a permanent contract.
+nine Stage 4 strategy and capability entries, the seven Stage 5 experiment, run,
+invocation, retry and aggregation entries (Stage 5 plan Task 9) and then the
+eight Stage 6 protocol entries at positions 27-34 (Stage 6 plan Task 9, section
+12.1): the bootstrap descriptor envelope, the negotiation result, the
+command-discriminated request envelope, the wire event envelope, the sanitized
+`RunEvent`, the validation result, the adapter result manifest and the sanitized
+manifest. Existing entries are never reordered: the order is the generation
+order, and a published `$id` is a permanent contract.
 """
 
 from __future__ import annotations
@@ -15,6 +19,17 @@ from typing import Any
 
 from pydantic import TypeAdapter
 
+from crypto_lab.adapters.envelopes import AdapterCommandRequestEnvelope
+from crypto_lab.adapters.events import ProtocolEventEnvelope, RunEvent
+from crypto_lab.adapters.manifests import (
+    AdapterResultManifest,
+    AdapterValidationResult,
+    SanitizedAdapterResultManifest,
+)
+from crypto_lab.adapters.negotiation import (
+    BootstrapDescriptorEnvelope,
+    NegotiationResult,
+)
 from crypto_lab.artifacts.ownership import ARTIFACT_OWNER_ADAPTER
 from crypto_lab.capabilities.comparison import ComparisonEligibilityResult
 from crypto_lab.capabilities.models import (
@@ -187,6 +202,46 @@ SCHEMA_DEFINITIONS: tuple[SchemaDefinition, ...] = (
         PurePosixPath("experiments/experiment-aggregation-result-v1.schema.json"),
         "urn:crypto-lab:schema:experiments:experiment-aggregation-result:1.0.0",
         TypeAdapter(ExperimentAggregationResult),
+    ),
+    SchemaDefinition(
+        PurePosixPath("protocol/bootstrap-descriptor-envelope-v1.schema.json"),
+        "urn:crypto-lab:schema:protocol:bootstrap-descriptor-envelope:1.0.0",
+        TypeAdapter(BootstrapDescriptorEnvelope),
+    ),
+    SchemaDefinition(
+        PurePosixPath("protocol/negotiation-result-v1.schema.json"),
+        "urn:crypto-lab:schema:protocol:negotiation-result:1.0.0",
+        TypeAdapter(NegotiationResult),
+    ),
+    SchemaDefinition(
+        PurePosixPath("protocol/adapter-command-request-envelope-v1.schema.json"),
+        "urn:crypto-lab:schema:protocol:adapter-command-request-envelope:1.0.0",
+        TypeAdapter(AdapterCommandRequestEnvelope),
+    ),
+    SchemaDefinition(
+        PurePosixPath("protocol/protocol-event-envelope-v1.schema.json"),
+        "urn:crypto-lab:schema:protocol:protocol-event-envelope:1.0.0",
+        TypeAdapter(ProtocolEventEnvelope),
+    ),
+    SchemaDefinition(
+        PurePosixPath("protocol/run-event-v1.schema.json"),
+        "urn:crypto-lab:schema:protocol:run-event:1.0.0",
+        TypeAdapter(RunEvent),
+    ),
+    SchemaDefinition(
+        PurePosixPath("protocol/adapter-validation-result-v1.schema.json"),
+        "urn:crypto-lab:schema:protocol:adapter-validation-result:1.0.0",
+        TypeAdapter(AdapterValidationResult),
+    ),
+    SchemaDefinition(
+        PurePosixPath("protocol/adapter-result-manifest-v1.schema.json"),
+        "urn:crypto-lab:schema:protocol:adapter-result-manifest:1.0.0",
+        TypeAdapter(AdapterResultManifest),
+    ),
+    SchemaDefinition(
+        PurePosixPath("protocol/sanitized-adapter-result-manifest-v1.schema.json"),
+        "urn:crypto-lab:schema:protocol:sanitized-adapter-result-manifest:1.0.0",
+        TypeAdapter(SanitizedAdapterResultManifest),
     ),
 )
 
