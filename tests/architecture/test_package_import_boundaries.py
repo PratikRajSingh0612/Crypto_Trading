@@ -26,6 +26,16 @@ allowlist is a **Stage 5 scope closure**, deliberately narrower than the section
 asserted absent by ``tests/safety/test_stage5_boundaries.py`` as well, so a later
 stage that adds one of those edges must widen this allowlist explicitly. The
 ``adapters`` allowlist is the 27.1 shape: ``domain`` and itself.
+
+Stage 7 Task 2 (Stage 7 plan section 2.6) adds ``process_supervision`` to the same
+scanner. Its allowlist is the plan's **Stage 7 scope closure** -- ``domain``,
+``adapters`` and itself -- deliberately narrower than the section 27.1 table, which
+also permits ``audit`` abstractions: ``audit`` is Stage 9's package, so a planted
+``audit`` edge must surface as unexpected. The prohibited set names every other
+central package, ``experiments`` first, because the supervisor drives the
+application layer through a structural port and never imports it (specification
+section 8: ``process_supervision`` implements an application-facing port over
+adapter protocol types).
 """
 
 from __future__ import annotations
@@ -92,6 +102,30 @@ _ALLOWED_FOR_EXPERIMENTS: tuple[str, ...] = (
 )
 #: Section 27.1: ``adapters`` may depend on canonical domain types alone.
 _ALLOWED_FOR_ADAPTERS: tuple[str, ...] = ("crypto_lab.domain", "crypto_lab.adapters")
+_PROCESS_SUPERVISION = "process_supervision"
+#: Stage 7 plan section 2.6: every central package ``process_supervision`` may never
+#: reach. ``experiments`` is first (the port direction of specification section 8);
+#: ``audit`` is listed although section 27.1 would permit its abstractions, because
+#: it is Stage 9's package and outside the Stage 7 closure; ``schema_registry`` is
+#: repeated here so the scanner's self-test names it explicitly for this package too.
+_PROHIBITED_FOR_PROCESS_SUPERVISION: tuple[str, ...] = (
+    "crypto_lab.experiments",
+    "crypto_lab.strategy",
+    "crypto_lab.capabilities",
+    "crypto_lab.datasets",
+    "crypto_lab.artifacts",
+    "crypto_lab.persistence",
+    "crypto_lab.configuration",
+    "crypto_lab.audit",
+    "crypto_lab.cli",
+    _COMPOSITION_MODULE,
+)
+#: Stage 7 plan section 2.6: the scope closure of ``process_supervision``.
+_ALLOWED_FOR_PROCESS_SUPERVISION: tuple[str, ...] = (
+    "crypto_lab.domain",
+    "crypto_lab.adapters",
+    "crypto_lab.process_supervision",
+)
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -324,6 +358,47 @@ def test_adapters_reaches_only_domain_and_itself(repository_root: Path) -> None:
     assert "crypto_lab.domain.command_invocation" in reached
 
 
+def test_process_supervision_imports_nothing_from_any_prohibited_package(
+    repository_root: Path,
+) -> None:
+    """Stage 7 plan section 2.6: the supervisor never imports ``experiments`` (it
+    drives the application layer through a structural port), nor any other central
+    package outside ``domain`` and ``adapters``."""
+    assert (
+        find_package_import_violations(
+            _package_root(repository_root, _PROCESS_SUPERVISION),
+            _PROCESS_SUPERVISION,
+            _PROHIBITED_FOR_PROCESS_SUPERVISION,
+        )
+        == ()
+    )
+
+
+def test_process_supervision_reaches_only_domain_adapters_and_itself(
+    repository_root: Path,
+) -> None:
+    """The Stage 7 scope closure of ``process_supervision`` (module docstring).
+
+    Anchored positively on the two cross-package edges Task 2 actually takes -- the
+    ``AdapterCommand``/``CommandResult`` contracts of ``adapters.commands`` and the
+    ``ProcessIdentity``/``CommandInvocationRecord`` records of
+    ``domain.command_invocation`` -- so the assertion cannot pass on an empty scan.
+    """
+    reached = _allowed_project_imports(
+        _package_root(repository_root, _PROCESS_SUPERVISION), _PROCESS_SUPERVISION
+    )
+    unexpected = tuple(
+        name
+        for name in reached
+        if not any(
+            _is_within(name, allowed) for allowed in _ALLOWED_FOR_PROCESS_SUPERVISION
+        )
+    )
+    assert unexpected == ()
+    assert "crypto_lab.adapters.commands" in reached
+    assert "crypto_lab.domain.command_invocation" in reached
+
+
 # --------------------------------------------------------------------------
 # Scanner self-tests -- a guard that cannot fail is not a guard
 # --------------------------------------------------------------------------
@@ -383,6 +458,43 @@ def test_the_experiments_allowlist_rejects_a_table_permitted_out_of_scope_edge(
     assert reached == ("crypto_lab.strategy",)
     assert not any(
         _is_within(reached[0], allowed) for allowed in _ALLOWED_FOR_EXPERIMENTS
+    )
+
+
+@pytest.mark.parametrize("prohibited_package", _PROHIBITED_FOR_PROCESS_SUPERVISION)
+def test_the_scanner_rejects_every_package_prohibited_for_process_supervision(
+    tmp_path: Path,
+    prohibited_package: str,
+) -> None:
+    """Stage 7 Task 2: the same self-test over the ``process_supervision`` set."""
+    package_root = _write_package(
+        tmp_path, _PROCESS_SUPERVISION, f"import {prohibited_package}\n"
+    )
+
+    violations = find_package_import_violations(
+        package_root, _PROCESS_SUPERVISION, _PROHIBITED_FOR_PROCESS_SUPERVISION
+    )
+
+    assert tuple(item.imported_name for item in violations) == (prohibited_package,)
+
+
+def test_the_process_supervision_allowlist_rejects_the_table_permitted_audit_edge(
+    tmp_path: Path,
+) -> None:
+    """The allowlist is a scope closure: ``audit`` abstractions are permitted by
+    section 27.1 and still outside Stage 7, so a planted edge must surface as
+    unexpected -- and a function-local one just the same."""
+    package_root = _write_package(
+        tmp_path,
+        _PROCESS_SUPERVISION,
+        "def observe() -> None:\n    from crypto_lab.audit import sink\n    del sink\n",
+    )
+
+    reached = _allowed_project_imports(package_root, _PROCESS_SUPERVISION)
+
+    assert reached == ("crypto_lab.audit",)
+    assert not any(
+        _is_within(reached[0], allowed) for allowed in _ALLOWED_FOR_PROCESS_SUPERVISION
     )
 
 

@@ -91,6 +91,9 @@ _ALLOWED_SOURCE_FILES = {
     "process_supervision/__init__.py",
     "process_supervision/cancellation.py",
     "process_supervision/deadlines.py",
+    "process_supervision/diagnostics.py",
+    "process_supervision/models.py",
+    "process_supervision/ports.py",
     "schema_registry.py",
     "strategy/__init__.py",
     "strategy/evaluation.py",
@@ -176,7 +179,6 @@ _DEFERRED_DEFINITIONS = {
     "PortfolioSnapshot",
     "PositionSnapshot",
     "PositionEffect",
-    "ProcessSupervisor",
     "ResultFinalizationRequest",
     "Result",
     "RunManifest",
@@ -653,9 +655,10 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     each in the task that first defines it, so the pinned count reads
     thirty-seven minus the names released so far: Task 1 released
     `CancellationToken` (`domain/ports.py`) and `MonotonicInstant`
-    (`domain/time.py`), giving 35.
+    (`domain/time.py`), giving 35; Task 2 released `ProcessSupervisor`
+    (`process_supervision/ports.py`), giving 34.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 35
+    assert len(_DEFERRED_DEFINITIONS) == 34
     assert _DEFERRED_DEFINITIONS == {
         "ArtifactFinalizationPurpose",
         "ArtifactFinalizer",
@@ -685,7 +688,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "PortfolioSnapshot",
         "PositionSnapshot",
         "PositionEffect",
-        "ProcessSupervisor",
         "ResultFinalizationRequest",
         "Result",
         "RunManifest",
@@ -728,9 +730,10 @@ def test_each_normative_deferred_symbol_is_detected_by_the_stage3_guard(
         # Stage 6 plan section 2.6: Task 4 released `RunEvent` and swapped in a
         # still-deferred name so seven live cases remain.
         "ArtifactRef",
-        # Stage 6 plan section 2.6: Task 1 released `ValidationOutcome` and
-        # swapped in a still-deferred name so seven live cases remain.
-        "ProcessSupervisor",
+        # Stage 7 plan section 2.6: Task 2 released `ProcessSupervisor` (the name
+        # Stage 6 Task 1 had swapped in for `ValidationOutcome`) and swapped in a
+        # still-deferred name so seven live cases remain.
+        "ArtifactFinalizer",
     ],
 )
 def test_representative_later_stage_type_mutations_are_blocked(name: str) -> None:
