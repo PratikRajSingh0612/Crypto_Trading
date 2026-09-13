@@ -80,7 +80,7 @@ from crypto_lab.domain.retry import (
     RetryDenialReason,
     RetryPolicy,
 )
-from crypto_lab.domain.time import require_utc
+from crypto_lab.domain.time import MonotonicInstant, require_utc
 from crypto_lab.experiments.diagnostics import (
     CONCURRENCY_CONFLICT,
     INVARIANT_VIOLATION,
@@ -594,16 +594,30 @@ def sample_retry_decision(
 
 
 class FixedClock:
-    """Returns a caller-set UTC instant; ``advance`` moves it; no wall-clock read."""
+    """Returns a caller-set UTC instant; ``advance`` moves it; no wall-clock read.
+
+    Stage 7 Task 1: the paired ``monotonic`` reading is an elapsed-seconds
+    accumulator that starts at zero and moves together with the UTC instant on
+    every ``advance``, so the two readings stay in lockstep without any clock
+    read; ``advance`` takes a ``float`` (an ``int`` still type-checks) and refuses
+    a negative interval, because a monotonic reading never moves backwards.
+    """
 
     def __init__(self, instant: datetime) -> None:
         self._instant = require_utc(instant)
+        self._elapsed_seconds = 0.0
 
     def now_utc(self) -> datetime:
         return self._instant
 
-    def advance(self, seconds: int) -> None:
+    def monotonic(self) -> MonotonicInstant:
+        return MonotonicInstant(self._elapsed_seconds)
+
+    def advance(self, seconds: float) -> None:
+        if seconds < 0:
+            raise ValueError("a fixed clock never advances by a negative interval")
         self._instant = self._instant + timedelta(seconds=seconds)
+        self._elapsed_seconds += float(seconds)
 
 
 class SequentialIdentitySource:
@@ -1606,17 +1620,30 @@ class FailingClock:
     def now_utc(self) -> datetime:
         raise AssertionError("the clock must not be read on this path")
 
+    def monotonic(self) -> MonotonicInstant:
+        raise AssertionError("the clock must not be read on this path")
+
 
 class CountingClock(FixedClock):
-    """A ``FixedClock`` that counts its reads, so a test can pin exactly one."""
+    """A ``FixedClock`` that counts its reads, so a test can pin exactly one.
+
+    UTC reads and monotonic reads are counted separately (``reads`` and
+    ``monotonic_reads``), so a test can pin the paired observation of the
+    ``PENDING`` to ``STARTING`` swap as exactly one of each.
+    """
 
     def __init__(self, instant: datetime) -> None:
         super().__init__(instant)
         self.reads = 0
+        self.monotonic_reads = 0
 
     def now_utc(self) -> datetime:
         self.reads += 1
         return super().now_utc()
+
+    def monotonic(self) -> MonotonicInstant:
+        self.monotonic_reads += 1
+        return super().monotonic()
 
 
 class CallRecorder:

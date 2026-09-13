@@ -43,6 +43,7 @@ from crypto_lab.domain.lifecycle import (
 from crypto_lab.domain.ports import Clock, IdentitySource
 from crypto_lab.domain.results import Failure, Success
 from crypto_lab.domain.retry import RetryDecisionRecord
+from crypto_lab.domain.time import MonotonicInstant
 from crypto_lab.experiments import diagnostics as diagnostics_module
 from crypto_lab.experiments.diagnostics import (
     CONCURRENCY_CONFLICT,
@@ -82,6 +83,8 @@ from doubles.experiments import (
     UUID_C,
     UUID_D,
     UUID_E,
+    CountingClock,
+    FailingClock,
     FixedClock,
     InMemoryBackingStore,
     InMemoryUnitOfWork,
@@ -483,10 +486,59 @@ def test_fixed_clock_returns_the_caller_set_instant_and_advances_only_by_request
     assert isinstance(clock, Clock)
     assert clock.now_utc() == INSTANT
     assert clock.now_utc() == INSTANT
+    # Stage 7 plan section 2.6 (Task 1): the paired monotonic reading starts at
+    # zero elapsed seconds and `advance` moves both instants together.
+    assert clock.monotonic() == MonotonicInstant(0.0)
     clock.advance(30)
     assert clock.now_utc() == INSTANT + timedelta(seconds=30)
+    assert clock.monotonic() == MonotonicInstant(30.0)
     with pytest.raises(ValueError, match="timezone-aware UTC"):
         FixedClock(datetime(2026, 9, 7, 12, 0, 0))  # noqa: DTZ001 - deliberate probe
+
+
+def test_fixed_clock_advances_both_instants_together() -> None:
+    """Stage 7 plan Task 1 Step 1, verbatim: the paired readings move in lockstep
+    and the clock never moves backwards."""
+    clock = FixedClock(INSTANT)
+    assert clock.monotonic() == MonotonicInstant(0.0)
+    clock.advance(30)
+    assert clock.monotonic() == MonotonicInstant(30.0)
+    assert isinstance(clock, Clock)
+    with pytest.raises(ValueError, match="negative"):
+        clock.advance(-1)
+    # A refused advance moves neither instant.
+    assert clock.monotonic() == MonotonicInstant(30.0)
+    assert clock.now_utc() == INSTANT + timedelta(seconds=30)
+
+
+def test_fixed_clock_accepts_fractional_advances_on_both_instants() -> None:
+    clock = FixedClock(INSTANT)
+    clock.advance(0.25)
+    clock.advance(0.5)
+    assert clock.monotonic() == MonotonicInstant(0.75)
+    assert clock.now_utc() == INSTANT + timedelta(seconds=0.75)
+
+
+def test_failing_clock_refuses_the_monotonic_read_like_the_utc_read() -> None:
+    clock = FailingClock()
+    assert isinstance(clock, Clock)
+    with pytest.raises(AssertionError, match="must not be read"):
+        clock.now_utc()
+    with pytest.raises(AssertionError, match="must not be read"):
+        clock.monotonic()
+
+
+def test_counting_clock_counts_utc_and_monotonic_reads_separately() -> None:
+    clock = CountingClock(INSTANT)
+    assert (clock.reads, clock.monotonic_reads) == (0, 0)
+    assert clock.monotonic() == MonotonicInstant(0.0)
+    assert clock.monotonic() == MonotonicInstant(0.0)
+    assert (clock.reads, clock.monotonic_reads) == (0, 2)
+    assert clock.now_utc() == INSTANT
+    assert (clock.reads, clock.monotonic_reads) == (1, 2)
+    clock.advance(5)
+    assert clock.monotonic() == MonotonicInstant(5.0)
+    assert (clock.reads, clock.monotonic_reads) == (1, 3)
 
 
 def test_sequential_identity_source_is_deterministic_and_kind_scoped() -> None:

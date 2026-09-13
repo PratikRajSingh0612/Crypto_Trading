@@ -89,6 +89,8 @@ _ALLOWED_SOURCE_FILES = {
     "experiments/semantic_outcome.py",
     "persistence/__init__.py",
     "process_supervision/__init__.py",
+    "process_supervision/cancellation.py",
+    "process_supervision/deadlines.py",
     "schema_registry.py",
     "strategy/__init__.py",
     "strategy/evaluation.py",
@@ -118,6 +120,7 @@ _ALLOWED_IMPORT_ROOTS = {
     "pathlib",
     "pydantic",
     "re",
+    "threading",
     "tomllib",
     "types",
     "typing",
@@ -153,7 +156,6 @@ _DEFERRED_DEFINITIONS = {
     "ArtifactSourceRole",
     "AuditSink",
     "AuditEvent",
-    "CancellationToken",
     "CandidateArtifact",
     "CandidateArtifactRepository",
     "CandidateArtifactState",
@@ -169,7 +171,6 @@ _DEFERRED_DEFINITIONS = {
     "Fee",
     "FinalizationResult",
     "MetricValue",
-    "MonotonicInstant",
     "OrderSide",
     "OrderType",
     "PortfolioSnapshot",
@@ -424,8 +425,15 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
 
     The count is asserted alongside the set so the reviewed number 22 appears
     literally, which is what plan section 3.9 and Appendix C pin.
+
+    The Stage 7 plan's section 2.6 adds five roots across Tasks 1, 3, 4 and 6,
+    each in the commit that first imports it and each confined by the Stage 7
+    guard to the modules that section names, so the pinned count reads
+    twenty-two plus the roots added so far: Task 1 added `threading`
+    (`process_supervision/cancellation.py`), giving 23. The test name is
+    historical and is kept.
     """
-    assert len(_ALLOWED_IMPORT_ROOTS) == 22
+    assert len(_ALLOWED_IMPORT_ROOTS) == 23
     assert _ALLOWED_IMPORT_ROOTS == {
         "__future__",
         "argparse",
@@ -444,6 +452,7 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
         "pathlib",
         "pydantic",
         "re",
+        "threading",
         "tomllib",
         "types",
         "typing",
@@ -639,8 +648,14 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     `AdapterValidationResult`, `AdapterResultManifest` and
     `SanitizedAdapterResultManifest`, giving 38; Task 6 released
     `CommandResult`, giving 37.
+
+    The Stage 7 plan's section 2.6 releases three names across Tasks 1 and 2,
+    each in the task that first defines it, so the pinned count reads
+    thirty-seven minus the names released so far: Task 1 released
+    `CancellationToken` (`domain/ports.py`) and `MonotonicInstant`
+    (`domain/time.py`), giving 35.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 37
+    assert len(_DEFERRED_DEFINITIONS) == 35
     assert _DEFERRED_DEFINITIONS == {
         "ArtifactFinalizationPurpose",
         "ArtifactFinalizer",
@@ -650,7 +665,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "ArtifactSourceRole",
         "AuditSink",
         "AuditEvent",
-        "CancellationToken",
         "CandidateArtifact",
         "CandidateArtifactRepository",
         "CandidateArtifactState",
@@ -666,7 +680,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "Fee",
         "FinalizationResult",
         "MetricValue",
-        "MonotonicInstant",
         "OrderSide",
         "OrderType",
         "PortfolioSnapshot",

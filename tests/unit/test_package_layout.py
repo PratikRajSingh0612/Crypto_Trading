@@ -82,6 +82,8 @@ PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab.artifacts.ownership",
     "crypto_lab.persistence",
     "crypto_lab.process_supervision",
+    "crypto_lab.process_supervision.cancellation",
+    "crypto_lab.process_supervision.deadlines",
     "crypto_lab.configuration",
     "crypto_lab.configuration.models",
     "crypto_lab.configuration.loader",

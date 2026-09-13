@@ -149,7 +149,7 @@ from crypto_lab.domain.lifecycle import (
     permitted_successors,
     process_exit_category_for,
 )
-from crypto_lab.domain.ports import Clock, IdentitySource
+from crypto_lab.domain.ports import CancellationToken, Clock, IdentitySource
 from crypto_lab.domain.records import (
     InstrumentId,
     InstrumentRef,
@@ -182,7 +182,7 @@ from crypto_lab.domain.retry import (
     retry_terminal_state_of,
     select_fresh_availability_observation,
 )
-from crypto_lab.domain.time import UtcDateTime, format_utc
+from crypto_lab.domain.time import MonotonicInstant, UtcDateTime, format_utc
 from crypto_lab.domain.versioning import SemanticVersion, parse_semantic_version
 
 __all__ = (
@@ -222,6 +222,7 @@ __all__ = (
     "AuditEventId",
     "BarOrderPriority",
     "BoundedText",
+    "CancellationToken",
     "CandidateArtifactId",
     "CanonicalDecimal",
     "CanonicalHashEnvelope",
@@ -270,6 +271,7 @@ __all__ = (
     "LogicalSlotId",
     "MarketType",
     "Money",
+    "MonotonicInstant",
     "NonNegativeDecimal",
     "NormalizedIdentifier",
     "OperatingSystem",

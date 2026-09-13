@@ -1,8 +1,9 @@
-"""Canonical timezone-aware UTC values."""
+"""Canonical timezone-aware UTC values and the process-local monotonic instant."""
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
@@ -157,3 +158,51 @@ carries no permanent `$id`. That exemption is exactly why the rule above is
 scoped to published schemas rather than to every field, and the guard test fails
 the moment `Bar` — or anything else still on the legacy alias — is registered.
 """
+
+_INFINITE_SECONDS = (float("inf"), float("-inf"))
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class MonotonicInstant:
+    """A reading of the process-local monotonic clock, in seconds (spec 14.8).
+
+    The companion of the UTC instant ``Clock.now_utc`` returns: one paired
+    observation at the ``PENDING`` to ``STARTING`` swap yields the durable UTC
+    deadline and this reading, from which the live supervisor derives the
+    monotonic deadline that governs it. A monotonic reading is never persisted,
+    serialized, hashed or compared across restarts, and it is not a Pydantic
+    field anywhere (Stage 7 plan sections 2.4 and 3.2). The value is an exact
+    ``float`` of non-negative finite seconds; an ``int`` or ``bool`` reading is
+    refused because it is not a clock reading.
+    """
+
+    seconds: float
+
+    def __post_init__(self) -> None:
+        if type(self.seconds) is not float or self.seconds != self.seconds:
+            raise ValueError("a monotonic instant is a finite float of seconds")
+        if self.seconds in _INFINITE_SECONDS or self.seconds < 0.0:
+            raise ValueError("a monotonic instant is finite and never negative")
+
+    def plus(self, seconds: float) -> MonotonicInstant:
+        """Return the instant ``seconds`` later.
+
+        The offset is a finite, non-negative duration; an ``int`` is accepted
+        because the record's ``timeout_seconds`` is one (Stage 7 plan 6.1), a
+        ``bool`` is not. A sum that leaves the finite range fails closed.
+        """
+        if isinstance(seconds, bool) or not isinstance(seconds, int | float):
+            raise ValueError("a monotonic instant offset is a number of seconds")
+        if seconds != seconds or seconds in _INFINITE_SECONDS or seconds < 0:
+            raise ValueError("a monotonic instant offset is finite and never negative")
+        try:
+            offset = float(seconds)
+        except OverflowError as error:
+            raise ValueError(
+                "a monotonic instant offset is finite and never negative"
+            ) from error
+        return MonotonicInstant(self.seconds + offset)
+
+    def until(self, other: MonotonicInstant) -> float:
+        """Return the signed seconds from this reading to ``other``."""
+        return other.seconds - self.seconds

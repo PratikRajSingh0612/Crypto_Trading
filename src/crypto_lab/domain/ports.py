@@ -1,18 +1,21 @@
-"""Injected clock and identity ports for the Stage 5 lifecycles.
+"""Injected clock, identity and cancellation ports for the lifecycles.
 
 Ambient wall-clock reads and ambient randomness are forbidden in the core, so
 every recorded instant and every drawn operational identifier arrives through
-one of these two protocols. Specification section 8.1 lists ``Clock`` as a
+one of these protocols. Specification section 8.1 lists ``Clock`` as a
 ``domain`` port; ``IdentitySource`` is the Stage 5 plan's companion port (plan
 section 3.3) for the prefixed UUID4 identifiers and the temporary attempt
-token. Both are pure structural contracts: this module defines no
-implementation, reads no clock and draws no random value. Concrete doubles are
-test-resident (plan section 11) and a future composition root wires the real
-ones.
+token. All are pure structural contracts: this module defines no
+implementation, reads no clock, draws no random value and starts no thread.
+Concrete doubles are test-resident and a future composition root wires the
+real ones.
 
-``Clock.monotonic()`` and ``MonotonicInstant`` are deliberately absent (plan
-section 1.4): the monotonic value governs only within one live supervisor and
-is never persisted, so Stage 7 adds it.
+Stage 7 Task 1 (Stage 7 plan sections 2.3 and 3.2) adds the paired
+``Clock.monotonic()`` reading, whose ``MonotonicInstant`` value governs only
+within one live supervisor and is never persisted, and the
+``CancellationToken`` port that specification section 8.2 hands to
+``ProcessSupervisor.invoke`` and, later, to ``ArtifactFinalizer.finalize``.
+Its thread-safe implementation lives under ``process_supervision``.
 """
 
 from __future__ import annotations
@@ -27,14 +30,23 @@ from crypto_lab.domain.identifiers import (
     LogicalSlotId,
     RunId,
 )
+from crypto_lab.domain.time import MonotonicInstant
 
 
 @runtime_checkable
 class Clock(Protocol):
-    """Supply the current instant as a timezone-aware UTC ``datetime``."""
+    """Supply the current UTC instant and its process-local monotonic pair."""
 
     def now_utc(self) -> datetime:
         """Return the current timezone-aware UTC instant."""
+
+    def monotonic(self) -> MonotonicInstant:
+        """Return the process-local monotonic reading paired with ``now_utc``.
+
+        Spec 8.2 and 14.8: the supervisor reads it immediately before the UTC
+        instant of the ``PENDING`` to ``STARTING`` swap; the value is never
+        persisted or compared across restarts.
+        """
 
 
 @runtime_checkable
@@ -61,3 +73,19 @@ class IdentitySource(Protocol):
 
     def new_attempt_token(self) -> AttemptToken:
         """Return a fresh raw attempt token."""
+
+
+@runtime_checkable
+class CancellationToken(Protocol):
+    """Spec 8.2, 14.8: an explicit, idempotent cancellation request.
+
+    A request is observed by the supervisor at its next tick and never clears;
+    a second request is a no-op. Cancellation is a token and a result category,
+    never an unstructured task exception.
+    """
+
+    def is_cancellation_requested(self) -> bool:
+        """Return whether cancellation has been requested."""
+
+    def request_cancellation(self) -> None:
+        """Record the cancellation request; idempotent."""

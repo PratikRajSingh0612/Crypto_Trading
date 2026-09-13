@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import FrozenInstanceError
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
@@ -13,7 +14,12 @@ from pydantic import TypeAdapter, ValidationError
 
 import crypto_lab.domain.time as time_module
 from crypto_lab.domain.base import CanonicalModel
-from crypto_lab.domain.time import CalendarValidUtcDateTime, UtcDateTime, format_utc
+from crypto_lab.domain.time import (
+    CalendarValidUtcDateTime,
+    MonotonicInstant,
+    UtcDateTime,
+    format_utc,
+)
 from crypto_lab.schema_registry import SCHEMA_DEFINITIONS, render_schema_files
 
 
@@ -570,3 +576,87 @@ def test_utc_schema_requires_the_exact_z_form() -> None:
                 adapter.validate_json(json.dumps("2026-08-10T01:02:03Z" + terminator))
             with pytest.raises(JsonSchemaValidationError):
                 validator.validate("2026-08-10T01:02:03Z" + terminator)
+
+
+# --------------------------------------------------------------------------
+# Stage 7 Task 1: the process-local monotonic instant (plan sections 3.2, 6.1)
+# --------------------------------------------------------------------------
+
+
+def test_monotonic_instant_rejects_negative_nan_and_infinite_values() -> None:
+    for bad in (-0.001, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="monotonic instant"):
+            MonotonicInstant(bad)
+    assert MonotonicInstant(1.5).plus(2.0) == MonotonicInstant(3.5)
+    assert MonotonicInstant(1.5).until(MonotonicInstant(4.0)) == 2.5
+
+
+def test_monotonic_instant_rejects_negative_infinity_and_accepts_zero() -> None:
+    with pytest.raises(ValueError, match="monotonic instant"):
+        MonotonicInstant(float("-inf"))
+    assert MonotonicInstant(0.0).seconds == 0.0
+    assert MonotonicInstant(0.0).until(MonotonicInstant(0.0)) == 0.0
+
+
+@pytest.mark.parametrize("value", [0, 1, True, "1.0", None, 1.5 + 0j])
+def test_monotonic_instant_accepts_only_an_exact_float(value: object) -> None:
+    """An integer or a bool is not a clock reading; the paired reading is a float."""
+    with pytest.raises(ValueError, match="monotonic instant"):
+        MonotonicInstant(value)  # type: ignore[arg-type]
+
+
+def test_monotonic_instant_is_frozen_ordered_hashable_and_slotted() -> None:
+    instant = MonotonicInstant(2.0)
+    with pytest.raises(FrozenInstanceError):
+        instant.seconds = 3.0  # type: ignore[misc]
+    assert not hasattr(instant, "__dict__")
+    assert MonotonicInstant(1.0) < MonotonicInstant(2.0)
+    assert MonotonicInstant(2.0) <= MonotonicInstant(2.0)
+    assert MonotonicInstant(3.0) > MonotonicInstant(2.0)
+    assert MonotonicInstant(2.0) >= MonotonicInstant(2.0)
+    assert MonotonicInstant(2.0) == MonotonicInstant(2.0)
+    assert MonotonicInstant(2.0) != MonotonicInstant(2.5)
+    assert hash(MonotonicInstant(2.0)) == hash(MonotonicInstant(2.0))
+    assert (
+        len({MonotonicInstant(2.0), MonotonicInstant(2.0), MonotonicInstant(3.0)}) == 2
+    )
+
+
+def test_until_is_signed_and_plus_accepts_the_record_integer_timeout() -> None:
+    swap = MonotonicInstant(10.0)
+    assert MonotonicInstant(4.0).until(MonotonicInstant(1.5)) == -2.5
+    # Plan 6.1: `monotonic_at_swap.plus(record.timeout_seconds)` passes the record's
+    # `int`, so an integer offset is a duration; a bool is not.
+    assert swap.plus(4) == MonotonicInstant(14.0)
+    assert swap.plus(0) == swap
+    assert swap.plus(0.0) == swap
+    assert swap.plus(0.5).until(swap) == -0.5
+    assert isinstance(swap.plus(4).seconds, float)
+
+
+@pytest.mark.parametrize(
+    "offset",
+    [-1.0, -1, float("nan"), float("inf"), float("-inf"), True, "4", None],
+)
+def test_plus_rejects_negative_non_finite_and_non_numeric_offsets(
+    offset: object,
+) -> None:
+    with pytest.raises(ValueError, match="monotonic instant"):
+        MonotonicInstant(1.0).plus(offset)  # type: ignore[arg-type]
+
+
+def test_plus_fails_closed_when_the_sum_leaves_the_finite_range() -> None:
+    largest = 1.7976931348623157e308
+    with pytest.raises(ValueError, match="monotonic instant"):
+        MonotonicInstant(largest).plus(largest)
+    with pytest.raises(ValueError, match="monotonic instant"):
+        MonotonicInstant(1.0).plus(10**400)
+
+
+def test_monotonic_instant_is_not_a_pydantic_field_and_reaches_no_schema() -> None:
+    """Plan 2.4: never persisted, serialized or hashed; no model carries it."""
+    for path, contents in render_schema_files().items():
+        assert b"MonotonicInstant" not in contents, path
+    assert not hasattr(MonotonicInstant, "model_validate")
+    assert not hasattr(MonotonicInstant, "model_json_schema")
+    assert not hasattr(MonotonicInstant, "__pydantic_core_schema__")
