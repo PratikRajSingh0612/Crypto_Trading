@@ -12,9 +12,13 @@ the experiment-revision compare-and-swap, with its two verdict-state mappings.
 Stage 6 Task 7 (Stage 6 plan sections 3.12 and 10) adds the seventeenth request,
 ``SemanticOutcomeRequest``, the ``SemanticOutcome`` projection and
 ``apply_command_semantic_outcome``, the one operation that applies a Task 6
-reconciliation to the run and invocation records through the same ports. Concrete
-port implementations live in Stage 8's ``persistence`` package; Stages 5 and 6
-exercise the ports through test-resident doubles only.
+reconciliation to the run and invocation records through the same ports. Stage 7
+Task 5 (Stage 7 plan sections 3.6 and 5) adds ``Stage5InvocationLifecycle``, the
+application-layer implementation of the supervision lifecycle port over the merged
+operations, with its ``DiagnosticRecorder`` port, the transient ``RequestMaterial``
+and the pure ``semantic_outcome_request_for``. Concrete port implementations live in
+Stage 8's ``persistence`` package; Stages 5 to 7 exercise the ports through
+test-resident doubles only.
 """
 
 from crypto_lab.experiments.aggregation import (
@@ -107,6 +111,13 @@ from crypto_lab.experiments.semantic_outcome import (
     SemanticOutcome,
     apply_command_semantic_outcome,
 )
+from crypto_lab.experiments.supervision_lifecycle import (
+    SUPERVISION_REASON_CODE,
+    DiagnosticRecorder,
+    RequestMaterial,
+    Stage5InvocationLifecycle,
+    semantic_outcome_request_for,
+)
 
 __all__ = (
     "CONCURRENCY_CONFLICT",
@@ -120,6 +131,7 @@ __all__ = (
     "RETRY_DECISION_CONFLICT",
     "RETRY_NOT_BEFORE_NOT_REACHED",
     "STAGE5_DIAGNOSTIC_CODES",
+    "SUPERVISION_REASON_CODE",
     "TERMINAL_STATE_OF_VERDICT",
     "TRANSITION_OWNED_EDGES",
     "TRANSITION_OWNED_TARGETS",
@@ -132,6 +144,7 @@ __all__ = (
     "CoupledTransitionRequest",
     "DiagnosticPosture",
     "DiagnosticReader",
+    "DiagnosticRecorder",
     "EngineRunRepository",
     "ExperimentAggregationRequest",
     "ExperimentCreationRequest",
@@ -146,6 +159,7 @@ __all__ = (
     "LinkedPair",
     "LinkedStartRequest",
     "LostSwap",
+    "RequestMaterial",
     "RetryDecisionInsertOutcome",
     "RetryDecisionRepository",
     "RetryEvaluationRequest",
@@ -153,6 +167,7 @@ __all__ = (
     "RuntimeAvailabilityObservationReader",
     "SemanticOutcome",
     "SemanticOutcomeRequest",
+    "Stage5InvocationLifecycle",
     "SuccessorCreationRequest",
     "UnitOfWork",
     "aggregate_experiment",
@@ -173,6 +188,7 @@ __all__ = (
     "run_operation",
     "run_replacement",
     "run_rule_failure",
+    "semantic_outcome_request_for",
     "stage5_diagnostic",
     "stage5_failure",
     "start_linked_run",
