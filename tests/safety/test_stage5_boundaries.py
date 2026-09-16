@@ -17,6 +17,10 @@ Declared readings, so nothing is inferred silently:
   ``crypto_lab.domain.time`` is legitimate and only the standard-library root
   ``time`` is forbidden. The whole-tree scans begin green and are load-bearing
   through their controls; ``os.environ`` is the Stage 3 environment scan reused.
+  Stage 7 plan section 2.6 (Task 4) adds exactly one label-keyed exemption,
+  ``_INFRASTRUCTURE_EXEMPTIONS``: ``subprocess`` in
+  ``process_supervision/windows_process.py``, the one ``Popen`` importer in ``src``;
+  every other pair, the same root in any other module included, still fails.
 - "Stage 5 module" means exactly the eighteen paths plan section 2.7 tabulates,
   pinned here as a literal so a widened set cannot pass by omission. "Reads the
   filesystem or the environment at import time" is discharged statically as a
@@ -86,6 +90,13 @@ STAGE5_SOURCE_FILES: Final[tuple[str, ...]] = (
 )
 _INFRASTRUCTURE_ROOTS: Final = frozenset(
     {"sqlalchemy", "sqlite3", "alembic", "subprocess", "random", "secrets", "time"}
+)
+#: Stage 7 plan section 2.6 (Task 4): the one whole-block, label-keyed exemption from
+#: the infrastructure scan -- the Windows process controller's ``subprocess`` import.
+#: Keyed on the exact module label and root, so no sibling module, no other root in the
+#: same module and no planted in-memory module is licensed by it.
+_INFRASTRUCTURE_EXEMPTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
+    {("process_supervision/windows_process.py", "subprocess")}
 )
 #: Resolved through the module's own import bindings, so ``from datetime import
 #: datetime as dt; dt.now()`` and ``import datetime; datetime.date.today()`` both
@@ -177,6 +188,7 @@ def _infrastructure_violations(tree: ast.AST, label: str) -> list[str]:
         f"{label}: forbidden import root {root}"
         for root in _imported_roots(tree)
         if root in _INFRASTRUCTURE_ROOTS
+        and (label, root) not in _INFRASTRUCTURE_EXEMPTIONS
     ]
 
 
@@ -518,6 +530,37 @@ def test_the_infrastructure_scan_detects_each_root(source: str) -> None:
 )
 def test_the_infrastructure_scan_allows_the_legitimate_shapes(source: str) -> None:
     assert _infrastructure_violations(ast.parse(source), "probe.py") == []
+
+
+def test_the_subprocess_exemption_is_exactly_one_module_and_one_root(
+    repository_root: Path,
+) -> None:
+    """Stage 7 plan section 2.6 (Task 4): the whole-block, label-keyed exemption.
+
+    Exactly one ``(module, root)`` pair is exempt -- the Windows process controller's
+    ``subprocess`` import -- and the exemption licenses nothing else: ``time`` in the
+    same module still fails, ``subprocess`` in the sibling ``windows_api.py`` still
+    fails, and a planted in-memory module labelled ``process_supervision/probe.py`` (no
+    such repository file exists) still fails. The exempted module must really import
+    the root, so the pair cannot outlive the import it licenses.
+    """
+    assert _INFRASTRUCTURE_EXEMPTIONS == frozenset(
+        {("process_supervision/windows_process.py", "subprocess")}
+    )
+    ((module, root),) = _INFRASTRUCTURE_EXEMPTIONS
+    tree = _parse(repository_root / "src/crypto_lab" / module)
+    assert root in _imported_roots(tree)
+    assert _infrastructure_violations(tree, module) == []
+    assert _infrastructure_violations(ast.parse("import time\n"), module) != []
+    assert (
+        _infrastructure_violations(
+            ast.parse("import subprocess\n"), "process_supervision/windows_api.py"
+        )
+        != []
+    )
+    planted = "process_supervision/probe.py"
+    assert not (repository_root / "src/crypto_lab" / planted).exists()
+    assert _infrastructure_violations(ast.parse("import subprocess\n"), planted) != []
 
 
 @pytest.mark.parametrize(

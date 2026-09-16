@@ -96,6 +96,8 @@ _ALLOWED_SOURCE_FILES = {
     "process_supervision/ports.py",
     "process_supervision/readers.py",
     "process_supervision/roots.py",
+    "process_supervision/windows_api.py",
+    "process_supervision/windows_process.py",
     "schema_registry.py",
     "strategy/__init__.py",
     "strategy/evaluation.py",
@@ -115,6 +117,7 @@ _ALLOWED_IMPORT_ROOTS = {
     "contextlib",
     "copy",
     "crypto_lab",
+    "ctypes",
     "dataclasses",
     "datetime",
     "decimal",
@@ -126,6 +129,7 @@ _ALLOWED_IMPORT_ROOTS = {
     "pydantic",
     "queue",
     "re",
+    "subprocess",
     "threading",
     "tomllib",
     "types",
@@ -436,10 +440,12 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
     guard to the modules that section names, so the pinned count reads
     twenty-two plus the roots added so far: Task 1 added `threading`
     (`process_supervision/cancellation.py`), giving 23; Task 3 added `queue`
-    (`process_supervision/readers.py`), giving 24. The test name is
+    (`process_supervision/readers.py`), giving 24; Task 4 added `ctypes`
+    (`process_supervision/windows_api.py`) and `subprocess`
+    (`process_supervision/windows_process.py`), giving 26. The test name is
     historical and is kept.
     """
-    assert len(_ALLOWED_IMPORT_ROOTS) == 24
+    assert len(_ALLOWED_IMPORT_ROOTS) == 26
     assert _ALLOWED_IMPORT_ROOTS == {
         "__future__",
         "argparse",
@@ -448,6 +454,7 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
         "contextlib",
         "copy",
         "crypto_lab",
+        "ctypes",
         "dataclasses",
         "datetime",
         "decimal",
@@ -459,6 +466,7 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
         "pydantic",
         "queue",
         "re",
+        "subprocess",
         "threading",
         "tomllib",
         "types",

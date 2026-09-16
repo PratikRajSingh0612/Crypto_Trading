@@ -89,6 +89,8 @@ PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab.process_supervision.diagnostics",
     "crypto_lab.process_supervision.roots",
     "crypto_lab.process_supervision.readers",
+    "crypto_lab.process_supervision.windows_api",
+    "crypto_lab.process_supervision.windows_process",
     "crypto_lab.configuration",
     "crypto_lab.configuration.models",
     "crypto_lab.configuration.loader",
