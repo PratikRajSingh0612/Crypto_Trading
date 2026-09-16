@@ -94,6 +94,8 @@ _ALLOWED_SOURCE_FILES = {
     "process_supervision/diagnostics.py",
     "process_supervision/models.py",
     "process_supervision/ports.py",
+    "process_supervision/readers.py",
+    "process_supervision/roots.py",
     "schema_registry.py",
     "strategy/__init__.py",
     "strategy/evaluation.py",
@@ -122,6 +124,7 @@ _ALLOWED_IMPORT_ROOTS = {
     "json",
     "pathlib",
     "pydantic",
+    "queue",
     "re",
     "threading",
     "tomllib",
@@ -432,10 +435,11 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
     each in the commit that first imports it and each confined by the Stage 7
     guard to the modules that section names, so the pinned count reads
     twenty-two plus the roots added so far: Task 1 added `threading`
-    (`process_supervision/cancellation.py`), giving 23. The test name is
+    (`process_supervision/cancellation.py`), giving 23; Task 3 added `queue`
+    (`process_supervision/readers.py`), giving 24. The test name is
     historical and is kept.
     """
-    assert len(_ALLOWED_IMPORT_ROOTS) == 23
+    assert len(_ALLOWED_IMPORT_ROOTS) == 24
     assert _ALLOWED_IMPORT_ROOTS == {
         "__future__",
         "argparse",
@@ -453,6 +457,7 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
         "json",
         "pathlib",
         "pydantic",
+        "queue",
         "re",
         "threading",
         "tomllib",
