@@ -192,7 +192,7 @@ _PORT_MEMBERS: Final = (
     "append_event",
     "resolve_external_winner",
 )
-#: Names Tasks 6-8 own; none may appear in a Task 5 module.
+#: Names Tasks 6-8 own; none may appear in the Task 5 lifecycle module.
 _LATER_TASK_NAMES: Final = (
     "WindowsProcessSupervisor",
     "reconcile_invocations",
@@ -203,6 +203,19 @@ _LATER_TASK_NAMES: Final = (
     "SupervisionFixedClock",
     "RealtimeMonotonicClock",
     "TeeController",
+    "build_supervisor",
+    "supervised_catalog_entry_for",
+)
+#: Stage 7 Task 6 defined exactly these nine in `tests/doubles/supervision.py` (plan
+#: 9.2); the two remaining names stay absent from the doubles until Tasks 7 and 8.
+_TASK6_DOUBLES_NAMES: Final = (
+    "WindowsProcessSupervisor",
+    "RecordingLifecycle",
+    "RecordingObserver",
+    "ScriptedProcess",
+    "ScriptedProcessController",
+    "SupervisionFixedClock",
+    "RealtimeMonotonicClock",
     "build_supervisor",
     "supervised_catalog_entry_for",
 )
@@ -970,6 +983,9 @@ def test_the_module_defines_exactly_the_task_five_surface() -> None:
     assert lifecycle_module.SOURCE_COMPONENT == "experiments.supervision_lifecycle"
     for name in _LATER_TASK_NAMES:
         assert not hasattr(lifecycle_module, name), name
+    for name in _TASK6_DOUBLES_NAMES:
+        assert hasattr(doubles_module, name), name
+    for name in set(_LATER_TASK_NAMES) - set(_TASK6_DOUBLES_NAMES):
         assert not hasattr(doubles_module, name), name
 
 

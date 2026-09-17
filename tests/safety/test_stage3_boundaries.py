@@ -97,6 +97,7 @@ _ALLOWED_SOURCE_FILES = {
     "process_supervision/ports.py",
     "process_supervision/readers.py",
     "process_supervision/roots.py",
+    "process_supervision/supervisor.py",
     "process_supervision/windows_api.py",
     "process_supervision/windows_process.py",
     "schema_registry.py",
@@ -113,6 +114,7 @@ _ALLOWED_SOURCE_FILES = {
 _ALLOWED_IMPORT_ROOTS = {
     "__future__",
     "argparse",
+    "asyncio",
     "codecs",
     "collections",
     "contextlib",
@@ -443,13 +445,15 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
     (`process_supervision/cancellation.py`), giving 23; Task 3 added `queue`
     (`process_supervision/readers.py`), giving 24; Task 4 added `ctypes`
     (`process_supervision/windows_api.py`) and `subprocess`
-    (`process_supervision/windows_process.py`), giving 26. The test name is
-    historical and is kept.
+    (`process_supervision/windows_process.py`), giving 26; Task 6 added
+    `asyncio` (`process_supervision/supervisor.py`, imported function-locally
+    inside `invoke`), giving 27. The test name is historical and is kept.
     """
-    assert len(_ALLOWED_IMPORT_ROOTS) == 26
+    assert len(_ALLOWED_IMPORT_ROOTS) == 27
     assert _ALLOWED_IMPORT_ROOTS == {
         "__future__",
         "argparse",
+        "asyncio",
         "codecs",
         "collections",
         "contextlib",
