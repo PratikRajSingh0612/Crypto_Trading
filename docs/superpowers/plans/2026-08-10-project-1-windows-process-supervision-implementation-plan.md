@@ -332,12 +332,15 @@ Each is a reading the plan applies, stated so a reviewer can accept or reject it
    changed cannot be a `CommandResult`; it is a `Failure`. Every path that changed
    a record returns `Success` carrying the spec's `CommandResult` verbatim plus the
    parse outcome and protocol summary the Stage 6 operation needs. The only
-   `Failure`s: a structural preflight refusal (§4.4), a lost `PENDING → STARTING`
-   or `STARTING → RUNNING` swap against a still-nonterminal record that another
-   actor moved (§5.3 row 4), an own-request defect (§5.3), and — once per supervisor
-   instance, when no `PathPreflight` was injected — the §7.2 long-path probe's
-   `Failure(PROCESS.PATH_PREFLIGHT_REJECTED)`, which fires before any record is
-   loaded.
+   `Failure`s: a structural preflight refusal (§4.4), the unreadable-executable
+   refusal of §4.1 row 1 (a present regular executable whose bytes cannot be read
+   to compute its hash is `CORE.INVARIANT_VIOLATION` with
+   `check = executable_unreadable`, before any swap, launch or record change), a
+   lost `PENDING → STARTING` or `STARTING → RUNNING` swap against a
+   still-nonterminal record that another actor moved (§5.3 row 4), an own-request
+   defect (§5.3), and — once per supervisor instance, when no `PathPreflight` was
+   injected — the §7.2 long-path probe's `Failure(PROCESS.PATH_PREFLIGHT_REJECTED)`,
+   which fires before any record is loaded.
 2. **Fixed launch arguments come from `AdapterCatalogEntry.runtime_metadata`.**
    Spec 14.1 says the orchestrator "passes an argument array" and spec 22.2.1
    registers each adapter as "absolute executable path, executable hash, and
@@ -356,9 +359,23 @@ Each is a reading the plan applies, stated so a reviewer can accept or reject it
    observes the executable before the swap, performs `PENDING → STARTING`, and then
    terminalizes `STARTING → FAILED_TO_START` with the failure as primary; only
    shape-level invariant violations (wrong state, wrong kind, mismatched paths or
-   identity, stale revision, undecodable launch arguments) refuse before the swap.
-   The primary follows spec 21.2.1: an executable that is **absent** (or a
-   `CreateProcess` failure with `ERROR_FILE_NOT_FOUND` `2` or
+   identity, stale revision, undecodable launch arguments) and the unreadable
+   regular executable of §4.1 row 1 refuse before the swap. That executable
+   (present, a regular file, no reparse point on it or any ancestor, but its bytes
+   cannot be read to compute the SHA-256) is a precondition refusal, not a failed
+   launch: the frozen Task 2 `ExecutableObservation` cannot represent a present
+   regular file without an observed hash, inventing a hash or treating the file
+   as absent would be false, and Stage 7 has no permission to widen that record,
+   so the supervisor returns `Failure(CORE.INVARIANT_VIOLATION)` with
+   `check = executable_unreadable`, constructs no observation, performs no
+   lifecycle write and calls no lifecycle operation beyond the `load` and
+   `linked_run` reads that precede every preflight step (no `begin_start`, no
+   compare-and-swap, no `resolve_external_winner`), launches nothing and leaves
+   the invocation and run records byte-identical; `FAILED_TO_START` stays
+   reserved for a launch path the records can represent (the human ruling of
+   2026-09-17 on the Task 6 constructibility gate, option (a)).
+   The `FAILED_TO_START` primary follows spec 21.2.1: an executable that is
+   **absent** (or a `CreateProcess` failure with `ERROR_FILE_NOT_FOUND` `2` or
    `ERROR_PATH_NOT_FOUND` `3`) is the availability failure `ADAPTER.UNAVAILABLE`
    (minted through `stage6_diagnostic`, retriable only after a new observation),
    so the merged coupled mapping moves a linked run `→ UNAVAILABLE`; an
@@ -367,7 +384,8 @@ Each is a reading the plan applies, stated so a reviewer can accept or reject it
    `CORE.IMMUTABLE_INPUT_MISMATCH` (run `→ FAILED`) — "mismatch" is read as "the
    registered executable's identity cannot be verified", which the three non-hash
    reasons share with a differing hash (the run effect, `FAILED` under a hard
-   block, is the same either way);
+   block, is the same either way; the unreadable regular file of the preceding
+   paragraph is not among them, because it never reaches a decision);
    every other creation failure is `PROCESS.LAUNCH_FAILED` (engine runtime, run
    `→ FAILED`). For the `UNAVAILABLE` run target the lifecycle supplies the
    `availability_observation_id` the merged record requires exactly as the Stage 6
@@ -1149,8 +1167,8 @@ Stage 6 code.
 | `PROCESS.PID_REUSE_DETECTED` | `ENGINE_RUNTIME` | True | WARNING | reconciler | additional; reported by every pass that observes it and persisted only when attached beside the primary of a terminalizing pass or on a cleanup enrichment | `pid`, `expected_creation_identity`, `observed_creation_identity` |
 | `PROCESS.ORCHESTRATOR_RESTART_LOST_SUPERVISION` | `ENGINE_RUNTIME` | True | ERROR | reconciler | primary of `RUNNING → PROTOCOL_FAILED` (run `→ FAILED`); engine-runtime so that spec 15.6's "applies retry policy" stays possible (a `PROTOCOL` category would hard-block; spec 15.2 requires a primary, not a category) | `pid`, `creation_identity`, `supervisor_instance_id`, `tree_terminated` |
 | `PROCESS.WRITE_BOUNDARY_VIOLATION` | `ENGINE_RUNTIME` | True | WARNING | supervisor | additional on the enrichment (§1.5 item 2) | `stray_path_count` |
-| `CORE.INVARIANT_VIOLATION` | `INTERNAL_INVARIANT` | False | ERROR | supervisor, reconciler | `Failure` only, or the primary of a `FAILED_TO_START` after the swap (envelope disagreement, existing root); the reconciler's `INVARIANT_REPORTED` diagnostic | per site |
-| `CORE.IMMUTABLE_INPUT_MISMATCH` | `INTERNAL_INVARIANT` | False | ERROR | supervisor | primary of `STARTING → FAILED_TO_START` when the executable is present but is not a regular file, is a reparse point, has a reparse-point ancestor, or its SHA-256 differs (run `→ FAILED`); an **absent** executable is not this code (§2.5 reading 3) | `reason` ∈ {`not_regular_file`, `reparse_point`, `ancestor_reparse_point`, `hash_mismatch`} (`observed_hash` present only for `hash_mismatch`), `expected_hash`, `observed_hash` (absent when unreadable) |
+| `CORE.INVARIANT_VIOLATION` | `INTERNAL_INVARIANT` | False | ERROR | supervisor, reconciler | `Failure` only (the §4.4 structural refusals and the unreadable regular executable of §4.1 row 1, `check = executable_unreadable`, all before any swap: no `ExecutableObservation`, no lifecycle write — no `begin_start`, compare-and-swap or `resolve_external_winner`; only the `load` and `linked_run` reads precede them — and no launch), or the primary of a `FAILED_TO_START` after the swap (envelope disagreement, existing root); the reconciler's `INVARIANT_REPORTED` diagnostic | per site; for `executable_unreadable`: `check`, `error_class`, `os_error_code` (the `winerror`, else the `errno`; absent when the error carries neither) |
+| `CORE.IMMUTABLE_INPUT_MISMATCH` | `INTERNAL_INVARIANT` | False | ERROR | supervisor | primary of `STARTING → FAILED_TO_START` when the executable is present but is not a regular file, is a reparse point, has a reparse-point ancestor, or its SHA-256 differs (run `→ FAILED`); an **absent** executable is not this code (§2.5 reading 3), and neither is a present regular executable whose bytes cannot be read — that is the pre-swap `Failure(CORE.INVARIANT_VIOLATION)` with `check = executable_unreadable` of §4.1 row 1, which reaches no `STARTING` and no `FAILED_TO_START` | `reason` ∈ {`not_regular_file`, `reparse_point`, `ancestor_reparse_point`, `hash_mismatch`}, `expected_hash`, `observed_hash` (present only for `hash_mismatch`, where the observation always carries it) |
 | `PERSISTENCE.CONCURRENCY_CONFLICT` | `PERSISTENCE` | True | ERROR | none (table parity with `experiments.diagnostics` only) | never minted by Stage 7 code: a lifecycle `Failure` carrying it is returned unchanged (§5.3) | — |
 
 Merged codes Stage 7 mints through `stage6_diagnostic` with their merged postures:
@@ -1179,7 +1197,8 @@ The correlation rule: every diagnostic the supervisor or the reconciler mints fo
 a `VALIDATE` or `RUN` invocation carries `run_id` and `experiment_id` — the
 supervisor takes them from the `EngineRunRecord` that `linked_run` returns right after `load` and
 before preflight (§6.3), so the pre-envelope primaries of §6.4 rows 1–2 and the
-absent-executable `FAILED_TO_START` carry them too; the reconciler takes them from
+absent-executable `FAILED_TO_START` carry them too, as do the §4.4 refusals (the
+unreadable executable of §4.1 row 1 included); the reconciler takes them from
 `RunReconciliationFacts` — and a `DESCRIBE` diagnostic carries `invocation_id`
 only. The one exception is the merged parser's rejection diagnostic, which
 `parse_protocol_line` mints with `invocation_id` only and which is recorded as
@@ -1264,7 +1283,7 @@ Ownership: **caller** = whoever builds the `AdapterCommand` (Stage 10 or a test)
 
 | # | Input | Source of truth | Chosen by | Validated | Failure |
 |---|---|---|---|---|---|
-| 1 | argv[0], the executable | `catalog_entry.executable_path` (`AbsoluteLocalExecutablePath`) | caller (catalog entry inside the command) | supervisor, before the swap: regular file, no reparse point on it or any ancestor, SHA-256 of its bytes equals `executable_hash` (`ExecutableObservation`) | absent → `STARTING → FAILED_TO_START` with `ADAPTER.UNAVAILABLE` (run `→ UNAVAILABLE`); not regular, reparse (the file or any ancestor), hash differs → `FAILED_TO_START` with `CORE.IMMUTABLE_INPUT_MISMATCH` (run `→ FAILED`) |
+| 1 | argv[0], the executable | `catalog_entry.executable_path` (`AbsoluteLocalExecutablePath`) | caller (catalog entry inside the command) | supervisor, before the swap: regular file, no reparse point on it or any ancestor, SHA-256 of its bytes equals `executable_hash` (`ExecutableObservation`) | absent → `STARTING → FAILED_TO_START` with `ADAPTER.UNAVAILABLE` (run `→ UNAVAILABLE`); not regular, reparse (the file or any ancestor), hash differs → `FAILED_TO_START` with `CORE.IMMUTABLE_INPUT_MISMATCH` (run `→ FAILED`); present regular file whose bytes cannot be read to compute the hash (`observe_executable` propagates the `OSError` rather than fabricating an observation) → `Failure(CORE.INVARIANT_VIOLATION)` with `check = executable_unreadable`, `error_class` and, when the error carries one, `os_error_code`, before the swap: no `ExecutableObservation` is constructed, no lifecycle write occurs and no lifecycle operation beyond the `load` and `linked_run` reads is called, no compare-and-swap occurs, nothing is launched and the invocation and run records stay byte-identical (§4.4) — the executable is never launched without a verified byte hash |
 | 2 | fixed launch arguments | `catalog_entry.runtime_metadata["launch_arguments"]` (§4.2) | caller | supervisor, before the swap: absent, or a list of 0..16 non-empty strings without control characters | any other shape → `Failure(CORE.INVARIANT_VIOLATION)`, nothing changed |
 | 3 | verb, `--request`, `--output` / `--work-dir` / `--result` | `argument_array(command)` exactly (spec 14.1) | rendered by the merged function | shape by `AdapterCommand`'s validator; paths re-derived by `plan_command_paths` and compared | a path differing from the layout → `Failure(CORE.INVARIANT_VIOLATION)` |
 | 4 | `cwd` | `command_root` | supervisor | exists after creation; ≤ the directory ceiling | ceiling → `PROCESS.PATH_PREFLIGHT_REJECTED` (`Failure` before the swap) |
@@ -1329,10 +1348,22 @@ record.adapter_version)`; `catalog_launch_arguments(entry)` decodes; every comma
 equals `plan_command_paths(...)`; the paths pass `preflight_command_paths(paths,
 preflight, now=clock.now_utc(), invocation_id=record.invocation_id, run_id=<the
 linked run's>, experiment_id=<its experiment's>)` (ids `MISSING` for a `DESCRIBE`),
-so the rejection carries the correlation of §3.5. A
+so the rejection carries the correlation of §3.5; and the executable observation
+of §4.1 row 1 completes — an `OSError` while reading a present regular
+executable's bytes is `Failure(CORE.INVARIANT_VIOLATION)` with `details`
+`check = executable_unreadable`, `error_class` and, when the error carries one,
+`os_error_code`, refused here, before the cancellation check, `monotonic_at_swap`
+and `begin_start`: no `ExecutableObservation` exists (the frozen Task 2 record
+cannot represent a present regular file without a hash, and none is invented),
+no `PREFLIGHT_ACCEPTED` or `EXECUTABLE_OBSERVED` entry is emitted, no process,
+reader, Job Object, pid or process-start fact is created,
+`resolve_external_winner` is never called, `FAILED_TO_START` is never reached,
+and the applicable pre-launch cleanup is empty (no command root, envelope or
+handle exists yet). A
 failure returns `Failure` with `CORE.INVARIANT_VIOLATION` (shape, identity,
-layout) or `PROCESS.PATH_PREFLIGHT_REJECTED` (ceiling, reparse ancestor, root
-missing) and a `PREFLIGHT_REFUSED` trace entry; nothing is written.
+layout, unreadable executable) or `PROCESS.PATH_PREFLIGHT_REJECTED` (ceiling,
+reparse ancestor, root missing) and a `PREFLIGHT_REFUSED` trace entry; nothing is
+written.
 
 Inside `begin_start`, still before the swap (spec 15.1 step 1), the lifecycle
 revalidates the caller's material and the parent's eligibility: a
@@ -1524,7 +1555,10 @@ One decision thread per `invoke` (the coroutine awaits
 the event loop may cancel at any time). Before the loop, the pre-launch sequence
 of §4: `load` and `linked_run` (so every diagnostic minted from here on carries
 `run_id`/`experiment_id` for a linked kind, §3.5) → preflight (no change) →
-executable observation → `monotonic_at_swap`,
+executable observation (an unreadable regular executable returns the §4.4
+`Failure(CORE.INVARIANT_VIOLATION)`, `check = executable_unreadable`, here —
+before the cancellation check, `monotonic_at_swap` and `begin_start`, with no
+observation constructed and nothing launched or written) → `monotonic_at_swap`,
 `begin_start` → envelope, root creation, request write → readers opened and
 started immediately after `launch` returns and before any byte is interpreted,
 and at the same instant `PROCESS.JOB_OBJECT_UNAVAILABLE` minted and held when
@@ -2291,8 +2325,9 @@ list[int]`, `interrupt_calls: int`, `on_launch`, `close_flags`, `polls_between(k
 `validate_command`, `describe_command` (each built over
 `supervised_catalog_entry_for("fake.conformant")` — the hash-matching venv
 interpreter, so the executable observation of §4.4 passes even though the scripted
-controller launches nothing; the absent- and mismatched-executable cases rebuild
-the entry — and a supervision root under `tmp_path`; each with its `PENDING`
+controller launches nothing; the absent-, mismatched- and unreadable-executable
+cases rebuild the entry, the last over a copy of the launcher held open with no
+sharing — and a supervision root under `tmp_path`; each with its `PENDING`
 invocation and, for
 the linked kinds, its run, whose `request_hash` is `request_material_hash(...)`
 over the registered material's limits and whose `attempt_token_hash` matches the
@@ -2421,7 +2456,7 @@ suites stay on the stand-in, the Stage 7 matrix runs the production path).
 
 | Requirement | Enforced by |
 |---|---|
-| Only an explicitly registered absolute executable runs | `LaunchSpecification.argv[0]` is `catalog_entry.executable_path` (an `AbsoluteLocalExecutablePath`); the supervisor verifies a regular file, no reparse point on it or any ancestor, and `executable_hash` before the swap; an absent executable is `FAILED_TO_START` with `ADAPTER.UNAVAILABLE` (run `UNAVAILABLE`), a present mismatch is `FAILED_TO_START` with `CORE.IMMUTABLE_INPUT_MISMATCH` (run `FAILED`); the fixed launch arguments come only from the entry's own runtime metadata (§4.2); the Stage 7 guard scans the one `Popen` call for a list first argument, `shell=False`, `env={}`, `stdin=subprocess.DEVNULL`, `close_fds=True`, `bufsize=0`, `creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED` (a `BinOp(BitOr)` of that attribute and the local name bound to `4`) and the `# noqa: S603 - reviewed fixed catalog executable boundary` text by AST with planted controls |
+| Only an explicitly registered absolute executable runs | `LaunchSpecification.argv[0]` is `catalog_entry.executable_path` (an `AbsoluteLocalExecutablePath`); the supervisor verifies a regular file, no reparse point on it or any ancestor, and `executable_hash` before the swap; an absent executable is `FAILED_TO_START` with `ADAPTER.UNAVAILABLE` (run `UNAVAILABLE`), a present mismatch is `FAILED_TO_START` with `CORE.IMMUTABLE_INPUT_MISMATCH` (run `FAILED`), and a present regular file whose bytes cannot be read to compute the hash is refused before the swap as `Failure(CORE.INVARIANT_VIOLATION)` with `check = executable_unreadable` — no `ExecutableObservation`, no lifecycle write, no launch (§4.1 row 1) — so the executable is never launched without a verified byte hash; the fixed launch arguments come only from the entry's own runtime metadata (§4.2); the Stage 7 guard scans the one `Popen` call for a list first argument, `shell=False`, `env={}`, `stdin=subprocess.DEVNULL`, `close_fds=True`, `bufsize=0`, `creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED` (a `BinOp(BitOr)` of that attribute and the local name bound to `4`) and the `# noqa: S603 - reviewed fixed catalog executable boundary` text by AST with planted controls |
 | Exact argument preservation, no shell interpretation | `argv = (executable, *catalog_launch_arguments(entry), *argument_array(command))`, never joined; `fake.argv-echo` echoes `sys.orig_argv[1:]` on stderr (the interpreter strips its own options from `sys.argv`) and the Windows tests compare element by element with spaces, quotes and Unicode inside the path segments |
 | Fresh closed child environment | `LaunchSpecification` has no environment field; the controller passes `env={}`; the merged whole-tree environment scan (`os.environ`, `getenv`, the Pydantic control literal) stays green over every Stage 7 module; `fake.argv-echo` echoes its environment key list and the test asserts the planted parent sentinel and the parent-only keys are absent (the host injects two names of its own into every child, so the assertion is on absences, not on an empty list) |
 | Explicit `cwd` and core-selected temporary roots | `plan_command_paths` is the single layout; the supervisor refuses a command whose paths differ; `cwd = command_root`; roots are created by the supervisor with `exist_ok=False` |
@@ -4131,7 +4166,21 @@ def test_a_clean_exit_carries_no_stage_seven_diagnostic(scripted) -> None:
   absent executable → `FAILED_TO_START` with `ADAPTER.UNAVAILABLE` carrying
   `invocation_id`, `run_id` and `experiment_id`, run `UNAVAILABLE` for both a RUN
   and a VALIDATE; a present-but-mismatched executable → `FAILED_TO_START` with
-  `CORE.IMMUTABLE_INPUT_MISMATCH`, run `FAILED`; a `LaunchFailure` with `not_found`
+  `CORE.IMMUTABLE_INPUT_MISMATCH`, run `FAILED`; a present regular executable
+  whose bytes cannot be read (a copy of the launcher held open with no sharing,
+  released in `finally`) → `Failure` with `codes_of(failure) ==
+  (INVARIANT_VIOLATION,)`, `details["check"] == "executable_unreadable"`,
+  `details["error_class"] == "PermissionError"` and `details["os_error_code"]`
+  in `{errno.EACCES, 32}` (`open()` reports the sharing violation as `errno` 13
+  with no `winerror`), the stored pair still `(PENDING, READY)`,
+  `calls.count("begin_start") == 0` and `"resolve_external_winner" not in
+  calls`, then a positive control over the released copy whose
+  `executable_observation.verified` holds
+  (`test_a_regular_executable_with_unreadable_bytes_is_refused_before_the_swap`);
+  a scripted `observe_executable` raising a bare `OSError` → the same `check`,
+  `error_class == "OSError"` and no `os_error_code`
+  (`test_an_unreadable_executable_without_a_number_carries_its_class_only`);
+  a `LaunchFailure` with `not_found`
   → `ADAPTER.UNAVAILABLE` and any other `LaunchFailure` → `PROCESS.LAUNCH_FAILED`,
   both minted by the supervisor and the stored primary carrying `run_id` and
   `experiment_id` for a linked kind; another actor moving the `PENDING` record to
@@ -4198,6 +4247,15 @@ run transition; every write goes through the port; `asyncio` is used only for
 `to_thread`.
 **Independent review.** Declared readings: §2.5 items 1, 3, 5, 7, 10, 13, 14, 15
 and 19; the tick order; the single enrichment.
+**Human ruling (2026-09-17, after the Task 6 commit).** The unreadable regular
+executable is the pre-swap refusal of §4.1 row 1
+(`Failure(CORE.INVARIANT_VIOLATION)`, `check = executable_unreadable`; option (a)
+of the Task 6 constructibility gate); the plan's former routing of that case
+through `STARTING → FAILED_TO_START` with `CORE.IMMUTABLE_INPUT_MISMATCH`
+(`observed_hash` absent) was not constructible with the frozen Task 2
+`ExecutableObservation` and is withdrawn in every section. The committed Task 6
+bytes already implement the ruling; the docs-only correction that records it
+changes no source, test or schema.
 **Commit message.** `feat: add the windows process supervisor loop`
 **Clean-worktree checkpoint.** As stated above.
 
