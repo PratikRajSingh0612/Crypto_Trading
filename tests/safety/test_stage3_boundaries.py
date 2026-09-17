@@ -96,6 +96,7 @@ _ALLOWED_SOURCE_FILES = {
     "process_supervision/models.py",
     "process_supervision/ports.py",
     "process_supervision/readers.py",
+    "process_supervision/reconciliation.py",
     "process_supervision/roots.py",
     "process_supervision/supervisor.py",
     "process_supervision/windows_api.py",

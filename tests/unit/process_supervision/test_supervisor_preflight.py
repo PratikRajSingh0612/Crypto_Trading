@@ -203,9 +203,6 @@ def test_the_module_exports_exactly_the_supervisor_and_no_later_task_name() -> N
     assert supervisor_module.__all__ == ["WindowsProcessSupervisor"]
     for name in _TASK7_NAMES:
         assert not hasattr(supervisor_module, name), name
-    assert not (
-        _REPOSITORY / "src/crypto_lab/process_supervision/reconciliation.py"
-    ).exists()
 
 
 def test_the_supervisor_satisfies_the_port_with_the_exact_invoke_signature(
@@ -1245,7 +1242,7 @@ def test_no_retained_projection_carries_the_raw_token(scripted: _Scripted) -> No
 def test_the_source_allowlist_and_import_roots_name_the_supervisor_module() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert "process_supervision/supervisor.py" in allowed
-    assert len(allowed) == 94
+    assert len(allowed) == 95  # Task 7 appended process_supervision/reconciliation.py
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "asyncio" in roots
     assert len(roots) == 27
@@ -1254,7 +1251,9 @@ def test_the_source_allowlist_and_import_roots_name_the_supervisor_module() -> N
     assert modules.index("crypto_lab.process_supervision.supervisor") == (
         modules.index("crypto_lab.process_supervision.windows_process") + 1
     )
-    assert len(modules) == 94
+    assert (
+        len(modules) == 95
+    )  # Task 7 appended crypto_lab.process_supervision.reconciliation
 
 
 def test_the_task_five_pin_keeps_its_eleven_names_and_pins_the_nine_doubles() -> None:
