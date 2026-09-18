@@ -10,11 +10,18 @@ partitioned plan inventory, and the ``PROCESS.START_TIMED_OUT`` terminal mapping
 exercised directly without a child. This module deliberately imports neither
 ``subprocess`` nor ``os``: it inspects the launch helper's returned arguments and
 the harness source through ``ast``.
+
+Stage 7 Task 8 adds the seam pins of plan section 9.3: the default strategy is the
+stand-in (``build_harness(...).supervise is None``), the harness still holds exactly one
+``Popen`` call (the seam adds a strategy object, never a second launch), ``_Supervised``
+carries ``events``/``summary``/``supervision_outcome`` instead of a live ledger, and a
+``CommandRun`` produced on the default path carries ``supervision_outcome is None``.
 """
 
 from __future__ import annotations
 
 import ast
+import dataclasses
 import re
 import sys
 from pathlib import Path
@@ -28,8 +35,11 @@ from contract.harness import (
     INTERPRETER_FLAGS,
     LAUNCH_ENVIRONMENT,
     LAUNCH_SHELL,
+    CommandPlan,
     CommandRun,
     OfflineCommandHarness,
+    SuperviseStrategy,
+    _Supervised,
     build_harness,
     catalog_entry_for,
     catalog_for,
@@ -426,3 +436,70 @@ def test_the_harness_is_a_named_stand_in_and_not_a_supervisor() -> None:
     assert "RunManifest" not in names
     assert "ArtifactRef" not in names
     assert isinstance(OfflineCommandHarness, type)
+
+
+# --- The Stage 7 seam (plan 9.3; Stage 7 Task 8) --------------------------------------
+
+
+def test_the_default_strategy_is_the_stand_in_and_the_harness_keeps_one_popen(
+    tmp_path: Path,
+) -> None:
+    harness = build_harness(
+        tmp_path, "fake.conformant", limits=PROTOCOL_LIMITS_DEFAULT, seed="seam"
+    )
+    assert harness.supervise is None
+    assert type(harness.clock) is FixedClock
+    assert harness.clock.now_utc() == INSTANT
+    (call,) = _popen_calls(ast.parse(_HARNESS_PATH.read_text(encoding="utf-8")))
+    assert isinstance(call.func, ast.Attribute)
+    assert isinstance(call.func.value, ast.Name)
+    assert call.func.value.id == "subprocess"
+    # The seam never imports the Stage 7 doubles: no cycle with tests/doubles.
+    source = _HARNESS_PATH.read_text(encoding="utf-8")
+    assert "doubles.supervision" not in source
+
+
+def test_the_supervised_record_is_relaxed_for_the_seam() -> None:
+    fields = {field.name for field in dataclasses.fields(_Supervised)}
+    assert {"events", "summary", "supervision_outcome"} <= fields
+    assert "ledger" not in fields
+    # The fourth relaxation (Task 8 reading R13): a terminal decided before any launch
+    # has no stderr capture, so the field admits None; the default path always fills it.
+    (stderr_field,) = (
+        field for field in dataclasses.fields(_Supervised) if field.name == "stderr"
+    )
+    assert stderr_field.type == "StderrCapture | None"
+    assert "supervision_outcome" in {
+        field.name for field in dataclasses.fields(CommandRun)
+    }
+    plan_fields = [field.name for field in dataclasses.fields(CommandPlan)]
+    assert plan_fields == [
+        "invocation",
+        "run",
+        "material",
+        "cancel_after_first_heartbeat",
+        "stale_output_bytes",
+    ]
+    assert CommandPlan.__dataclass_params__.frozen  # type: ignore[attr-defined]
+    members = {name for name in dir(SuperviseStrategy) if not name.startswith("_")}
+    assert members == {"clock", "supervise"}
+    assert getattr(SuperviseStrategy, "_is_protocol", False) is True
+
+
+def test_the_default_strategy_yields_no_supervision_outcome(tmp_path: Path) -> None:
+    harness = build_harness(
+        tmp_path, "fake.conformant", limits=PROTOCOL_LIMITS_DEFAULT, seed="seam-none"
+    )
+    described = harness.describe(
+        "fake.conformant", FAKE_ADAPTER_VERSION, timeout_seconds=DEFAULT_TIMEOUT_SECONDS
+    )
+    assert described.supervision_outcome is None
+    assert described.command_result.invocation.state is _C.EXITED
+    experiment = harness.new_experiment("fake.conformant")
+    _experiment, run = harness.new_attempt(experiment)
+    validated = harness.validate(
+        harness.validating(run), timeout_seconds=DEFAULT_TIMEOUT_SECONDS
+    )
+    assert validated.supervision_outcome is None
+    assert validated.protocol_summary is not None
+    assert validated.protocol_summary.accepted_count == 2

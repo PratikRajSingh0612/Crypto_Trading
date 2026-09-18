@@ -1274,7 +1274,9 @@ def test_the_task_five_pin_keeps_its_eleven_names_and_pins_the_nine_doubles() ->
     assert set(later) - set(defined) == {"reconcile_invocations", "TeeController"}
     for name in defined:
         assert hasattr(doubles_module, name), name
-    assert not hasattr(doubles_module, "TeeController")
+    # Task 8 defined TeeController in the doubles (plan 9.2); reconcile_invocations
+    # is the Task 7 production function and never joins the doubles.
+    assert hasattr(doubles_module, "TeeController")
     assert not hasattr(doubles_module, "reconcile_invocations")
 
 

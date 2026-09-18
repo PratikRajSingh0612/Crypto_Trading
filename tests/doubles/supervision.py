@@ -13,7 +13,11 @@ Stage 7 Task 5 added ``SeedingDiagnosticRecorder`` and ``InMemoryReconciliationS
 Task 6 adds the scripted controller and process (``ScriptedProcessController``,
 ``ScriptedProcess``), the recording lifecycle wrapper and observer, the two
 supervision clocks, the production catalog helper ``supervised_catalog_entry_for`` and
-``build_supervisor``; Task 8 adds ``TeeController`` and the Stage 7 fake-script branch.
+``build_supervisor``; Task 8 adds ``TeeController`` (a delegating controller that
+snapshots the command root at launch, tees every stdout byte and counts the destructive
+calls the supervisor makes) and the Stage 7 fake-script branch of
+``supervised_catalog_entry_for`` (``SUPERVISION_FAKE_PATH`` for the six names of
+``SUPERVISION_FAKE_NAMES``).
 The scripted process launches nothing: its pipes are in-memory scripts that the
 supervisor's own reader threads consume, a held pipe blocks the reader on a condition
 until ``terminate_tree`` (EOF) or ``cancel_read`` (the real cancelled-read ``OSError``)
@@ -76,6 +80,7 @@ from crypto_lab.process_supervision.models import (
     CleanupAction,
     CleanupFailure,
     CleanupReport,
+    DescendantIdentity,
     InterruptOutcome,
     LaunchFailure,
     LaunchSpecification,
@@ -89,10 +94,11 @@ from crypto_lab.process_supervision.models import (
 )
 from crypto_lab.process_supervision.ports import (
     InvocationLifecycle,
+    LaunchedProcess,
     ProcessController,
     SupervisionObserver,
 )
-from crypto_lab.process_supervision.roots import PathPreflight
+from crypto_lab.process_supervision.roots import PathPreflight, snapshot_written_paths
 from crypto_lab.process_supervision.supervisor import WindowsProcessSupervisor
 from doubles.experiments import INSTANT, FixedClock, InMemoryBackingStore
 
@@ -104,6 +110,21 @@ SCRIPTED_SUPERVISOR_INSTANCE_ID: Final = "scripted-supervisor"
 #: harness (a test pins it equal to the harness's ``FAKE_ADAPTER_PATH``).
 FAKE_ADAPTER_PATH: Final[Path] = (
     Path(__file__).resolve().parents[1] / "fake_adapters" / "fake_adapter.py"
+)
+#: Plan 9.1, 4.2 (Task 8): the Stage 7 fake script and the six names it serves; the
+#: name branch of ``supervised_catalog_entry_for`` selects it for exactly these.
+SUPERVISION_FAKE_PATH: Final[Path] = (
+    Path(__file__).resolve().parents[1] / "fake_adapters" / "supervision_fake.py"
+)
+SUPERVISION_FAKE_NAMES: Final = frozenset(
+    {
+        "fake.argv-echo",
+        "fake.cancellation-graceful",
+        "fake.cancellation-ignores-interrupt",
+        "fake.grandchild",
+        "fake.grandchild-inherits-stdout",
+        "fake.stdout-flood",
+    }
 )
 FAKE_ADAPTER_VERSION: Final = "1.0.0"
 FAKE_ENGINE: Final = EngineIdentity(engine_name="fake.engine", engine_version="1.0.0")
@@ -758,6 +779,175 @@ class RecordingObserver:
 
 
 # --------------------------------------------------------------------------
+# Task 8: the tee controller (plan 9.2)
+# --------------------------------------------------------------------------
+
+
+class _TeeStream:
+    """A read-through over one pipe read end that copies every byte into a sink."""
+
+    def __init__(self, inner: IO[bytes], sink: bytearray) -> None:
+        self._inner = inner
+        self._sink = sink
+
+    def read(self, size: int = -1) -> bytes:
+        data = self._inner.read(size)
+        self._sink.extend(data)
+        return data
+
+    def readline(self, size: int = -1) -> bytes:
+        data = self._inner.readline(size)
+        self._sink.extend(data)
+        return data
+
+    def close(self) -> None:
+        self._inner.close()
+
+    @property
+    def closed(self) -> bool:
+        return self._inner.closed
+
+
+class _TeeProcess:
+    """A ``LaunchedProcess`` that delegates every member to the inner process, hands the
+    supervisor a tee over ``stdout`` and counts the destructive calls on the tee."""
+
+    def __init__(
+        self, controller: TeeController, inner: LaunchedProcess, sink: bytearray
+    ) -> None:
+        self._controller = controller
+        self._inner = inner
+        self._stdout = _TeeStream(inner.stdout, sink)
+
+    @property
+    def pid(self) -> int:
+        return self._inner.pid
+
+    @property
+    def creation_identity(self) -> str:
+        return self._inner.creation_identity
+
+    @property
+    def stdout(self) -> IO[bytes]:
+        return cast("IO[bytes]", self._stdout)
+
+    @property
+    def stderr(self) -> IO[bytes]:
+        return self._inner.stderr
+
+    @property
+    def job_available(self) -> bool:
+        return self._inner.job_available
+
+    @property
+    def job_error_code(self) -> int | MISSING:  # type: ignore[valid-type]
+        return self._inner.job_error_code
+
+    @property
+    def image_path(self) -> ExecutablePath | MISSING:  # type: ignore[valid-type]
+        return self._inner.image_path
+
+    def wait(self, timeout_seconds: float) -> int | None:
+        return self._inner.wait(timeout_seconds)
+
+    def interrupt(self) -> InterruptOutcome:
+        self._controller.interrupt_calls += 1
+        return self._inner.interrupt()
+
+    def terminate_tree(self, exit_code: int) -> TerminationReport:
+        self._controller.terminate_calls.append(exit_code)
+        report = self._inner.terminate_tree(exit_code)
+        self._controller.termination_reports.append(report)
+        return report
+
+    def cancel_read(self, native_thread_id: int) -> bool:
+        self._controller.cancel_read_calls.append(native_thread_id)
+        return self._inner.cancel_read(native_thread_id)
+
+    def close(self, *, close_stdout: bool, close_stderr: bool) -> CleanupReport:
+        report = self._inner.close(close_stdout=close_stdout, close_stderr=close_stderr)
+        self._controller.close_reports.append(report)
+        return report
+
+
+class TeeController:
+    """Plan 9.2: wraps a controller; ``launch`` snapshots the command root (the
+    write-boundary baseline the strategy subtracts, taken after the request file and
+    any planted stale file exist), tees every stdout byte and returns a delegating
+    process; ``launches`` lists every ``LaunchSpecification``; the counters record the
+    interrupt, termination, read-cancellation and close calls the supervisor makes, so
+    a test counts destructive actions instead of trusting idempotence. The row-47
+    stale file is planted by the strategy's observer on ``REQUEST_WRITTEN``, never by
+    the tee.
+    """
+
+    def __init__(self, inner: ProcessController) -> None:
+        self.inner = inner
+        self.launches: tuple[LaunchSpecification, ...] = ()
+        self.baselines: list[frozenset[str] | None] = []
+        self.identities: list[tuple[int, str]] = []
+        self.stdout_bytes: list[bytearray] = []
+        self.interrupt_calls = 0
+        self.terminate_calls: list[int] = []
+        self.identity_terminate_calls: list[int] = []
+        self.termination_reports: list[TerminationReport] = []
+        self.close_reports: list[CleanupReport] = []
+        self.cancel_read_calls: list[int] = []
+        self.inspect_calls: list[ProcessIdentity] = []
+
+    def launch(
+        self, specification: LaunchSpecification
+    ) -> LaunchedProcess | LaunchFailure:
+        self.launches = (*self.launches, specification)
+        try:
+            baseline: frozenset[str] | None = snapshot_written_paths(specification.cwd)
+        except OSError:
+            baseline = None
+        self.baselines.append(baseline)
+        result = self.inner.launch(specification)
+        if isinstance(result, LaunchFailure):
+            return result
+        sink = bytearray()
+        self.stdout_bytes.append(sink)
+        self.identities.append((result.pid, result.creation_identity))
+        return _TeeProcess(self, result, sink)
+
+    def inspect(self, identity: ProcessIdentity) -> ProcessInspection:
+        self.inspect_calls.append(identity)
+        return self.inner.inspect(identity)
+
+    def terminate_tree(
+        self, identity: ProcessIdentity, exit_code: int
+    ) -> TerminationReport:
+        self.terminate_calls.append(exit_code)
+        self.identity_terminate_calls.append(exit_code)
+        report = self.inner.terminate_tree(identity, exit_code)
+        self.termination_reports.append(report)
+        return report
+
+    @property
+    def baseline(self) -> frozenset[str] | None:
+        """The write-boundary baseline of the last launch (``None`` before one)."""
+        return self.baselines[-1] if self.baselines else None
+
+    @property
+    def last_stdout(self) -> bytes:
+        """Every stdout byte the supervisor read from the last launched process."""
+        return bytes(self.stdout_bytes[-1]) if self.stdout_bytes else b""
+
+    @property
+    def descendants(self) -> tuple[DescendantIdentity, ...]:
+        """Every descendant any termination report recorded, unique, in order."""
+        seen: dict[tuple[int, str], DescendantIdentity] = {}
+        for report in self.termination_reports:
+            for descendant in report.descendants:
+                seen.setdefault(
+                    (descendant.pid, descendant.creation_identity), descendant
+                )
+        return tuple(seen.values())
+
+
+# --------------------------------------------------------------------------
 # Task 6: the production catalog entry and the supervisor builder
 # --------------------------------------------------------------------------
 
@@ -769,10 +959,18 @@ def supervised_catalog_entry_for(
     executable: Path | None = None,
 ) -> AdapterCatalogEntry:
     """Plan 4.2: the venv launcher as the hashed executable with the fixed launch
-    arguments ``["-I", "-B", <script>]``; ``script`` overrides the merged fake,
-    ``executable`` replaces the launcher (its bytes are hashed)."""
+    arguments ``["-I", "-B", <script>]``; the script is the Stage 7 fake for the six
+    ``SUPERVISION_FAKE_NAMES`` and the merged fake otherwise, ``script`` overrides that
+    choice, ``executable`` replaces the launcher (its bytes are hashed)."""
     launcher = Path(sys.executable) if executable is None else Path(executable)
-    chosen = FAKE_ADAPTER_PATH if script is None else Path(script)
+    if script is None:
+        chosen = (
+            SUPERVISION_FAKE_PATH
+            if adapter_name in SUPERVISION_FAKE_NAMES
+            else FAKE_ADAPTER_PATH
+        )
+    else:
+        chosen = Path(script)
     return AdapterCatalogEntry(
         adapter_name=adapter_name,
         adapter_version=FAKE_ADAPTER_VERSION,
@@ -812,6 +1010,8 @@ def build_supervisor(
 __all__ = [
     "FAKE_ADAPTER_PATH",
     "SCRIPTED_SUPERVISOR_INSTANCE_ID",
+    "SUPERVISION_FAKE_NAMES",
+    "SUPERVISION_FAKE_PATH",
     "InMemoryReconciliationSource",
     "RealtimeMonotonicClock",
     "RecordingLifecycle",
@@ -820,6 +1020,7 @@ __all__ = [
     "ScriptedProcessController",
     "SeedingDiagnosticRecorder",
     "SupervisionFixedClock",
+    "TeeController",
     "build_supervisor",
     "supervised_catalog_entry_for",
 ]

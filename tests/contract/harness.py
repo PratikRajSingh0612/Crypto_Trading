@@ -29,6 +29,15 @@ advanced one second before each stdout line is parsed so replays are proven unde
 advanced receipt clock; a killed child's native exit is recorded by enrichment; the
 negotiated versions handed to every validate and run are the constant a described
 ``fake.conformant`` negotiates.
+
+Stage 7 plan section 9.3 adds one seam: ``OfflineCommandHarness`` takes an optional
+``SuperviseStrategy`` (``supervise``, ``None`` by default) and, when one is present,
+``describe``, ``validate`` and ``run`` hand the span from the ``PENDING`` invocation to
+the terminal record to ``strategy.supervise(harness, CommandPlan(...))`` instead of the
+stand-in loop below; the epilogue (the output parse, the semantic application, the
+availability observation and the token assertions) runs for both. The default path is
+today's code: the one ``Popen`` call, its keyword set and the stand-in wording are
+unchanged, and this module never imports the Stage 7 test doubles.
 """
 
 from __future__ import annotations
@@ -43,7 +52,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import IO, Any, Final
+from typing import IO, Any, Final, Protocol
 
 from pydantic.experimental.missing_sentinel import MISSING
 
@@ -77,6 +86,7 @@ from crypto_lab.adapters.events import (
     HeartbeatPayload,
     InvocationEventLedger,
     ProtocolEventSummary,
+    RunEvent,
     frame_protocol_lines,
     parse_protocol_line,
 )
@@ -176,6 +186,9 @@ from crypto_lab.experiments.semantic_outcome import (
     SemanticOutcome,
     apply_command_semantic_outcome,
 )
+from crypto_lab.experiments.supervision_lifecycle import RequestMaterial
+from crypto_lab.process_supervision.models import SupervisionOutcome
+from crypto_lab.process_supervision.roots import plan_command_paths
 from doubles.experiments import (
     INSTANT,
     MATERIAL_HASH,
@@ -304,9 +317,11 @@ def build_harness(
     limits: ProtocolLimits,
     seed: str,
     letter_leading_token: bool = False,
+    supervise: SuperviseStrategy | None = None,
 ) -> OfflineCommandHarness:
-    """A harness over a fresh store, a fixed clock and a seeded identity source."""
-    clock = FixedClock(INSTANT)
+    """A harness over a fresh store, a fixed clock and a seeded identity source; with a
+    strategy (Stage 7 plan 9.3) the harness adopts the strategy's clock."""
+    clock = FixedClock(INSTANT) if supervise is None else supervise.clock
     identity = SequentialIdentitySource(
         _letter_leading_seed(seed) if letter_leading_token else seed
     )
@@ -317,12 +332,14 @@ def build_harness(
         catalog_for(adapter_name, clock),
         root,
         limits,
+        supervise=supervise,
     )
 
 
 @dataclass(frozen=True, slots=True)
 class CommandRun:
-    """One finished command through the stand-in (plan 11.3 plus reading R1)."""
+    """One finished command through the stand-in (plan 11.3 plus reading R1); on the
+    Stage 7 production path ``supervision_outcome`` keeps the supervisor's outcome."""
 
     command_result: CommandResult
     outcome: SemanticOutcome | None
@@ -336,22 +353,56 @@ class CommandRun:
     output_bytes: bytes | None
     protocol_summary: ProtocolEventSummary | None
     rejection: EventRejected | None
+    supervision_outcome: SupervisionOutcome | None
 
 
 @dataclass(slots=True)
 class _Supervised:
-    """What the child-process loop hands back to the command-specific epilogue."""
+    """What the child-process loop (or a Stage 7 strategy) hands back to the
+    command-specific epilogue. ``events`` and ``summary`` replace the live ledger
+    (Stage 7 plan 9.3); ``stderr`` is ``None`` only for a terminal decided before any
+    launch, which has no capture; ``supervision_outcome`` is ``None`` on the stand-in
+    path."""
 
     invocation: CommandInvocationRecord
     run: EngineRunRecord | None
-    ledger: InvocationEventLedger
+    events: tuple[RunEvent, ...]
+    summary: ProtocolEventSummary
     raw_lines: tuple[bytes, ...]
     rejection: EventRejected | None
     replayed: int
-    stderr: StderrCapture
+    stderr: StderrCapture | None
     diagnostics: tuple[Diagnostic, ...]
     stdout_bytes_seen: int
     written_paths: frozenset[str]
+    supervision_outcome: SupervisionOutcome | None
+
+
+@dataclass(frozen=True, slots=True)
+class CommandPlan:
+    """Stage 7 plan 9.3: what a strategy receives for one command — the ``PENDING``
+    invocation, its run (``None`` for a describe), the request material the lifecycle
+    needs after ``STARTING``, the row-27 cancellation flag and the row-47 stale
+    bytes."""
+
+    invocation: CommandInvocationRecord
+    run: EngineRunRecord | None
+    material: RequestMaterial
+    cancel_after_first_heartbeat: bool
+    stale_output_bytes: bytes | None
+
+
+class SuperviseStrategy(Protocol):
+    """Stage 7 plan 9.3: the seam that drives one command from ``PENDING`` to its
+    terminal record; the harness adopts ``clock`` and never imports an
+    implementation."""
+
+    @property
+    def clock(self) -> FixedClock: ...
+
+    def supervise(
+        self, harness: OfflineCommandHarness, plan: CommandPlan
+    ) -> _Supervised: ...
 
 
 def _snapshot(root: Path) -> frozenset[str]:
@@ -398,6 +449,8 @@ class OfflineCommandHarness:
         catalog: FrozenAdapterCatalog,
         root: Path,
         limits: ProtocolLimits,
+        *,
+        supervise: SuperviseStrategy | None = None,
     ) -> None:
         self.store = store
         self.clock = clock
@@ -405,6 +458,8 @@ class OfflineCommandHarness:
         self.catalog = catalog
         self.root = root
         self.limits = limits
+        #: Stage 7 plan 9.3: the strategy, ``None`` on the stand-in path.
+        self.supervise = supervise
         self._tokens: dict[str, str] = {}
         root.mkdir(parents=True, exist_ok=True)
 
@@ -887,6 +942,37 @@ class OfflineCommandHarness:
     def _observation_id(self, invocation_id: str) -> str:
         return f"avail_{_uuid4_shaped(sha256_bytes(invocation_id.encode('utf-8')))}"
 
+    def _request_material(self, run: EngineRunRecord) -> RequestMaterial:
+        """Stage 7 plan 9.3: the token material a strategy's lifecycle needs."""
+        return RequestMaterial(
+            token=AttemptTokenMaterial(
+                run_id=run.run_id, attempt_token=self.token_for(run.run_id)
+            ),
+            negotiated_versions=DEFAULT_NEGOTIATED,
+            limits=self.limits,
+        )
+
+    def _through_strategy(
+        self,
+        strategy: SuperviseStrategy,
+        invocation: CommandInvocationRecord,
+        *,
+        run: EngineRunRecord | None,
+        material: RequestMaterial,
+        cancel_after_first_heartbeat: bool = False,
+        stale_output_bytes: bytes | None = None,
+    ) -> _Supervised:
+        return strategy.supervise(
+            self,
+            CommandPlan(
+                invocation=invocation,
+                run=run,
+                material=material,
+                cancel_after_first_heartbeat=cancel_after_first_heartbeat,
+                stale_output_bytes=stale_output_bytes,
+            ),
+        )
+
     # -- The three commands ---------------------------------------------------------
 
     def drive(
@@ -933,25 +1019,34 @@ class OfflineCommandHarness:
             request_hash=request_hash_of(payload),
             timeout_seconds=timeout_seconds,
         )
-        invocation = self._transition(invocation, _C.STARTING)
-        command_root = self._command_root(invocation)
-        command = AdapterCommand(
-            command_kind=_K.DESCRIBE,
-            catalog_entry=entry,
-            invocation_id=invocation.invocation_id,
-            request_path=str(command_root / REQUEST_FILE_NAME),
-            output_path=str(command_root / OUTPUT_FILE_NAME),
-            timeout_seconds=timeout_seconds,
-        )
-        envelope = build_request_envelope(invocation=invocation, payload=payload)
-        self._write_request(command_root, request_envelope_bytes(envelope), None)
-        supervised = self._supervise(
-            command,
-            invocation,
-            run=None,
-            token=None,
-            cancel_after_first_heartbeat=False,
-        )
+        command_root = self.root / invocation.invocation_id
+        if self.supervise is not None:
+            supervised = self._through_strategy(
+                self.supervise,
+                invocation,
+                run=None,
+                material=RequestMaterial(describe_payload=payload),
+            )
+        else:
+            invocation = self._transition(invocation, _C.STARTING)
+            command_root = self._command_root(invocation)
+            command = AdapterCommand(
+                command_kind=_K.DESCRIBE,
+                catalog_entry=entry,
+                invocation_id=invocation.invocation_id,
+                request_path=str(command_root / REQUEST_FILE_NAME),
+                output_path=str(command_root / OUTPUT_FILE_NAME),
+                timeout_seconds=timeout_seconds,
+            )
+            envelope = build_request_envelope(invocation=invocation, payload=payload)
+            self._write_request(command_root, request_envelope_bytes(envelope), None)
+            supervised = self._supervise(
+                command,
+                invocation,
+                run=None,
+                token=None,
+                cancel_after_first_heartbeat=False,
+            )
         invocation = supervised.invocation
         output_path = command_root / OUTPUT_FILE_NAME
         output_bytes = output_path.read_bytes() if output_path.is_file() else None
@@ -1007,7 +1102,7 @@ class OfflineCommandHarness:
             protocol_integrity=ProtocolIntegrityStatus.INTACT,
             accepted_events=(),
             diagnostics=supervised.diagnostics,
-            stderr=supervised.stderr,
+            stderr=MISSING if supervised.stderr is None else supervised.stderr,
             cancelled=invocation.state is _C.CANCELLED,
             timed_out=invocation.state is _C.TIMED_OUT,
         )
@@ -1024,6 +1119,7 @@ class OfflineCommandHarness:
             output_bytes=output_bytes,
             protocol_summary=None,
             rejection=None,
+            supervision_outcome=supervised.supervision_outcome,
         )
 
     def _observation(
@@ -1068,30 +1164,42 @@ class OfflineCommandHarness:
             request_hash=run.request_hash,
             timeout_seconds=timeout_seconds,
         )
-        invocation = self._transition(invocation, _C.STARTING)
-        command_root = self._command_root(invocation)
-        command = AdapterCommand(
-            command_kind=_K.VALIDATE,
-            catalog_entry=entry,
-            invocation_id=invocation.invocation_id,
-            request_path=str(command_root / REQUEST_FILE_NAME),
-            output_path=str(command_root / OUTPUT_FILE_NAME),
-            timeout_seconds=timeout_seconds,
-        )
-        envelope = build_request_envelope(
-            invocation=invocation, payload=self._engine_run_request(run)
-        )
-        self._write_request(command_root, request_envelope_bytes(envelope), tamper)
-        if stale_output_bytes is not None:
-            (command_root / STALE_OUTPUT_FILE_NAME).write_bytes(stale_output_bytes)
+        command_root = self.root / invocation.invocation_id
         token = self.token_for(run.run_id)
-        supervised = self._supervise(
-            command,
-            invocation,
-            run=run,
-            token=token,
-            cancel_after_first_heartbeat=False,
-        )
+        if self.supervise is not None:
+            if tamper is not None:
+                raise ValueError("adapter-side tamper vectors run on the stand-in only")
+            supervised = self._through_strategy(
+                self.supervise,
+                invocation,
+                run=run,
+                material=self._request_material(run),
+                stale_output_bytes=stale_output_bytes,
+            )
+        else:
+            invocation = self._transition(invocation, _C.STARTING)
+            command_root = self._command_root(invocation)
+            command = AdapterCommand(
+                command_kind=_K.VALIDATE,
+                catalog_entry=entry,
+                invocation_id=invocation.invocation_id,
+                request_path=str(command_root / REQUEST_FILE_NAME),
+                output_path=str(command_root / OUTPUT_FILE_NAME),
+                timeout_seconds=timeout_seconds,
+            )
+            envelope = build_request_envelope(
+                invocation=invocation, payload=self._engine_run_request(run)
+            )
+            self._write_request(command_root, request_envelope_bytes(envelope), tamper)
+            if stale_output_bytes is not None:
+                (command_root / STALE_OUTPUT_FILE_NAME).write_bytes(stale_output_bytes)
+            supervised = self._supervise(
+                command,
+                invocation,
+                run=run,
+                token=token,
+                cancel_after_first_heartbeat=False,
+            )
         # Plan 11.3 item 4: the output file is read and parsed for an EXITED
         # invocation alone; a core-won terminal never reconciles the child's output.
         output_path = command_root / OUTPUT_FILE_NAME
@@ -1129,48 +1237,69 @@ class OfflineCommandHarness:
             request_hash=run.request_hash,
             timeout_seconds=timeout_seconds,
         )
-        launched = _ok(
-            begin_linked_launch(
-                LinkedLaunchRequest(
-                    schema_version="1.0.0",
-                    invocation_id=invocation.invocation_id,
-                    expected_invocation_revision=invocation.revision,
-                    run_id=run.run_id,
-                    expected_run_revision=run.revision,
-                ),
-                unit_of_work=self._unit_of_work(),
-                clock=self.clock,
-            )
-        )
-        invocation, run = launched.invocation, launched.run
-        command_root = self._command_root(invocation)
-        request = self._engine_run_request(run)
-        tail = (
-            request.assigned_work_dir.relative_path
-            if work_dir_tail is None
-            else work_dir_tail
-        )
-        work_dir = command_root.joinpath(*tail.split("/"))
-        work_dir.mkdir(parents=True, exist_ok=False)
-        command = AdapterCommand(
-            command_kind=_K.RUN,
-            catalog_entry=entry,
-            invocation_id=invocation.invocation_id,
-            request_path=str(command_root / REQUEST_FILE_NAME),
-            work_dir=str(work_dir),
-            result_path=str(work_dir / RESULT_MANIFEST_RELATIVE_PATH),
-            timeout_seconds=timeout_seconds,
-        )
-        envelope = build_request_envelope(invocation=invocation, payload=request)
-        self._write_request(command_root, request_envelope_bytes(envelope), tamper)
         token = self.token_for(run.run_id)
-        supervised = self._supervise(
-            command,
-            invocation,
-            run=run,
-            token=token,
-            cancel_after_first_heartbeat=cancel_after_first_heartbeat,
-        )
+        if self.supervise is not None:
+            if tamper is not None or work_dir_tail is not None:
+                raise ValueError("adapter-side tamper vectors run on the stand-in only")
+            # The supervisor owns the layout (plan 7.1); the epilogue reads the same
+            # paths through the single layout function.
+            paths = plan_command_paths(
+                str(self.root),
+                command_kind=_K.RUN,
+                invocation_id=invocation.invocation_id,
+                run_id=run.run_id,
+            )
+            command_root = Path(paths.command_root)
+            work_dir = Path(str(paths.work_dir))
+            supervised = self._through_strategy(
+                self.supervise,
+                invocation,
+                run=run,
+                material=self._request_material(run),
+                cancel_after_first_heartbeat=cancel_after_first_heartbeat,
+            )
+        else:
+            launched = _ok(
+                begin_linked_launch(
+                    LinkedLaunchRequest(
+                        schema_version="1.0.0",
+                        invocation_id=invocation.invocation_id,
+                        expected_invocation_revision=invocation.revision,
+                        run_id=run.run_id,
+                        expected_run_revision=run.revision,
+                    ),
+                    unit_of_work=self._unit_of_work(),
+                    clock=self.clock,
+                )
+            )
+            invocation, run = launched.invocation, launched.run
+            command_root = self._command_root(invocation)
+            request = self._engine_run_request(run)
+            tail = (
+                request.assigned_work_dir.relative_path
+                if work_dir_tail is None
+                else work_dir_tail
+            )
+            work_dir = command_root.joinpath(*tail.split("/"))
+            work_dir.mkdir(parents=True, exist_ok=False)
+            command = AdapterCommand(
+                command_kind=_K.RUN,
+                catalog_entry=entry,
+                invocation_id=invocation.invocation_id,
+                request_path=str(command_root / REQUEST_FILE_NAME),
+                work_dir=str(work_dir),
+                result_path=str(work_dir / RESULT_MANIFEST_RELATIVE_PATH),
+                timeout_seconds=timeout_seconds,
+            )
+            envelope = build_request_envelope(invocation=invocation, payload=request)
+            self._write_request(command_root, request_envelope_bytes(envelope), tamper)
+            supervised = self._supervise(
+                command,
+                invocation,
+                run=run,
+                token=token,
+                cancel_after_first_heartbeat=cancel_after_first_heartbeat,
+            )
         # Plan 11.3 item 4: the manifest is read, parsed and the candidates observed
         # for an EXITED invocation alone; a core-won terminal reconciles nothing.
         result_path = work_dir / RESULT_MANIFEST_RELATIVE_PATH
@@ -1186,7 +1315,7 @@ class OfflineCommandHarness:
                     token=token,
                 )
             observations = self._observe_candidates(
-                work_dir, supervised.ledger.summary(), parse, token
+                work_dir, supervised.summary, parse, token
             )
         return self._conclude(
             supervised,
@@ -1253,7 +1382,7 @@ class OfflineCommandHarness:
         invocation = supervised.invocation
         run = supervised.run
         assert run is not None
-        summary = supervised.ledger.summary()
+        summary = supervised.summary
         parsed_output: Any = MISSING
         source_hash: Any = MISSING
         if isinstance(parse, ValidationResultParse):
@@ -1298,9 +1427,9 @@ class OfflineCommandHarness:
                 if invocation.state is _C.PROTOCOL_FAILED
                 else ProtocolIntegrityStatus.INTACT
             ),
-            accepted_events=supervised.ledger.events,
+            accepted_events=supervised.events,
             diagnostics=supervised.diagnostics,
-            stderr=supervised.stderr,
+            stderr=MISSING if supervised.stderr is None else supervised.stderr,
             cancelled=invocation.state is _C.CANCELLED,
             timed_out=invocation.state is _C.TIMED_OUT,
         )
@@ -1317,6 +1446,7 @@ class OfflineCommandHarness:
             output_bytes=output_bytes,
             protocol_summary=summary,
             rejection=supervised.rejection,
+            supervision_outcome=supervised.supervision_outcome,
         )
 
     # -- The child-process loop (plan 11.3 items 1-3) --------------------------------
@@ -1589,7 +1719,8 @@ class OfflineCommandHarness:
         return _Supervised(
             invocation=invocation,
             run=run,
-            ledger=ledger,
+            events=ledger.events,
+            summary=ledger.summary(),
             raw_lines=tuple(raw_lines),
             rejection=rejection,
             replayed=replayed,
@@ -1597,6 +1728,7 @@ class OfflineCommandHarness:
             diagnostics=tuple(unique.values()),
             stdout_bytes_seen=stdout_bytes_seen,
             written_paths=_snapshot(command_root) - before,
+            supervision_outcome=None,
         )
 
     def _parse(

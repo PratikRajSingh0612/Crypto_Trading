@@ -5,7 +5,8 @@ exactly the section 2.6 paths and none touches the filesystem, the environment, 
 shell or an infrastructure root; exactly four reviewed classes carry a field
 annotated with the raw ``AttemptToken`` grammar (plan section 13); no module under
 ``tests/`` or ``scripts/`` invokes a shell or a string command, and ``subprocess``
-is imported by exactly the ten allowlisted files; the fake adapter imports only its
+is imported by exactly the eleven allowlisted files (the ten of Stage 6 plus the
+Stage 7 fake script, Stage 7 plan section 2.6); the fake adapter imports only its
 seven standard-library roots; no ``crypto_lab`` module imports the test tree,
 including its ``fake_adapters`` and ``contract`` packages; and the roadmap records
 Stage 6 complete with Stage 7 not started. Every scan is static and AST-based, and
@@ -94,10 +95,12 @@ _THIS_GUARD: Final = "tests/safety/test_stage6_boundaries.py"
 _FAKE_ADAPTER_ROOTS: Final = frozenset(
     {"argparse", "datetime", "hashlib", "json", "os", "sys", "time"}
 )
-#: Plan Task 9 step 2: the nine importers at the planning base plus the harness.
+#: Plan Task 9 step 2: the nine importers at the planning base plus the harness; the
+#: Stage 7 plan (section 2.6, Task 8) adds the Stage 7 fake script as the eleventh.
 _SUBPROCESS_IMPORTERS: Final = frozenset(
     {
         "tests/contract/harness.py",
+        "tests/fake_adapters/supervision_fake.py",
         "tests/safety/test_forbidden_runtime_paths.py",
         "tests/safety/test_gitnexus_development_tooling.py",
         "tests/safety/test_stage3_boundaries.py",
@@ -371,7 +374,7 @@ def test_no_test_or_script_module_invokes_a_shell_or_a_string_command(
         )
     assert violations == []
     assert importers == set(_SUBPROCESS_IMPORTERS)
-    assert len(_SUBPROCESS_IMPORTERS) == 10
+    assert len(_SUBPROCESS_IMPORTERS) == 11
     assert _HARNESS in _SUBPROCESS_IMPORTERS
     # The harness safety test inspects the launch helper's returned arguments and
     # must not import subprocess; the allowlist enforces it.

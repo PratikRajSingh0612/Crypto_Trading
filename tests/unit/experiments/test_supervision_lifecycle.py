@@ -207,7 +207,8 @@ _LATER_TASK_NAMES: Final = (
     "supervised_catalog_entry_for",
 )
 #: Stage 7 Task 6 defined exactly these nine in `tests/doubles/supervision.py` (plan
-#: 9.2); the two remaining names stay absent from the doubles until Tasks 7 and 8.
+#: 9.2); Task 8 added `TeeController` there, and `reconcile_invocations` (Task 7) is
+#: a production function that never joins the doubles.
 _TASK6_DOUBLES_NAMES: Final = (
     "WindowsProcessSupervisor",
     "RecordingLifecycle",
@@ -219,6 +220,7 @@ _TASK6_DOUBLES_NAMES: Final = (
     "build_supervisor",
     "supervised_catalog_entry_for",
 )
+_TASK8_DOUBLES_NAMES: Final = ("TeeController",)
 _NON_SUCCESS_RUN_STATES: Final = TERMINAL_ENGINE_RUN_STATES - {
     EngineRunState.SUCCEEDED,
     EngineRunState.SUCCEEDED_WITH_WARNINGS,
@@ -983,9 +985,11 @@ def test_the_module_defines_exactly_the_task_five_surface() -> None:
     assert lifecycle_module.SOURCE_COMPONENT == "experiments.supervision_lifecycle"
     for name in _LATER_TASK_NAMES:
         assert not hasattr(lifecycle_module, name), name
-    for name in _TASK6_DOUBLES_NAMES:
+    for name in (*_TASK6_DOUBLES_NAMES, *_TASK8_DOUBLES_NAMES):
         assert hasattr(doubles_module, name), name
-    for name in set(_LATER_TASK_NAMES) - set(_TASK6_DOUBLES_NAMES):
+    for name in (
+        set(_LATER_TASK_NAMES) - set(_TASK6_DOUBLES_NAMES) - set(_TASK8_DOUBLES_NAMES)
+    ):
         assert not hasattr(doubles_module, name), name
 
 
