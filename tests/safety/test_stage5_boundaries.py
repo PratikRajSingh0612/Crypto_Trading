@@ -60,7 +60,7 @@ from typing import Final
 import pytest
 from test_stage3_boundaries import (
     _ALLOWED_SOURCE_FILES,
-    _README_STAGE6_STATUS,
+    _README_STAGE7_STATUS,
     _environment_access_violations,
     _import_aliases,
     _imported_roots,
@@ -477,12 +477,12 @@ def test_the_roadmap_records_stage_five_approved_and_stage_six_not_started(
     so the untabulated pins live here, in the Task 9-owned guard: the roadmap's
     Stage 5 plan line is the approved form; the deferred Stage 6 row is gone
     (Stage 6 plan section 2.6: the positive became this negative, and the Stage 6
-    completion row and the Stage 7 deferred row are pinned by the Stage 6 guard);
-    README no longer calls Stage 5 pending and, outside its pinned Stage 6 status
-    block, claims no stage later than Stage 7 (the Stage 7 containment itself is
-    the Stage 3 guard's; the verification guide legitimately records Stage 7 and
-    Stage 9 deferrals of frozen residuals, so only its Stage 5 pending phrase is
-    denied here).
+    completion row is pinned by the Stage 6 guard and the Stage 7 completion row
+    by the Stage 7 guard, Stage 7 plan section 2.6); README no longer calls Stage 5
+    pending and, outside its pinned Stage 7 status block, claims no stage later
+    than Stage 8 (the Stage 8 containment itself is the Stage 3 guard's; the
+    verification guide legitimately records Stage 7 and Stage 9 deferrals of
+    frozen residuals, so only its Stage 5 pending phrase is denied here).
     """
     roadmap = (repository_root / _ROADMAP).read_text(encoding="utf-8")
     readme = (repository_root / "README.md").read_text(encoding="utf-8")
@@ -492,8 +492,8 @@ def test_the_roadmap_records_stage_five_approved_and_stage_six_not_started(
     assert _STAGE6_ROADMAP_ROW not in roadmap
     assert "Stage 5 has not started" not in readme
     assert "Stage 5 is not started" not in guide
-    assert _README_STAGE6_STATUS in readme
-    readme_rest = readme.replace(_README_STAGE6_STATUS, "")
+    assert _README_STAGE7_STATUS in readme
+    readme_rest = readme.replace(_README_STAGE7_STATUS, "")
     for later in ("Stage 8", "Stage 9", "Stage 10"):
         assert later not in readme_rest
 

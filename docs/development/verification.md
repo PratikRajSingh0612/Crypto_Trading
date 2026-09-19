@@ -156,6 +156,25 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pyte
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\test_schema_registry.py -q
 ```
 
+Stage 7's focused targets are the following. `tests\unit\process_supervision`,
+`tests\integration\process_supervision` (the supervised 52-row contract matrix
+and the Windows platform cases over the production supervisor),
+`tests\unit\experiments\test_supervision_lifecycle.py`, the two Stage 7 property
+modules and `tests\safety\test_stage7_boundaries.py` are new in Stage 7;
+`tests\unit\domain`, `tests\unit\experiments`, `tests\property`,
+`tests\contract`, `tests\safety`, `tests\architecture` and `tests\integration`
+are older modules whose contract Stage 7 extended with the monotonic clock, the
+cancellation token, the harness seam and the Stage 7 boundary guard; the
+registry stays at 35 schemas.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\domain tests\unit\process_supervision -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\experiments tests\property -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\integration\process_supervision -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\contract tests\safety tests\architecture tests\integration -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\safety\test_stage7_boundaries.py tests\unit\test_schema_registry.py -q
+```
+
 The `addopts` override removes the repository-wide coverage threshold only
 from a focused diagnostic run. The later complete suite must satisfy the
 configured branch-coverage gate.
@@ -704,15 +723,17 @@ and outside product, test, build, runtime, verification, and acceptance paths.
 
 ## Stage scope
 
-Project 1 Stage 6 is complete. Stage 6 implementation completed at
-`539e96bbba4cad0747dba5dc12ea3d74318d1c83`; the eight Stage 6 protocol
-schemas, the closed 35-schema registry, the Stage 6 boundary guard, the
-end-to-end protocol flow, and this status were added by the separate Task 9
-commit, which is not the implementation hash. The fake adapters run only
-through the test-resident harness, never through a production supervisor.
-The closed 35-schema registry holds the eight new Stage 6 schemas together
-with the twenty-seven Stage 3, 4 and 5 schemas, preserved byte-identical to
-`main`. Stage 7 is not started.
+Project 1 Stage 7 is complete. Shell-free absolute argument-array launch with
+a fresh empty environment, bounded stdout and stderr readers, incremental
+protocol parsing, paired UTC and monotonic deadlines, heartbeat liveness,
+graceful and forced termination with Job Object process-tree cleanup, durable
+PID creation identity, path preflight, stale-invocation rejection, and
+restart reconciliation are implemented. Stage 7 implementation completed at
+`c1b17e481e9e1c192d4cae0a70764bf4d643515a`; the Stage 7 boundary guard and
+this status were added by the separate Task 9 commit, which is not the
+implementation hash. No schema was added: the closed 35-schema registry is
+preserved byte-identical. The fake adapters run through the production
+supervisor as well as the test-resident stand-in. Stage 8 is not started.
 
 The independent sweeps agree on the falsifiable results: zero
 over-rejections, and zero disagreement between the four schema surfaces.
@@ -742,12 +763,48 @@ and `tests/safety/test_stage5_boundaries.py` enforces every one of those
 exclusions statically over the source tree.
 
 Stage 6 launches only the executable fake adapters, as child processes of the
-test-resident offline harness and never through a production supervisor; it
-opens no database, contacts no network, persists nothing outside in-memory
-test doubles, treats every adapter output as untrusted until reconciled,
-redacts every raw attempt token before a core record exists, and commits no
-success run state. `tests/safety/test_stage6_boundaries.py` enforces the
-fourteen Stage 6 modules' exclusions statically, pins the exact four classes
-that may carry a raw-token field, the ten `subprocess` importers and the
-no-shell rule over the whole test tree, and records the roadmap's Stage 6
-completion.
+test-resident offline harness; it opens no database, contacts no network,
+persists nothing outside in-memory test doubles, treats every adapter output as
+untrusted until reconciled, redacts every raw attempt token before a core record
+exists, and commits no success run state.
+`tests/safety/test_stage6_boundaries.py` enforces the fourteen Stage 6 modules'
+exclusions statically, pins the exact four classes that may carry a raw-token
+field, the eleven `subprocess` importers (the ten of Stage 6 and the Stage 7
+fake script) and the no-shell rule over the whole test tree, and records the
+roadmap's Stage 6 completion.
+
+Stage 7 launches the same executable fake adapters, and its own Stage 7 fake
+script, through the production `WindowsProcessSupervisor` over the real
+`WindowsProcessController` as well as through the stand-in: every command root
+lives under pytest's temporary directory, every launch is an absolute executable
+with an exact argument array, no shell and an empty environment block, and every
+real-process test ends in a `finally:` that terminates the identities it
+launched or recorded and asserts that none of them is still alive under its
+recorded creation identity. It opens no database, contacts no network, persists
+nothing outside in-memory test doubles, finalizes no artifact, creates no
+`RunManifest`, and commits no success run state.
+The Windows controller keeps a Toolhelp candidate as a descendant only when
+its creation time is not earlier than its parent's recorded creation time, so
+a stale parent process identifier that now names a newer process is excluded
+while a creation in the same clock tick is admitted.
+`tests/safety/test_stage7_boundaries.py` pins the twelve Stage 7 source modules,
+confines the five Stage 7 import roots to their named modules, scans the one
+`Popen` call in the source tree, pins the Stage 7 fake script's import surface,
+and records the roadmap's Stage 7 completion. Measured on one host during the
+Stage 7 implementation, the seven Stage 7 Windows platform modules take about 42
+seconds of pytest time and the supervised matrix about 50 seconds, and the
+stdout-flood row states its own 120-second deadline because each accepted event
+costs the supervision thread a few milliseconds; both figures are recorded in
+the stage ledger and should be re-derived rather than cited. Two limitations are
+recorded rather than hidden. Under coverage tracing a large post-exit stdout
+backlog can outlast the pipe-holder grace window, so the pipe-holder rule may
+fire once on an already-reaped root and add a `PROCESS.FORCED_TERMINATION`
+diagnostic to an otherwise clean flood; the kill finds no live process and the
+invocation still reaches `EXITED` with its exit facts, the flood row pins that
+bounded shape, and the correction is recorded in the stage ledger as an open
+note against the supervisor. Separately, the job-less grandchild tests of the
+Windows controller unit module end a launcher by process identifier inside the
+launcher's own create-suspended-then-resume window, which under host load can
+leave an unrecorded suspended interpreter child that no `finally:` assertion
+covers; the stage ledger records it as an open test-hygiene note against those
+tests and records the process probes taken around every long run.

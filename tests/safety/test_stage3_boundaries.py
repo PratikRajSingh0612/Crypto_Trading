@@ -1151,8 +1151,9 @@ _VERIFICATION_STAGE6_STATUS = "\n".join(
         "`main`. Stage 7 is not started.",
     )
 )
-#: Plan section 2.6: the one legitimate "Stage 7" sentence of the verification
-#: guide, pinned positively and subtracted before the containment assertion.
+#: Stage 6 plan section 2.6: the one legitimate "Stage 7" sentence of the
+#: verification guide while Stage 7 was not started; Stage 7 plan section 2.6 keeps
+#: its positive pin and still subtracts it before the containment assertion.
 _VERIFICATION_STAGE7_SENTENCE = (
     "Stage 7 retains physical ancestor reparse-point and volume containment."
 )
@@ -1161,6 +1162,58 @@ _STAGE6_ROADMAP_STATUS_LINE = (
 )
 _STAGE6_ROADMAP_PLAN_SENTENCE = (
     "Stages 1 through 6 have approved detailed implementation plans."
+)
+
+# --- Stage 7 Task 9: the completion-status successors of plan section 2.6 ---------
+#
+# The Stage 7 implementation hash is the Task 8 commit, the last commit that adds
+# Stage 7 behaviour. Plan section 2.6 requires Task 9 to introduce this constant in
+# the same commit that changes the prose and section 14 makes Task 9 one commit, so
+# the constant cannot name the Task 9 commit itself (a commit cannot contain its own
+# hash; the Stage 4, 5 and 6 rules). Every surface that names the hash also says, in
+# the same sentence, that the Stage 7 boundary guard and the status itself were added
+# by the separate Task 9 commit, which is not the implementation hash; Task 9 adds no
+# schema and no flow test (plan section 9.6), so the sentence names neither. That
+# commit's hash is reported in the completion report and the merge evidence, never
+# written into its own tree.
+STAGE7_IMPLEMENTATION_COMMIT = "c1b17e481e9e1c192d4cae0a70764bf4d643515a"
+STAGE7_PLAN = (
+    "docs/superpowers/plans/2026-08-10-project-1-windows-process-supervision-"
+    "implementation-plan.md"
+)
+_README_STAGE7_STATUS = (
+    "Project 1 Stage 7 is complete. Shell-free absolute argument-array launch with a "
+    "fresh empty environment, bounded stdout and stderr readers, incremental protocol "
+    "parsing, paired UTC and monotonic deadlines, heartbeat liveness, graceful and "
+    "forced termination with Job Object process-tree cleanup, durable PID creation "
+    "identity, path preflight, stale-invocation rejection, and restart reconciliation "
+    "are implemented. Stage 7 implementation completed at "
+    f"`{STAGE7_IMPLEMENTATION_COMMIT}`; the Stage 7 boundary guard and this status "
+    "were added by the separate Task 9 commit, which is not the implementation hash. "
+    "No schema was added: the closed 35-schema registry is preserved byte-identical. "
+    "The fake adapters run through the production supervisor as well as the "
+    "test-resident stand-in. Stage 8 has not started."
+)
+_VERIFICATION_STAGE7_STATUS = "\n".join(
+    (
+        "Project 1 Stage 7 is complete. Shell-free absolute argument-array launch with",
+        "a fresh empty environment, bounded stdout and stderr readers, incremental",
+        "protocol parsing, paired UTC and monotonic deadlines, heartbeat liveness,",
+        "graceful and forced termination with Job Object process-tree cleanup, durable",
+        "PID creation identity, path preflight, stale-invocation rejection, and",
+        "restart reconciliation are implemented. Stage 7 implementation completed at",
+        f"`{STAGE7_IMPLEMENTATION_COMMIT}`; the Stage 7 boundary guard and",
+        "this status were added by the separate Task 9 commit, which is not the",
+        "implementation hash. No schema was added: the closed 35-schema registry is",
+        "preserved byte-identical. The fake adapters run through the production",
+        "supervisor as well as the test-resident stand-in. Stage 8 is not started.",
+    )
+)
+_STAGE7_ROADMAP_STATUS_LINE = (
+    "**Status:** Approved planning decomposition; Stages 1 through 7 complete"
+)
+_STAGE7_ROADMAP_PLAN_SENTENCE = (
+    "Stages 1 through 7 have approved detailed implementation plans."
 )
 
 
@@ -1179,9 +1232,12 @@ def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
     readme = (repository_root / "README.md").read_text(encoding="utf-8")
     # Stage 5 plan section 2.7 advanced these two pins to their Stage 5 successors;
     # Stage 6 plan section 2.6 advanced them again in Task 9, here and in every
-    # other occurrence. Pairs, not swaps: the retired forms are denied.
-    assert _STAGE6_ROADMAP_STATUS_LINE in roadmap
-    assert _STAGE6_ROADMAP_PLAN_SENTENCE in roadmap
+    # other occurrence; Stage 7 plan section 2.6 advanced them once more in its
+    # Task 9. Pairs, not swaps: the retired forms are denied.
+    assert _STAGE7_ROADMAP_STATUS_LINE in roadmap
+    assert _STAGE7_ROADMAP_PLAN_SENTENCE in roadmap
+    assert _STAGE6_ROADMAP_STATUS_LINE not in roadmap
+    assert _STAGE6_ROADMAP_PLAN_SENTENCE not in roadmap
     assert _STAGE5_ROADMAP_STATUS_LINE not in roadmap
     assert _STAGE5_ROADMAP_PLAN_SENTENCE not in roadmap
     assert _STAGE4_ROADMAP_STATUS_LINE not in roadmap
@@ -1235,8 +1291,10 @@ def test_stage3_completion_status_is_exact(repository_root: Path) -> None:
     # because plan step 6 enumerates exactly two Task 8 edits to this module.
     # Every Stage 3 assertion above it stays verbatim. Stage 5 plan section 2.7
     # advanced the string to its Stage 5 successor in Task 9; Stage 6 plan section
-    # 2.6 advanced it to the Stage 6 successor in Task 9.
-    assert "**Status:** Project 1 Stages 1-6 complete" in readme
+    # 2.6 advanced it to the Stage 6 successor in Task 9; Stage 7 plan section 2.6
+    # advanced it to the Stage 7 successor in Task 9.
+    assert "**Status:** Project 1 Stages 1-7 complete" in readme
+    assert "**Status:** Project 1 Stages 1-6 complete" not in readme
     assert "**Status:** Project 1 Stages 1-5 complete" not in readme
     assert "**Status:** Project 1 Stages 1-4 complete" not in readme
 
@@ -1268,31 +1326,32 @@ def test_stage4_plan_approval_status_is_exact(repository_root: Path) -> None:
     # "within one point" band removes this sentence and fails here.
     assert _STAGE4_COVERAGE_SENTENCE in plan
 
-    # Stage 4 implementation is complete; Stages 5 and 6 are complete too (each
+    # Stage 4 implementation is complete; Stages 5, 6 and 7 are complete too (each
     # stage's Task 9), so the Stage 5 row is its completion row with the Stage 6
     # clause and the deferred row is gone. A pair, not a swap, for the same reason
     # as the Stage 4 transition above.
-    assert _STAGE6_ROADMAP_STATUS_LINE in roadmap
+    assert _STAGE7_ROADMAP_STATUS_LINE in roadmap
     assert _STAGE5_ROADMAP_ROW in roadmap
     assert _STAGE5_DEFERRED_ROW not in roadmap
 
 
-def test_stage6_completion_status_is_exact(repository_root: Path) -> None:
-    """One test, three surfaces, so no surface can drift alone (Stage 6 plan 2.6).
+def test_stage7_completion_status_is_exact(repository_root: Path) -> None:
+    """One test, three surfaces, so no surface can drift alone (Stage 7 plan 2.6).
 
-    The Stage 5 test of the same shape became this one in Task 9, with exactly the
+    The Stage 6 test of the same shape became this one in Task 9, with exactly the
     successors plan section 2.6 tabulates: positive pins are byte-exact, following
     the hard-wrapped comparison in
-    ``test_readme_uses_only_closed_stage3_launcher_setup``; the Stage 4 and Stage 5
-    hashes stay pinned in the roadmap's history rows only and keep their own
-    distinctness assertions; the two containment assertions now forbid any
-    "Stage 7" claim outside the pinned blocks, which is the exact contract that
-    "Stage 7 not started" appears only where it is pinned and no other Stage 7
-    claim exists -- the guide's one legitimate Stage 7 sentence is pinned
-    positively and subtracted first. The subtracted blocks are the only place
-    permitted to say "exhaustive". The Stage 6 completion row, the Stage 7 deferred
-    row and the Stage 6 plan-approval line are pinned by the Task 9-owned
-    ``tests/safety/test_stage6_boundaries.py``.
+    ``test_readme_uses_only_closed_stage3_launcher_setup``; the Stage 4, Stage 5
+    and Stage 6 hashes stay pinned in the roadmap's history rows only and keep their
+    own distinctness assertions; the two containment assertions now forbid any
+    "Stage 8" claim outside the pinned blocks, which is the exact contract that
+    "Stage 8 not started" appears only where it is pinned and no other Stage 8
+    claim exists -- the guide's Stage 7 containment sentence keeps its positive
+    pin and is subtracted with the blocks. The subtracted blocks are the only place
+    permitted to say "exhaustive". The Stage 7 completion row, the Stage 8 deferred
+    row and the Stage 7 plan-approval line are pinned by the Task 9-owned
+    ``tests/safety/test_stage7_boundaries.py``; the Stage 6 completion row's
+    "Stage 7 complete" clause by ``tests/safety/test_stage6_boundaries.py``.
     """
     earlier = {
         STAGE3_TASK8_COMMIT,
@@ -1303,6 +1362,12 @@ def test_stage6_completion_status_is_exact(repository_root: Path) -> None:
         STAGE4_EVALUATOR_CORRECTION_COMMIT,
         *STAGE4_PLAN_CORRECTION_COMMITS,
         *STAGE4_REVIEW_FOLLOWUP_COMMITS,
+    }
+    assert re.fullmatch(r"[0-9a-f]{40}", STAGE7_IMPLEMENTATION_COMMIT) is not None
+    assert STAGE7_IMPLEMENTATION_COMMIT not in earlier | {
+        STAGE4_IMPLEMENTATION_COMMIT,
+        STAGE5_IMPLEMENTATION_COMMIT,
+        STAGE6_IMPLEMENTATION_COMMIT,
     }
     assert re.fullmatch(r"[0-9a-f]{40}", STAGE6_IMPLEMENTATION_COMMIT) is not None
     assert STAGE6_IMPLEMENTATION_COMMIT not in earlier | {
@@ -1318,22 +1383,28 @@ def test_stage6_completion_status_is_exact(repository_root: Path) -> None:
     readme = (repository_root / "README.md").read_text(encoding="utf-8")
     guide = (repository_root / STAGE4_VERIFICATION_GUIDE).read_text(encoding="utf-8")
 
-    assert _STAGE6_ROADMAP_STATUS_LINE in roadmap
-    assert _STAGE6_ROADMAP_PLAN_SENTENCE in roadmap
+    assert _STAGE7_ROADMAP_STATUS_LINE in roadmap
+    assert _STAGE7_ROADMAP_PLAN_SENTENCE in roadmap
+    assert _STAGE6_ROADMAP_STATUS_LINE not in roadmap
+    assert _STAGE6_ROADMAP_PLAN_SENTENCE not in roadmap
     assert _STAGE5_ROADMAP_STATUS_LINE not in roadmap
     assert _STAGE5_ROADMAP_PLAN_SENTENCE not in roadmap
     assert _STAGE4_ROADMAP_ROW in roadmap
     assert _STAGE5_ROADMAP_ROW in roadmap
+    assert f"**Approved detailed implementation plan:** `{STAGE7_PLAN}`." in roadmap
+    assert f"**Planned detailed implementation plan:** `{STAGE7_PLAN}`." not in roadmap
 
-    assert _README_STAGE6_STATUS in readme
-    assert _VERIFICATION_STAGE6_STATUS in guide
+    assert _README_STAGE7_STATUS in readme
+    assert _VERIFICATION_STAGE7_STATUS in guide
     assert _VERIFICATION_CORPUS_QUALIFICATION in guide
     assert _VERIFICATION_NON_GOALS in guide
     assert _VERIFICATION_STAGE7_SENTENCE in guide
     assert _README_STAGE4_STATUS not in readme
     assert _README_STAGE5_STATUS not in readme
+    assert _README_STAGE6_STATUS not in readme
     assert _VERIFICATION_STAGE4_STATUS not in guide
     assert _VERIFICATION_STAGE5_STATUS not in guide
+    assert _VERIFICATION_STAGE6_STATUS not in guide
 
     for phrase in _RETIRED_STATUS_PHRASES:
         assert phrase not in readme
@@ -1341,11 +1412,14 @@ def test_stage6_completion_status_is_exact(repository_root: Path) -> None:
 
     # The same implementation hash on every surface, asserted separately so
     # changing it in exactly one file fails here and names that file. The roadmap
-    # keeps the Stage 4 and Stage 5 hashes in its history rows; README and the
-    # guide carry the Stage 6 hash alone.
+    # keeps the Stage 4, Stage 5 and Stage 6 hashes in its history rows; README and
+    # the guide carry the Stage 7 hash alone.
+    assert STAGE7_IMPLEMENTATION_COMMIT in roadmap
+    assert STAGE7_IMPLEMENTATION_COMMIT in readme
+    assert STAGE7_IMPLEMENTATION_COMMIT in guide
     assert STAGE6_IMPLEMENTATION_COMMIT in roadmap
-    assert STAGE6_IMPLEMENTATION_COMMIT in readme
-    assert STAGE6_IMPLEMENTATION_COMMIT in guide
+    assert STAGE6_IMPLEMENTATION_COMMIT not in readme
+    assert STAGE6_IMPLEMENTATION_COMMIT not in guide
     assert STAGE5_IMPLEMENTATION_COMMIT in roadmap
     assert STAGE5_IMPLEMENTATION_COMMIT not in readme
     assert STAGE5_IMPLEMENTATION_COMMIT not in guide
@@ -1355,14 +1429,14 @@ def test_stage6_completion_status_is_exact(repository_root: Path) -> None:
 
     # Containment. Remove the pinned blocks, then scan what is left. Scoped to
     # the two documentation files, never the roadmap: the roadmap carries its
-    # own Stage 7 rows, and "exhaustive" occurs there legitimately.
-    readme_rest = readme.replace(_README_STAGE6_STATUS, "")
+    # own Stage 8 rows, and "exhaustive" occurs there legitimately.
+    readme_rest = readme.replace(_README_STAGE7_STATUS, "")
     guide_rest = (
-        guide.replace(_VERIFICATION_STAGE6_STATUS, "")
+        guide.replace(_VERIFICATION_STAGE7_STATUS, "")
         .replace(_VERIFICATION_CORPUS_QUALIFICATION, "")
         .replace(_VERIFICATION_STAGE7_SENTENCE, "")
     )
-    assert "Stage 7" not in readme_rest
-    assert "Stage 7" not in guide_rest
+    assert "Stage 8" not in readme_rest
+    assert "Stage 8" not in guide_rest
     assert "exhaustiv" not in readme_rest.lower()
     assert "exhaustiv" not in guide_rest.lower()

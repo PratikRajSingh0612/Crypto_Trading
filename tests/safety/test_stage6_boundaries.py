@@ -9,7 +9,8 @@ is imported by exactly the eleven allowlisted files (the ten of Stage 6 plus the
 Stage 7 fake script, Stage 7 plan section 2.6); the fake adapter imports only its
 seven standard-library roots; no ``crypto_lab`` module imports the test tree,
 including its ``fake_adapters`` and ``contract`` packages; and the roadmap records
-Stage 6 complete with Stage 7 not started. Every scan is static and AST-based, and
+Stage 6 complete, with its Stage 7 deferred row retired by Stage 7 completion
+(Stage 7 plan section 2.6, Task 9). Every scan is static and AST-based, and
 every scan carries a planted-violation control, because a guard that cannot fail
 is not a guard.
 
@@ -38,9 +39,10 @@ Declared readings, so nothing is inferred silently:
   packages ``fake_adapters`` and ``contract``, so ``crypto_lab`` can import neither
   the fake executable nor the stand-in supervisor.
 - The completion-status facts that plan section 2.6 does not tabulate live here:
-  the Stage 6 completion row, the retired deferred row, the Stage 7 deferred row,
-  the Stage 6 plan-approval line and the negative of its planned form. The three
-  documentation surfaces themselves are pinned by the Stage 3 guard's Stage 6
+  the Stage 6 completion row (its last clause now "Stage 7 complete"), the retired
+  Stage 6 deferred row, the negative of the retired Stage 7 deferred row, the
+  Stage 6 plan-approval line and the negative of its planned form. The three
+  documentation surfaces themselves are pinned by the Stage 3 guard's Stage 7
   successor test.
 """
 
@@ -158,12 +160,16 @@ _STAGE6_ROADMAP_ROW: Final = (
     "added by the separate Task 9 commit, which is not the implementation hash; "
     "verified offline on the complete verifier; GitNexus remains "
     "`DISABLED_WITH_EVIDENCE` with the manual source, reference, and diff fallback "
-    "recorded; Stage 7 not started |"
+    # Stage 7 plan section 2.6: the one clause of this row Task 9 changes.
+    "recorded; Stage 7 complete |"
 )
 _STAGE6_DEFERRED_ROW: Final = (
     "| 6 — Adapter Protocol and Fake-Adapter Contract Harness | Intentionally "
     "deferred until Stages 3 and 5 completion | Not started | Not evaluated |"
 )
+#: The roadmap's deferred Stage 7 row, which Stage 6 completion left exactly as it
+#: was and which Stage 7 completion retired (Stage 7 plan section 2.6); its
+#: completion successor is pinned by ``tests/safety/test_stage7_boundaries.py``.
 _STAGE7_ROADMAP_ROW: Final = (
     "| 7 — Windows Process Supervision | Intentionally deferred until Stage 6 "
     "completion | Not started | Not evaluated |"
@@ -409,12 +415,21 @@ def test_every_os_system_mention_in_the_test_tree_is_text_not_a_call(
 def test_the_roadmap_records_stage_six_complete_and_stage_seven_not_started(
     repository_root: Path,
 ) -> None:
+    """The test name is historical and is kept (Stage 7 plan section 2.6).
+
+    Stage 7 completion retired the Stage 7 deferred row this test once pinned
+    positively -- the positive became this negative, exactly as the Stage 6 guard's
+    predecessor did for the Stage 5 guard -- and the Stage 6 completion row's last
+    clause became "Stage 7 complete". The Stage 7 completion row, the Stage 8
+    deferred row and the Stage 7 plan-approval line are pinned by the Task 9-owned
+    ``tests/safety/test_stage7_boundaries.py``.
+    """
     roadmap = (repository_root / _ROADMAP).read_text(encoding="utf-8")
     readme = (repository_root / "README.md").read_text(encoding="utf-8")
     guide = (repository_root / _VERIFICATION_GUIDE).read_text(encoding="utf-8")
     assert _STAGE6_ROADMAP_ROW in roadmap
     assert _STAGE6_DEFERRED_ROW not in roadmap
-    assert _STAGE7_ROADMAP_ROW in roadmap
+    assert _STAGE7_ROADMAP_ROW not in roadmap
     assert STAGE6_IMPLEMENTATION_COMMIT in roadmap
     assert f"**Approved detailed implementation plan:** `{STAGE6_PLAN}`." in roadmap
     assert f"**Planned detailed implementation plan:** `{STAGE6_PLAN}`." not in roadmap
