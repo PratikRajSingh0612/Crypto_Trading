@@ -795,16 +795,36 @@ Stage 7 implementation, the seven Stage 7 Windows platform modules take about 42
 seconds of pytest time and the supervised matrix about 50 seconds, and the
 stdout-flood row states its own 120-second deadline because each accepted event
 costs the supervision thread a few milliseconds; both figures are recorded in
-the stage ledger and should be re-derived rather than cited. Two limitations are
-recorded rather than hidden. Under coverage tracing a large post-exit stdout
-backlog can outlast the pipe-holder grace window, so the pipe-holder rule may
-fire once on an already-reaped root and add a `PROCESS.FORCED_TERMINATION`
+the stage ledger and should be re-derived rather than cited. One limitation is
+recorded rather than hidden, and one corrected test-hygiene defect is recorded
+rather than erased. Under coverage tracing a large post-exit stdout backlog
+can outlast the pipe-holder grace window, so the pipe-holder rule may fire
+once on an already-reaped root and add a `PROCESS.FORCED_TERMINATION`
 diagnostic to an otherwise clean flood; the kill finds no live process and the
 invocation still reaches `EXITED` with its exit facts, the flood row pins that
 bounded shape, and the correction is recorded in the stage ledger as an open
-note against the supervisor. Separately, the job-less grandchild tests of the
-Windows controller unit module end a launcher by process identifier inside the
-launcher's own create-suspended-then-resume window, which under host load can
-leave an unrecorded suspended interpreter child that no `finally:` assertion
-covers; the stage ledger records it as an open test-hygiene note against those
-tests and records the process probes taken around every long run.
+note against the supervisor. Separately, and now closed: before the
+completion commit, the job-less grandchild tests of the Windows controller
+unit module ended a launcher by process identifier inside the launcher's own
+create-suspended-then-resume window, which under host load left never-resumed
+suspended interpreter children that no `finally:` assertion covered, and two
+complete-verifier runs leaked such fixture orphans. The test-only commit
+`e9bcd8e19563f6ececdf5f683a561cdf36caa712` corrected those tests: before any
+destructive action a job-less test waits for a line its child prints only
+once its interpreter is running (the child's own `ready` line, or the process
+identifier a spawner prints only after its own sleeper's `ready`) or for the
+child's own exit, ownership is process identifier plus creation identity for
+the launcher and every recorded descendant, and the fixture cleanup requires
+every owned identity to be absent. The stage ledger records zero task-owned
+survivors (processes running the project interpreter with a fixture program
+on their command line) and zero suspended fixture processes on every covered
+run since, including the complete verifier alone on the corrected tree and on
+merged `main`. That closed fixture defect is distinct from the host-timing
+facts that remain recorded: the pipe-holder note above stays open against the
+supervisor, and a host that signals a terminated process object only after
+the production post-termination bound is accepted by those tests as the
+bounded `TREE_VERIFIED_DEAD` report, never as a leak. Verification is
+required to be leak-free: a run that leaves a task-owned process or a Stage 7
+command root behind (pytest's own retained base temporary directories are
+neither) is not acceptance evidence whatever its exit status, and the stage
+ledger records the process probes taken around every long run.
