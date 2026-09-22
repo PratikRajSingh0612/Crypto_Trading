@@ -89,6 +89,8 @@ _ALLOWED_SOURCE_FILES = {
     "experiments/semantic_outcome.py",
     "experiments/supervision_lifecycle.py",
     "persistence/__init__.py",
+    "persistence/database.py",
+    "persistence/diagnostics.py",
     "process_supervision/__init__.py",
     "process_supervision/cancellation.py",
     "process_supervision/deadlines.py",
@@ -133,6 +135,7 @@ _ALLOWED_IMPORT_ROOTS = {
     "pydantic",
     "queue",
     "re",
+    "sqlalchemy",
     "subprocess",
     "threading",
     "tomllib",
@@ -448,9 +451,16 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
     (`process_supervision/windows_api.py`) and `subprocess`
     (`process_supervision/windows_process.py`), giving 26; Task 6 added
     `asyncio` (`process_supervision/supervisor.py`, imported function-locally
-    inside `invoke`), giving 27. The test name is historical and is kept.
+    inside `invoke`), giving 27.
+
+    The Stage 8 plan's section 2.6 adds two roots across Tasks 1 and 2, each in
+    the commit that first imports it and each confined by the Stage 8 guard to
+    the persistence modules that section names, so the pinned count reads
+    twenty-seven plus the roots added so far: Task 1 added `sqlalchemy`
+    (`persistence/database.py`), giving 28. The test name is historical and is
+    kept.
     """
-    assert len(_ALLOWED_IMPORT_ROOTS) == 27
+    assert len(_ALLOWED_IMPORT_ROOTS) == 28
     assert _ALLOWED_IMPORT_ROOTS == {
         "__future__",
         "argparse",
@@ -472,6 +482,7 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
         "pydantic",
         "queue",
         "re",
+        "sqlalchemy",
         "subprocess",
         "threading",
         "tomllib",

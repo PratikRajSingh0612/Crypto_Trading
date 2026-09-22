@@ -290,8 +290,10 @@ def test_gitnexus_is_absent_from_python_dependencies(repository_root: Path) -> N
     serialized = json.dumps(pyproject, sort_keys=True).lower()
 
     assert project["dependencies"] == [
+        "alembic>=1.13,<2",
         "pydantic>=2.12,<3",
         "pyyaml>=6.0.3,<7",
+        "sqlalchemy>=2.0,<3",
     ]
     assert "optional-dependencies" not in project
     assert "gitnexus" not in serialized

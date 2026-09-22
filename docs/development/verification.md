@@ -718,8 +718,11 @@ change:
 7. Commit `pyproject.toml` and generated `uv.lock` together.
 
 No dependency operation may install an engine, exchange client, networking
-client, database stack, or GitNexus. GitNexus remains disabled with evidence
-and outside product, test, build, runtime, verification, and acceptance paths.
+client, or GitNexus. SQLAlchemy and Alembic are the only permitted direct
+database-stack dependencies. Their acquisition is subject to the approved
+SQLite persistence gates; ordinary verification remains offline.
+GitNexus remains disabled with evidence and outside product, test, build,
+runtime, verification, and acceptance paths.
 
 ## Stage scope
 

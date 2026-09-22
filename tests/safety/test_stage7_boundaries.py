@@ -46,17 +46,18 @@ Declared readings, so nothing is inferred silently:
   two creations can share a clock tick). The verification guide states the same rule and
   both texts are pinned; the plan's own "later than" phrasing (plan 2026) is planning
   prose outside Task 9's file map and is recorded in the stage ledger.
-- The Stage 8 negative boundary is proved as absence: the ``persistence`` package holds
-  only its docstring-bearing ``__init__``, no tracked path under ``src``, ``tests``,
-  ``scripts`` or ``schemas`` or at the repository root is Stage 8-shaped, every
-  finalization and manifest name stays deferred, and the roadmap's Stage 8 row is the
-  deferred row.
+- The Stage 9 negative boundary is proved as absence: every finalization and manifest
+  name stays deferred, and the roadmap's Stage 8 row is the deferred row until the
+  Stage 8 guard advances it. The Stage 8 shape scan and the empty ``persistence``
+  package assertion this guard carried while Stage 8 was unstarted retired with Stage
+  8 Task 1 (Stage 8 plan section 2.6), which created the first persistence modules;
+  the deferred-name half survives under
+  ``test_stage_nine_finalization_names_stay_deferred``.
 """
 
 from __future__ import annotations
 
 import ast
-import re
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Final
@@ -249,8 +250,8 @@ _DESCENDANT_RULE_PHRASE: Final = "not earlier than"
 _DESCENDANT_RULE_RETIRED_PHRASE: Final = "later than its parent"
 _NUMBER_WORDS: Final[Mapping[int, str]] = {10: "ten", 11: "eleven", 12: "twelve"}
 _RETIRED_SUBPROCESS_IMPORTER_PHRASE: Final = "the ten `subprocess` importers"
-#: Stage 8 negatives: the finalization, manifest and persistence names that stay
-#: deferred.
+#: Stage 9 negatives: the finalization and manifest names that stay deferred through
+#: Stage 8 (Stage 8 plan section 2.6 keeps this half of the retired Stage 8 negative).
 _STAGE8_AND_LATER_NAMES: Final[tuple[str, ...]] = (
     "ArtifactFinalizer",
     "ArtifactRef",
@@ -262,11 +263,6 @@ _STAGE8_AND_LATER_NAMES: Final[tuple[str, ...]] = (
     "ResultFinalizationRequest",
     "RunManifest",
 )
-_STAGE8_SHAPED_PATTERN: Final = re.compile(
-    r"alembic|migration|\.db$|sqlite|sqlalchemy", re.IGNORECASE
-)
-_STAGE8_SCAN_ROOTS: Final[tuple[str, ...]] = ("src", "tests", "scripts", "schemas")
-_STAGE8_SCAN_SKIP: Final = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache"})
 
 
 # --------------------------------------------------------------------------
@@ -539,24 +535,6 @@ def _docstring_violations(tree: ast.Module, label: str) -> list[str]:
     ]
 
 
-def _stage8_shaped_paths(repository_root: Path) -> list[str]:
-    found: list[str] = []
-    candidates: list[Path] = [
-        path for path in repository_root.iterdir() if path.is_file()
-    ]
-    for root in _STAGE8_SCAN_ROOTS:
-        candidates.extend(
-            path
-            for path in (repository_root / root).rglob("*")
-            if not _STAGE8_SCAN_SKIP.intersection(path.parts)
-        )
-    for path in candidates:
-        relative = path.relative_to(repository_root).as_posix()
-        if _STAGE8_SHAPED_PATTERN.search(relative):
-            found.append(relative)
-    return sorted(found)
-
-
 def _defined_names(tree: ast.AST) -> frozenset[str]:
     return frozenset(
         node.name
@@ -803,21 +781,15 @@ def test_no_documentation_surface_claims_a_sandbox(repository_root: Path) -> Non
     assert _SANDBOX not in _read(repository_root, _README).lower()
 
 
-def test_stage_eight_persistence_has_not_started(repository_root: Path) -> None:
-    persistence = repository_root / "src/crypto_lab/persistence"
-    entries = sorted(
-        path.name
-        for path in persistence.iterdir()
-        if path.name not in _STAGE8_SCAN_SKIP
-    )
-    assert entries == ["__init__.py"]
-    tree = _parse(persistence / "__init__.py")
-    assert len(tree.body) == 1
-    (statement,) = tree.body
-    assert isinstance(statement, ast.Expr)
-    assert isinstance(statement.value, ast.Constant)
-    assert isinstance(statement.value.value, str)
-    assert _stage8_shaped_paths(repository_root) == []
+def test_stage_nine_finalization_names_stay_deferred(repository_root: Path) -> None:
+    """The surviving half of the Stage 7 "Stage 8 has not started" negative.
+
+    Stage 8 plan section 2.6: the Stage 8 shape scan and the empty ``persistence``
+    package assertion retired when Stage 8 Task 1 created the first persistence
+    modules; the nine finalization and manifest names keep their deferral (in
+    ``_DEFERRED_DEFINITIONS`` and defined nowhere under ``src``) until Stage 9
+    defines them, so the Stage 9 negative is never weakened.
+    """
     defined: set[str] = set()
     for path in _source_files(repository_root):
         defined |= _defined_names(_parse(path))
@@ -1082,27 +1054,6 @@ def test_the_docstring_scan_ignores_code_and_allows_clean_prose() -> None:
     code_only = ast.parse('"""Clean."""\nimport random\nx = "os.environ"\n')
     assert _docstring_violations(code_only, "probe.py") == []
     assert _docstring_violations(ast.parse("x = 1\n"), "probe.py") == []
-
-
-def test_the_stage_eight_path_scan_detects_each_shape(tmp_path: Path) -> None:
-    for root in _STAGE8_SCAN_ROOTS:
-        (tmp_path / root).mkdir()
-    assert _stage8_shaped_paths(tmp_path) == []
-    (tmp_path / "alembic.ini").write_text("[alembic]\n", encoding="utf-8")
-    (tmp_path / "src/crypto_lab").mkdir(parents=True)
-    (tmp_path / "src/crypto_lab/persistence_sqlite.py").write_text("", encoding="utf-8")
-    (tmp_path / "tests/migrations").mkdir()
-    (tmp_path / "tests/migrations/test_x.py").write_text("", encoding="utf-8")
-    (tmp_path / "schemas/registry.db").write_text("", encoding="utf-8")
-    (tmp_path / "scripts/__pycache__").mkdir()
-    (tmp_path / "scripts/__pycache__/sqlalchemy.pyc").write_text("", encoding="utf-8")
-    assert _stage8_shaped_paths(tmp_path) == [
-        "alembic.ini",
-        "schemas/registry.db",
-        "src/crypto_lab/persistence_sqlite.py",
-        "tests/migrations",
-        "tests/migrations/test_x.py",
-    ]
 
 
 def test_the_defined_name_scan_sees_classes_and_functions() -> None:

@@ -36,6 +36,17 @@ central package, ``experiments`` first, because the supervisor drives the
 application layer through a structural port and never imports it (specification
 section 8: ``process_supervision`` implements an application-facing port over
 adapter protocol types).
+
+Stage 8 Task 1 (Stage 8 plan section 2.6) adds ``persistence`` to the same scanner.
+Its allowlist is the plan's **package-level closure** -- ``domain``, the port-bearing
+packages ``experiments``, ``adapters`` and ``process_supervision``, the record packages
+``artifacts``, ``datasets`` and ``strategy``, ``configuration`` and itself -- with a
+positive anchor that grows per task (Task 1: ``domain`` and ``configuration``); the
+Stage 8 guard narrows the allowance to the exact module set in Task 8. The prohibited
+set names ``capabilities``, ``cli`` and the composition module: the implementation of
+the application-owned ports never imports the resolver, a composition root or the
+registry that composes the layers, and ``audit`` stays outside the closure because it
+is Stage 9's package.
 """
 
 from __future__ import annotations
@@ -125,6 +136,28 @@ _ALLOWED_FOR_PROCESS_SUPERVISION: tuple[str, ...] = (
     "crypto_lab.domain",
     "crypto_lab.adapters",
     "crypto_lab.process_supervision",
+)
+_PERSISTENCE = "persistence"
+#: Stage 8 plan section 2.6: the central packages ``persistence`` may never reach --
+#: the resolver, a composition root and the composition module (repeated here so the
+#: scanner's self-test names it explicitly for this package too).
+_PROHIBITED_FOR_PERSISTENCE: tuple[str, ...] = (
+    "crypto_lab.capabilities",
+    "crypto_lab.cli",
+    "crypto_lab.schema_registry",
+)
+#: Stage 8 plan section 2.6: the package-level closure of ``persistence`` (module
+#: docstring); the Stage 8 guard narrows it to the exact module set in Task 8.
+_ALLOWED_FOR_PERSISTENCE: tuple[str, ...] = (
+    "crypto_lab.domain",
+    "crypto_lab.experiments",
+    "crypto_lab.adapters",
+    "crypto_lab.process_supervision",
+    "crypto_lab.artifacts",
+    "crypto_lab.datasets",
+    "crypto_lab.strategy",
+    "crypto_lab.configuration",
+    "crypto_lab.persistence",
 )
 
 
@@ -399,6 +432,46 @@ def test_process_supervision_reaches_only_domain_adapters_and_itself(
     assert "crypto_lab.domain.command_invocation" in reached
 
 
+def test_persistence_imports_nothing_from_any_prohibited_package(
+    repository_root: Path,
+) -> None:
+    """Stage 8 plan section 2.6: the implementation of the application-owned ports
+    never imports ``capabilities``, ``cli`` or the composition module."""
+    # The tuple spells the composition module as a literal so the Task 1 guard
+    # test can ``literal_eval`` it; this pin keeps the two spellings from drifting.
+    assert _PROHIBITED_FOR_PERSISTENCE[-1] == _COMPOSITION_MODULE
+    assert (
+        find_package_import_violations(
+            _package_root(repository_root, _PERSISTENCE),
+            _PERSISTENCE,
+            _PROHIBITED_FOR_PERSISTENCE,
+        )
+        == ()
+    )
+
+
+def test_persistence_reaches_only_its_stage_eight_allowlist(
+    repository_root: Path,
+) -> None:
+    """The Stage 8 package-level closure of ``persistence`` (module docstring).
+
+    Anchored positively on the cross-package edges the task actually takes, so the
+    assertion cannot pass on an empty scan: Task 1 reaches ``domain`` (the ``Result``
+    values and the ``Clock`` port) and ``configuration`` (``DatabaseConfig``).
+    """
+    reached = _allowed_project_imports(
+        _package_root(repository_root, _PERSISTENCE), _PERSISTENCE
+    )
+    unexpected = tuple(
+        name
+        for name in reached
+        if not any(_is_within(name, allowed) for allowed in _ALLOWED_FOR_PERSISTENCE)
+    )
+    assert unexpected == ()
+    assert "crypto_lab.domain.results" in reached
+    assert "crypto_lab.configuration.models" in reached
+
+
 # --------------------------------------------------------------------------
 # Scanner self-tests -- a guard that cannot fail is not a guard
 # --------------------------------------------------------------------------
@@ -495,6 +568,41 @@ def test_the_process_supervision_allowlist_rejects_the_table_permitted_audit_edg
     assert reached == ("crypto_lab.audit",)
     assert not any(
         _is_within(reached[0], allowed) for allowed in _ALLOWED_FOR_PROCESS_SUPERVISION
+    )
+
+
+@pytest.mark.parametrize("prohibited_package", _PROHIBITED_FOR_PERSISTENCE)
+def test_the_scanner_rejects_every_package_prohibited_for_persistence(
+    tmp_path: Path,
+    prohibited_package: str,
+) -> None:
+    """Stage 8 Task 1: the same self-test over the ``persistence`` prohibited set."""
+    package_root = _write_package(
+        tmp_path, _PERSISTENCE, f"import {prohibited_package}\n"
+    )
+
+    violations = find_package_import_violations(
+        package_root, _PERSISTENCE, _PROHIBITED_FOR_PERSISTENCE
+    )
+
+    assert tuple(item.imported_name for item in violations) == (prohibited_package,)
+
+
+def test_the_persistence_allowlist_rejects_the_table_permitted_audit_edge(
+    tmp_path: Path,
+) -> None:
+    """The allowlist is a scope closure: ``audit`` abstractions are permitted by
+    section 27.1 and still outside Stage 8, so a planted edge must surface as
+    unexpected."""
+    package_root = _write_package(
+        tmp_path, _PERSISTENCE, "from crypto_lab.audit import sink\n"
+    )
+
+    reached = _allowed_project_imports(package_root, _PERSISTENCE)
+
+    assert reached == ("crypto_lab.audit",)
+    assert not any(
+        _is_within(reached[0], allowed) for allowed in _ALLOWED_FOR_PERSISTENCE
     )
 
 

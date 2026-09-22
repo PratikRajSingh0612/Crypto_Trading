@@ -33,8 +33,6 @@ _PROHIBITED_FAMILIES: tuple[str, ...] = (
     "aiohttp",
     "websocket",
     "websockets",
-    "sqlalchemy",
-    "alembic",
     "pyarrow",
     "pandas",
     "polars",
@@ -44,9 +42,15 @@ _PROHIBITED_FAMILIES: tuple[str, ...] = (
 )
 _REQUIREMENT_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
 _EXPECTED_RUNTIME_REQUIREMENTS = (
+    "alembic>=1.13,<2",
     "pydantic>=2.12,<3",
     "pyyaml>=6.0.3,<7",
+    "sqlalchemy>=2.0,<3",
 )
+#: Stage 8 plan 1.6 item 9 and 2.6: the two database-stack families the roadmap's
+#: Stage 8 row authorizes (specification 9 names SQLAlchemy 2.x and Alembic);
+#: removed from the prohibited families in Stage 8 Task 1 and asserted permitted.
+_PERMITTED_DATABASE_FAMILIES: tuple[str, ...] = ("alembic", "sqlalchemy")
 _EXPECTED_DEVELOPMENT_NAMES = {
     "hatchling",
     "hypothesis",
@@ -188,6 +192,21 @@ def test_matcher_rejects_every_prohibited_family(family: str) -> None:
     )
 
     assert prohibited_runtime_dependencies((dependency,)) == (dependency,)
+
+
+@pytest.mark.parametrize("family", _PERMITTED_DATABASE_FAMILIES)
+def test_the_stage_eight_database_stack_is_a_permitted_family(family: str) -> None:
+    """The positive control for the two families Stage 8 Task 1 released: each
+    is absent from the prohibited list and passes the matcher, while the list
+    keeps its remaining twenty-seven families."""
+    dependency = RuntimeDependency(
+        group="project.dependencies",
+        requirement=f"{family}>=1",
+    )
+
+    assert family not in _PROHIBITED_FAMILIES
+    assert prohibited_runtime_dependencies((dependency,)) == ()
+    assert len(_PROHIBITED_FAMILIES) == 27
 
 
 @pytest.mark.parametrize(

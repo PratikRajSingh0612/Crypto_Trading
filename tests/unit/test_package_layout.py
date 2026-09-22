@@ -82,6 +82,8 @@ PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab.artifacts",
     "crypto_lab.artifacts.ownership",
     "crypto_lab.persistence",
+    "crypto_lab.persistence.database",
+    "crypto_lab.persistence.diagnostics",
     "crypto_lab.process_supervision",
     "crypto_lab.process_supervision.cancellation",
     "crypto_lab.process_supervision.deadlines",
@@ -127,6 +129,18 @@ def _unexpected_operation(*args: object, **kwargs: object) -> NoReturn:
     raise AssertionError("package import attempted a forbidden side effect")
 
 
+class _UnexpectedPopen:
+    # Stage 8 Task 1: SQLAlchemy imports ``asyncio`` at import time and, on
+    # Windows, ``asyncio.windows_utils`` defines ``class Popen(subprocess.Popen)``
+    # while it loads. A function stand-in cannot be subclassed (``TypeError`` at
+    # class creation, which is not a side effect), so the stand-in is a class:
+    # defining a subclass stays legal and instantiating either one -- the only
+    # way to launch a process through this name -- still raises.
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("package import attempted a forbidden side effect")
+
+
 builtins.open = _unexpected_operation
 os.putenv = _unexpected_operation
 os.unsetenv = _unexpected_operation
@@ -142,7 +156,7 @@ os.spawnvpe = _unexpected_operation
 os.startfile = _unexpected_operation
 socket.socket = _unexpected_operation
 socket.create_connection = _unexpected_operation
-subprocess.Popen = _unexpected_operation
+subprocess.Popen = _UnexpectedPopen
 urllib.request.urlopen = _unexpected_operation
 http.client.HTTPConnection.connect = _unexpected_operation
 http.client.HTTPSConnection.connect = _unexpected_operation

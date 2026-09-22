@@ -17,10 +17,14 @@ Declared readings, so nothing is inferred silently:
   ``crypto_lab.domain.time`` is legitimate and only the standard-library root
   ``time`` is forbidden. The whole-tree scans begin green and are load-bearing
   through their controls; ``os.environ`` is the Stage 3 environment scan reused.
-  Stage 7 plan section 2.6 (Task 4) adds exactly one label-keyed exemption,
+  Stage 7 plan section 2.6 (Task 4) adds one label-keyed exemption,
   ``_INFRASTRUCTURE_EXEMPTIONS``: ``subprocess`` in
-  ``process_supervision/windows_process.py``, the one ``Popen`` importer in ``src``;
-  every other pair, the same root in any other module included, still fails.
+  ``process_supervision/windows_process.py``, the one ``Popen`` importer in ``src``.
+  Stage 8 plan section 2.6 adds one ``(module, root)`` pair per persistence module
+  that imports an infrastructure root, each in the task that first imports it
+  (Task 1: ``sqlalchemy`` in ``persistence/database.py``). Every other pair, the
+  same root in any other module included, still fails, and each exempted module
+  must really import its root.
 - "Stage 5 module" means exactly the eighteen paths plan section 2.7 tabulates,
   pinned here as a literal so a widened set cannot pass by omission. "Reads the
   filesystem or the environment at import time" is discharged statically as a
@@ -96,7 +100,10 @@ _INFRASTRUCTURE_ROOTS: Final = frozenset(
 #: Keyed on the exact module label and root, so no sibling module, no other root in the
 #: same module and no planted in-memory module is licensed by it.
 _INFRASTRUCTURE_EXEMPTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
-    {("process_supervision/windows_process.py", "subprocess")}
+    {
+        ("process_supervision/windows_process.py", "subprocess"),
+        ("persistence/database.py", "sqlalchemy"),
+    }
 )
 #: Resolved through the module's own import bindings, so ``from datetime import
 #: datetime as dt; dt.now()`` and ``import datetime; datetime.date.today()`` both
@@ -532,35 +539,50 @@ def test_the_infrastructure_scan_allows_the_legitimate_shapes(source: str) -> No
     assert _infrastructure_violations(ast.parse(source), "probe.py") == []
 
 
-def test_the_subprocess_exemption_is_exactly_one_module_and_one_root(
+def test_each_infrastructure_exemption_licenses_exactly_its_pair(
     repository_root: Path,
 ) -> None:
-    """Stage 7 plan section 2.6 (Task 4): the whole-block, label-keyed exemption.
+    """The whole-block, label-keyed exemptions, iterated pair by pair.
 
-    Exactly one ``(module, root)`` pair is exempt -- the Windows process controller's
-    ``subprocess`` import -- and the exemption licenses nothing else: ``time`` in the
-    same module still fails, ``subprocess`` in the sibling ``windows_api.py`` still
-    fails, and a planted in-memory module labelled ``process_supervision/probe.py`` (no
-    such repository file exists) still fails. The exempted module must really import
-    the root, so the pair cannot outlive the import it licenses.
+    Stage 7 plan section 2.6 (Task 4) and Stage 8 plan section 2.6 (Task 1):
+    exactly the reviewed ``(module, root)`` pairs are exempt and each licenses
+    nothing else. The exempted module must really import its root, so a pair
+    cannot outlive the import it licenses; every other denied root still fails in
+    that module; the exempted root still fails in a sibling module; and a planted
+    in-memory module labelled ``<package>/probe.py`` (no such repository file
+    exists) still fails. The three Stage 7 controls stay -- ``time`` in the
+    process controller, ``subprocess`` in ``windows_api.py``, the planted
+    ``process_supervision/probe.py`` -- and Stage 8 adds their three mirrors:
+    ``sqlalchemy`` in ``experiments/ports.py``, a planted ``persistence/probe.py``
+    and ``time`` in ``persistence/database.py``.
     """
     assert _INFRASTRUCTURE_EXEMPTIONS == frozenset(
-        {("process_supervision/windows_process.py", "subprocess")}
+        {
+            ("process_supervision/windows_process.py", "subprocess"),
+            ("persistence/database.py", "sqlalchemy"),
+        }
     )
-    ((module, root),) = _INFRASTRUCTURE_EXEMPTIONS
-    tree = _parse(repository_root / "src/crypto_lab" / module)
-    assert root in _imported_roots(tree)
-    assert _infrastructure_violations(tree, module) == []
-    assert _infrastructure_violations(ast.parse("import time\n"), module) != []
-    assert (
-        _infrastructure_violations(
-            ast.parse("import subprocess\n"), "process_supervision/windows_api.py"
-        )
-        != []
+    source = repository_root / "src/crypto_lab"
+    for module, root in sorted(_INFRASTRUCTURE_EXEMPTIONS):
+        tree = _parse(source / module)
+        assert root in _imported_roots(tree), (module, root)
+        assert _infrastructure_violations(tree, module) == []
+        for other_root in sorted(_INFRASTRUCTURE_ROOTS - {root}):
+            planted_root = ast.parse(f"import {other_root}\n")
+            assert _infrastructure_violations(planted_root, module) != []
+        planted = f"{module.partition('/')[0]}/probe.py"
+        assert not (source / planted).exists()
+        assert _infrastructure_violations(ast.parse(f"import {root}\n"), planted) != []
+    controls = (
+        ("import time\n", "process_supervision/windows_process.py"),
+        ("import subprocess\n", "process_supervision/windows_api.py"),
+        ("import subprocess\n", "process_supervision/probe.py"),
+        ("import sqlalchemy\n", "experiments/ports.py"),
+        ("import sqlalchemy\n", "persistence/probe.py"),
+        ("import time\n", "persistence/database.py"),
     )
-    planted = "process_supervision/probe.py"
-    assert not (repository_root / "src/crypto_lab" / planted).exists()
-    assert _infrastructure_violations(ast.parse("import subprocess\n"), planted) != []
+    for statement, label in controls:
+        assert _infrastructure_violations(ast.parse(statement), label) != [], label
 
 
 @pytest.mark.parametrize(
