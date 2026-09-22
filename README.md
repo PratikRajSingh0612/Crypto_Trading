@@ -190,7 +190,7 @@ implementation used to fix the meaning of a feature, not a backtester.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify.ps1
 ```
 
-The ten-operation workflow checks the lock and offline synchronization, formatting, linting, strict typing, deterministic schemas, tests and coverage, the offline build, exact schema bytes in both distributions, and Git whitespace. See [development verification](docs/development/verification.md) for focused commands and the dependency network gate.
+The eleven-operation workflow checks the lock and offline synchronization, formatting, linting, strict typing, deterministic schemas, the relational migration baseline, tests and coverage, the offline build, exact schema bytes in both distributions, and Git whitespace. See [development verification](docs/development/verification.md) for focused commands and the dependency network gate.
 
 ## Optional GitNexus developer context
 

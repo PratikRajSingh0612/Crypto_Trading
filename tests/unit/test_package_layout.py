@@ -84,6 +84,12 @@ PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab.persistence",
     "crypto_lab.persistence.database",
     "crypto_lab.persistence.diagnostics",
+    "crypto_lab.persistence.schema",
+    "crypto_lab.persistence.migration_runner",
+    "crypto_lab.persistence.migrations",
+    "crypto_lab.persistence.migrations.env",
+    "crypto_lab.persistence.migrations.versions",
+    "crypto_lab.persistence.migrations.versions.r0001_stage8_baseline",
     "crypto_lab.process_supervision",
     "crypto_lab.process_supervision.cancellation",
     "crypto_lab.process_supervision.deadlines",
@@ -141,6 +147,21 @@ class _UnexpectedPopen:
         raise AssertionError("package import attempted a forbidden side effect")
 
 
+def _no_entry_points(**kwargs: object) -> importlib.metadata.EntryPoints:
+    # Stage 8 Task 2: Alembic 1.20 discovers ``alembic.plugins`` entry points when
+    # ``alembic.runtime.plugins`` is imported, reading every installed
+    # distribution's metadata through ``open``. The discovery is the library's
+    # own import-time registry read, not a side effect of this package, so it is
+    # answered with an empty selection here; the locked environment declares no
+    # such entry point, which ``tests/unit/persistence/test_sqlite_migrations.py``
+    # asserts, and every other file, process and socket call still raises.
+    del kwargs
+    return importlib.metadata.EntryPoints()
+
+
+import importlib.metadata
+
+importlib.metadata.entry_points = _no_entry_points
 builtins.open = _unexpected_operation
 os.putenv = _unexpected_operation
 os.unsetenv = _unexpected_operation

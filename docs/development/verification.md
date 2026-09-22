@@ -84,10 +84,11 @@ The script stops at the first failure and runs, in order:
 4. launcher `ruff-check-all`
 5. launcher `mypy-all`
 6. launcher `schema-generate-check`
-7. launcher `pytest-all`
-8. launcher `build`
-9. launcher `schema-distribution`
-10. direct `git diff --check`
+7. launcher `migration-check`
+8. launcher `pytest-all`
+9. launcher `build`
+10. launcher `schema-distribution`
+11. direct `git diff --check`
 
 A successful partial command does not establish repository acceptance. Schema
 generation checks the closed 35-file registry without writing; distribution
@@ -693,6 +694,34 @@ value at the deepest position): every verdict is the expected one under a
 coarse hang ceiling, and the cost per byte stays linear. The measurements are
 recorded in the stage ledger; re-derive rather than cite them if a later stage
 changes a published Stage 6 record.
+
+## Migration workflow
+
+The relational schema is owned by the declarative metadata in
+`src/crypto_lab/persistence/schema.py` and is created only by the Alembic
+baseline revision `r0001_stage8_baseline` under
+`src/crypto_lab/persistence/migrations/`; there is no `alembic.ini`, and the
+runner in `src/crypto_lab/persistence/migration_runner.py` configures Alembic
+programmatically. Startup opens a database through `open_database`, which
+admits only a database stamped at the expected head; `open_for_migration`
+followed by `apply_migrations` is the explicit initialization path and the only
+path that creates a database file or runs a revision. An empty, behind, unknown
+or unversioned database is refused by the normal open without mutation, and a
+normal open never upgrades, stamps, drops or rebuilds a file.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 migration-check
+```
+
+The `migration-check` profile runs `scripts/verify_migrations.py` with the fixed
+`-I -B` interpreter flags and accepts no arguments. The script creates a
+temporary directory, initializes and migrates a throwaway database there
+through the same runner, and asserts exactly one head, a current revision
+report, no metadata drift, the pinned `sqlite_master` objects, the connection
+settings read back, `quick_check` `ok` and an empty `PRAGMA foreign_key_check`;
+it then closes the database and removes the directory. It inspects no other
+database, reads no configuration and no environment, launches no child
+process, and exits `1` with one line per failed check.
 
 ## Explicit configuration
 

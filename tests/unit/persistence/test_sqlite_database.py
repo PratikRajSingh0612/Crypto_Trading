@@ -1001,41 +1001,39 @@ def test_failure_mints_one_persistence_diagnostic_from_the_injected_clock(
 def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert {"persistence/database.py", "persistence/diagnostics.py"} <= allowed
-    assert len(allowed) == 97  # Task 1 appended the two persistence modules
+    assert len(allowed) == 103  # Tasks 1 and 2 appended the eight persistence modules
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "sqlalchemy" in roots
-    assert "alembic" not in roots  # Task 2 adds it
+    assert "alembic" in roots  # Task 2 added it
     assert roots.isdisjoint({"sqlite3", "os", "sys", "time", "logging"})
-    assert len(roots) == 28
+    assert len(roots) == 29
     modules = _literal(_PACKAGE_LAYOUT, "PACKAGE_MODULES")
     anchor = modules.index("crypto_lab.persistence")
     assert modules[anchor + 1 : anchor + 3] == (
         "crypto_lab.persistence.database",
         "crypto_lab.persistence.diagnostics",
     )
-    assert len(modules) == 97
+    assert len(modules) == 103
 
 
 def test_the_two_cross_pins_moved_to_the_running_sizes() -> None:
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     reconciliation = _RECONCILIATION_TESTS.read_text(encoding="utf-8")
     for source in (preflight, reconciliation):
-        assert "len(allowed) == 97" in source
-        assert "len(modules) == 97" in source
+        assert "len(allowed) == 103" in source
+        assert "len(modules) == 103" in source
         assert "len(allowed) == 95" not in source
         assert "len(modules) == 95" not in source
-    assert "len(roots) == 28" in preflight
+    assert "len(roots) == 29" in preflight
     assert "len(roots) == 27" not in preflight
 
 
-def test_the_infrastructure_exemptions_are_exactly_the_two_reviewed_pairs() -> None:
+def test_the_infrastructure_exemptions_include_the_database_module_pair() -> None:
+    """Task 1's pair is exempt; the exact nine-pair set is pinned by Task 2's
+    ``test_sqlite_migrations.py`` beside the pairs Task 2 added."""
     pairs = _literal(_STAGE5_GUARD, "_INFRASTRUCTURE_EXEMPTIONS")
-    assert pairs == frozenset(
-        {
-            ("process_supervision/windows_process.py", "subprocess"),
-            ("persistence/database.py", "sqlalchemy"),
-        }
-    )
+    assert ("process_supervision/windows_process.py", "subprocess") in pairs
+    assert ("persistence/database.py", "sqlalchemy") in pairs
     # The rewritten exemption test keeps its three Stage 7 controls and adds the
     # three Stage 8 mirrors: ``sqlalchemy`` in ``experiments/ports.py``, a planted
     # ``persistence/probe.py`` and ``time`` in ``persistence/database.py`` all fail.

@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 _EXPECTED_NORMALIZED_SHA256 = (
-    "c26114189aff63fa5f6e517ac64a23ec13f45d8a534096967807f6a37ca98dd3"
+    "4c2bec40d162168bb8084de7115510181d6f61ad62634ce695742996f5e4022c"
 )
 _ALLOWED_COMMANDS = {
     "<dynamic>",
@@ -41,6 +41,7 @@ _PYTHON_BEARING_OPERATIONS = (
     "cli-module-version",
     "cli-unknown",
     "cli-version",
+    "migration-check",
     "mypy-all",
     "pydantic-proof",
     "pytest-all",
@@ -494,7 +495,7 @@ def test_launcher_operation_set_is_closed_and_partitioned(
     labels = [label[1:-1] for label in quoted]
     assert len(labels) == len(set(labels))
     assert set(labels) == set(_EXPECTED_OPERATIONS)
-    assert len(_EXPECTED_OPERATIONS) == 20
+    assert len(_EXPECTED_OPERATIONS) == 21
     assert source.count("switch -CaseSensitive ($operation) {") == 2
     clause_sets = [{label[1:-1] for label in labels} for labels, _ in statements]
     assert set(_BOOTSTRAP_OPERATIONS) in clause_sets
@@ -543,6 +544,7 @@ def launcher_repository(
         root / ".venv" / "Scripts" / "ruff.exe",
         root / ".venv" / "Scripts" / "crypto-lab.exe",
         root / "scripts" / "generate_schemas.py",
+        root / "scripts" / "verify_migrations.py",
         root / "scripts" / "verify_schema_distribution.py",
         root / "tests" / "__exit37__.py",
         root / "tests" / "safety" / "test_uv_launcher.py",
@@ -724,6 +726,16 @@ def _run_arguments(repository_root: Path, *arguments: str) -> list[str]:
             ],
         ),
         (
+            ["migration-check"],
+            [
+                "RUN",
+                _PYTHON,
+                "-I",
+                "-B",
+                f"{_ROOT}\\scripts\\verify_migrations.py",
+            ],
+        ),
+        (
             ["schema-distribution"],
             [
                 "RUN",
@@ -853,6 +865,7 @@ def test_launcher_synthesizes_only_exact_offline_uv_forms_and_pins_root(
         ["pytest-focused", "tests/test_bad.py", "-q", "tests/test_more.py"],
         ["schema-generate-write", "extra"],
         ["schema-generate-check", "extra"],
+        ["migration-check", "extra"],
         ["schema-distribution", "extra"],
         ["cli-version", "extra"],
         ["cli-module-version", "extra"],

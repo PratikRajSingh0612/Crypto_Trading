@@ -420,6 +420,19 @@ switch -CaseSensitive ($operation) {
                     "--check"
                 )
             }
+            "migration-check" {
+                if ($tail.Count -ne 0) {
+                    throw "migration-check accepts no arguments"
+                }
+                $migrationVerifier = Resolve-ClosedRepositoryPath `
+                    (Join-Path $repositoryRoot "scripts\verify_migrations.py") $false
+                $uvArguments = $runPrefix + @(
+                    $pythonExecutable,
+                    "-I",
+                    "-B",
+                    $migrationVerifier
+                )
+            }
             "schema-distribution" {
                 if ($tail.Count -ne 0) {
                     throw "schema-distribution accepts no arguments"

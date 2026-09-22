@@ -11,8 +11,11 @@ probes pass to ``SqliteDatabase.open`` (written ``_accept`` in the plan's
 sketches) so an unmigrated file opens. ``ok`` and ``code`` are the two ``Result``
 narrowers every later task's tests use, with the same shapes as the shared
 contract module's private ``_ok`` and ``_code`` helpers, which stay private and
-are not imported here. The module never imports ``subprocess`` and never
-launches a child.
+are not imported here. Task 2 adds ``open_test_database``: ``open_for_migration``
+on ``tmp_path / "registry.sqlite3"`` followed by ``apply_migrations`` only when
+the revision report is not yet ``CURRENT``, so one helper serves the first open
+and every reopen of a migrated file. The module never imports ``subprocess`` and
+never launches a child.
 """
 
 from __future__ import annotations
@@ -23,9 +26,24 @@ from pathlib import Path
 
 from sqlalchemy.engine import Connection
 
+from crypto_lab.domain.ports import Clock
 from crypto_lab.domain.results import Failure, Result, Success
+from crypto_lab.persistence.database import SqliteDatabase
+from crypto_lab.persistence.migration_runner import (
+    RevisionState,
+    apply_migrations,
+    check_revision,
+    open_for_migration,
+)
 
-__all__ = ["accept_any_revision", "code", "file_sha256", "ok", "raw_connection"]
+__all__ = [
+    "accept_any_revision",
+    "code",
+    "file_sha256",
+    "ok",
+    "open_test_database",
+    "raw_connection",
+]
 
 
 def raw_connection(path: Path) -> sqlite3.Connection:
@@ -64,3 +82,29 @@ def code(result: object) -> str:
     assert isinstance(result, Failure), result
     assert len(result.diagnostics) == 1
     return result.diagnostics[0].error_code
+
+
+def open_test_database(
+    tmp_path: Path, *, busy_timeout_ms: int = 100, clock: Clock
+) -> SqliteDatabase:
+    """The migrated test database at ``tmp_path / "registry.sqlite3"`` (plan 7.1).
+
+    ``open_for_migration`` admits ``EMPTY``, ``BEHIND`` and ``CURRENT``;
+    ``apply_migrations`` runs only when the report is not yet ``CURRENT``, so a
+    current file reopens unchanged. The caller closes the database in
+    ``finally:`` or through the ``sqlite_database`` fixture.
+    """
+    database = ok(
+        open_for_migration(
+            tmp_path / "registry.sqlite3", busy_timeout_ms=busy_timeout_ms, clock=clock
+        )
+    )
+    try:
+        with database.read_only() as connection:
+            report = check_revision(connection)
+        if report.state is not RevisionState.CURRENT:
+            ok(apply_migrations(database))
+    except BaseException:
+        database.close()
+        raise
+    return database

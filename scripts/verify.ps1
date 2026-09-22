@@ -48,6 +48,11 @@ try {
         .\scripts\invoke-uv.ps1 schema-generate-check
     Assert-NativeSuccess "Generated-schema check"
 
+    Write-Host "`n==> Check migrations"
+    & powershell -NoProfile -ExecutionPolicy Bypass -File `
+        .\scripts\invoke-uv.ps1 migration-check
+    Assert-NativeSuccess "Migration check"
+
     Write-Host "`n==> Run test suite"
     & powershell -NoProfile -ExecutionPolicy Bypass -File `
         .\scripts\invoke-uv.ps1 pytest-all

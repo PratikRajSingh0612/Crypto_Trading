@@ -91,6 +91,12 @@ _ALLOWED_SOURCE_FILES = {
     "persistence/__init__.py",
     "persistence/database.py",
     "persistence/diagnostics.py",
+    "persistence/migration_runner.py",
+    "persistence/migrations/__init__.py",
+    "persistence/migrations/env.py",
+    "persistence/migrations/versions/__init__.py",
+    "persistence/migrations/versions/r0001_stage8_baseline.py",
+    "persistence/schema.py",
     "process_supervision/__init__.py",
     "process_supervision/cancellation.py",
     "process_supervision/deadlines.py",
@@ -116,6 +122,7 @@ _ALLOWED_SOURCE_FILES = {
 }
 _ALLOWED_IMPORT_ROOTS = {
     "__future__",
+    "alembic",
     "argparse",
     "asyncio",
     "codecs",
@@ -207,12 +214,13 @@ _EXPECTED_VERIFICATION_PROFILES = (
     ("ruff-check-all",),
     ("mypy-all",),
     ("schema-generate-check",),
+    ("migration-check",),
     ("pytest-all",),
     ("build",),
     ("schema-distribution",),
 )
 _EXPECTED_VERIFIER_SHA256 = (
-    "4296811ae310fc7e8e17bd3b63f4c6c794a2c6e3c8d20b642de40cf918c2c4cd"
+    "ec818bc7551984878f2f4e57845ec7417b68839d889496acb3e43cb5c895ea7d"
 )
 _ALLOWED_VERIFIER_COMMANDS = {
     "Assert-NativeSuccess",
@@ -457,12 +465,14 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
     the commit that first imports it and each confined by the Stage 8 guard to
     the persistence modules that section names, so the pinned count reads
     twenty-seven plus the roots added so far: Task 1 added `sqlalchemy`
-    (`persistence/database.py`), giving 28. The test name is historical and is
-    kept.
+    (`persistence/database.py`), giving 28; Task 2 added `alembic`
+    (`persistence/migration_runner.py`, `persistence/migrations/env.py` and the
+    baseline revision), giving 29. The test name is historical and is kept.
     """
-    assert len(_ALLOWED_IMPORT_ROOTS) == 28
+    assert len(_ALLOWED_IMPORT_ROOTS) == 29
     assert _ALLOWED_IMPORT_ROOTS == {
         "__future__",
+        "alembic",
         "argparse",
         "asyncio",
         "codecs",

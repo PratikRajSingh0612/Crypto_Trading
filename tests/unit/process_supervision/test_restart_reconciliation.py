@@ -1756,10 +1756,10 @@ def test_the_source_allowlist_and_package_modules_name_the_reconciliation_module
 ):
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert "process_supervision/reconciliation.py" in allowed
-    assert len(allowed) == 97  # Stage 8 Task 1 appended the two persistence modules
+    assert len(allowed) == 103  # Stage 8 Task 2 appended the six migration modules
     modules = _literal(_PACKAGE_LAYOUT, "PACKAGE_MODULES")
     assert "crypto_lab.process_supervision.reconciliation" in modules
     assert modules.index("crypto_lab.process_supervision.reconciliation") == (
         modules.index("crypto_lab.process_supervision.supervisor") + 1
     )
-    assert len(modules) == 97  # Stage 8 Task 1 appended the two persistence modules
+    assert len(modules) == 103  # Stage 8 Task 2 appended the six migration modules

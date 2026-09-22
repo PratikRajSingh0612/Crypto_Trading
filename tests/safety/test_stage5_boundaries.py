@@ -22,9 +22,12 @@ Declared readings, so nothing is inferred silently:
   ``process_supervision/windows_process.py``, the one ``Popen`` importer in ``src``.
   Stage 8 plan section 2.6 adds one ``(module, root)`` pair per persistence module
   that imports an infrastructure root, each in the task that first imports it
-  (Task 1: ``sqlalchemy`` in ``persistence/database.py``). Every other pair, the
-  same root in any other module included, still fails, and each exempted module
-  must really import its root.
+  (Task 1: ``sqlalchemy`` in ``persistence/database.py``; Task 2: ``sqlalchemy``
+  in ``persistence/schema.py``, ``sqlalchemy`` and ``alembic`` in each of
+  ``persistence/migration_runner.py``, ``persistence/migrations/env.py`` and
+  ``persistence/migrations/versions/r0001_stage8_baseline.py``). Every other
+  pair, the same root in any other module included, still fails, and each
+  exempted module must really import its root.
 - "Stage 5 module" means exactly the eighteen paths plan section 2.7 tabulates,
   pinned here as a literal so a widened set cannot pass by omission. "Reads the
   filesystem or the environment at import time" is discharged statically as a
@@ -103,6 +106,13 @@ _INFRASTRUCTURE_EXEMPTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
     {
         ("process_supervision/windows_process.py", "subprocess"),
         ("persistence/database.py", "sqlalchemy"),
+        ("persistence/schema.py", "sqlalchemy"),
+        ("persistence/migration_runner.py", "sqlalchemy"),
+        ("persistence/migration_runner.py", "alembic"),
+        ("persistence/migrations/env.py", "sqlalchemy"),
+        ("persistence/migrations/env.py", "alembic"),
+        ("persistence/migrations/versions/r0001_stage8_baseline.py", "sqlalchemy"),
+        ("persistence/migrations/versions/r0001_stage8_baseline.py", "alembic"),
     }
 )
 #: Resolved through the module's own import bindings, so ``from datetime import
@@ -544,7 +554,7 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
 ) -> None:
     """The whole-block, label-keyed exemptions, iterated pair by pair.
 
-    Stage 7 plan section 2.6 (Task 4) and Stage 8 plan section 2.6 (Task 1):
+    Stage 7 plan section 2.6 (Task 4) and Stage 8 plan section 2.6 (Tasks 1 and 2):
     exactly the reviewed ``(module, root)`` pairs are exempt and each licenses
     nothing else. The exempted module must really import its root, so a pair
     cannot outlive the import it licenses; every other denied root still fails in
@@ -560,6 +570,13 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
         {
             ("process_supervision/windows_process.py", "subprocess"),
             ("persistence/database.py", "sqlalchemy"),
+            ("persistence/schema.py", "sqlalchemy"),
+            ("persistence/migration_runner.py", "sqlalchemy"),
+            ("persistence/migration_runner.py", "alembic"),
+            ("persistence/migrations/env.py", "sqlalchemy"),
+            ("persistence/migrations/env.py", "alembic"),
+            ("persistence/migrations/versions/r0001_stage8_baseline.py", "sqlalchemy"),
+            ("persistence/migrations/versions/r0001_stage8_baseline.py", "alembic"),
         }
     )
     source = repository_root / "src/crypto_lab"
@@ -567,7 +584,14 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
         tree = _parse(source / module)
         assert root in _imported_roots(tree), (module, root)
         assert _infrastructure_violations(tree, module) == []
-        for other_root in sorted(_INFRASTRUCTURE_ROOTS - {root}):
+        # Every denied root the module holds no pair for still fails there (the
+        # three Alembic modules hold two pairs each, ``sqlalchemy`` and ``alembic``).
+        exempt_here = {
+            pair_root
+            for pair_module, pair_root in _INFRASTRUCTURE_EXEMPTIONS
+            if pair_module == module
+        }
+        for other_root in sorted(_INFRASTRUCTURE_ROOTS - exempt_here):
             planted_root = ast.parse(f"import {other_root}\n")
             assert _infrastructure_violations(planted_root, module) != []
         planted = f"{module.partition('/')[0]}/probe.py"
