@@ -54,6 +54,7 @@ _ALLOWED_SOURCE_FILES = {
     "datasets/__init__.py",
     "datasets/hashing.py",
     "datasets/models.py",
+    "datasets/ports.py",
     "domain/__init__.py",
     "domain/aggregation.py",
     "domain/base.py",
@@ -89,6 +90,7 @@ _ALLOWED_SOURCE_FILES = {
     "experiments/semantic_outcome.py",
     "experiments/supervision_lifecycle.py",
     "persistence/__init__.py",
+    "persistence/codecs.py",
     "persistence/database.py",
     "persistence/diagnostics.py",
     "persistence/migration_runner.py",
@@ -96,6 +98,7 @@ _ALLOWED_SOURCE_FILES = {
     "persistence/migrations/env.py",
     "persistence/migrations/versions/__init__.py",
     "persistence/migrations/versions/r0001_stage8_baseline.py",
+    "persistence/registries.py",
     "persistence/schema.py",
     "process_supervision/__init__.py",
     "process_supervision/cancellation.py",
@@ -116,6 +119,7 @@ _ALLOWED_SOURCE_FILES = {
     "strategy/feature_graph.py",
     "strategy/loader.py",
     "strategy/models.py",
+    "strategy/ports.py",
     "strategy/validation.py",
     "strategy/versioning.py",
     "strategy/yaml_source.py",
@@ -189,7 +193,6 @@ _DEFERRED_DEFINITIONS = {
     "CanonicalOrder",
     "ComparisonEligibilityService",
     "ContentHasher",
-    "DatasetRepository",
     "EquityPoint",
     "EvidenceFinalizationRequest",
     "Fee",
@@ -697,8 +700,13 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     `CancellationToken` (`domain/ports.py`) and `MonotonicInstant`
     (`domain/time.py`), giving 35; Task 2 released `ProcessSupervisor`
     (`process_supervision/ports.py`), giving 34.
+
+    The Stage 8 plan's section 2.6 releases exactly one name, `DatasetRepository`
+    (`datasets/ports.py`), in Task 3 -- the task that first defines it -- giving
+    33; the seven-name representative-mutation list is unchanged because the
+    name is not in it.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 34
+    assert len(_DEFERRED_DEFINITIONS) == 33
     assert _DEFERRED_DEFINITIONS == {
         "ArtifactFinalizationPurpose",
         "ArtifactFinalizer",
@@ -717,7 +725,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "CanonicalOrder",
         "ComparisonEligibilityService",
         "ContentHasher",
-        "DatasetRepository",
         "EquityPoint",
         "EvidenceFinalizationRequest",
         "Fee",

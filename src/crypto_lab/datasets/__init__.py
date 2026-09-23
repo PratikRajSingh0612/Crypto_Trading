@@ -10,11 +10,13 @@ from crypto_lab.datasets.models import (
     RawSourceProvenance,
     TimeInterval,
 )
+from crypto_lab.datasets.ports import DatasetRepository
 
 __all__ = (
     "DatasetDataType",
     "DatasetDescriptor",
     "DatasetPartition",
+    "DatasetRepository",
     "DatasetValidationStatus",
     "DuplicateInterval",
     "RawSourceProvenance",

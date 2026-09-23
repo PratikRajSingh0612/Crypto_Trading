@@ -113,6 +113,7 @@ _EXPECTED_EXEMPTIONS = frozenset(
         ("persistence/migrations/env.py", "alembic"),
         ("persistence/migrations/versions/r0001_stage8_baseline.py", "sqlalchemy"),
         ("persistence/migrations/versions/r0001_stage8_baseline.py", "alembic"),
+        ("persistence/registries.py", "sqlalchemy"),  # Task 3
     }
 )
 _EXTRA_TABLE_REVISION_SOURCE = '''"""Test-only successor: adds one table."""
@@ -1022,26 +1023,26 @@ def test_verify_migrations_imports_no_subprocess_and_reads_no_environment() -> N
 def test_the_source_allowlist_and_import_roots_name_the_migration_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert _TASK2_SOURCE_PATHS <= allowed
-    assert len(allowed) == 103  # Task 2 appended the six migration modules
+    assert len(allowed) == 107  # Task 3 appended the four new modules
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "alembic" in roots
     assert len(roots) == 29
     modules = _literal(_PACKAGE_LAYOUT, "PACKAGE_MODULES")
     start = modules.index("crypto_lab.persistence.diagnostics") + 1
     assert tuple(modules[start : start + len(_TASK2_MODULES)]) == _TASK2_MODULES
-    assert len(modules) == 103
+    assert len(modules) == 107
 
 
 def test_the_two_cross_pins_moved_to_the_task_two_sizes() -> None:
     for path in (_PREFLIGHT_TESTS, _RECONCILIATION_TESTS):
         source = path.read_text(encoding="utf-8")
-        assert "len(allowed) == 103" in source
-        assert "len(modules) == 103" in source
+        assert "len(allowed) == 107" in source  # moved again by Task 3
+        assert "len(modules) == 107" in source
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     assert "len(roots) == 29" in preflight
 
 
-def test_the_infrastructure_exemptions_are_exactly_the_nine_reviewed_pairs() -> None:
+def test_the_infrastructure_exemptions_are_exactly_the_ten_reviewed_pairs() -> None:
     assert _literal(_STAGE5_GUARD, "_INFRASTRUCTURE_EXEMPTIONS") == _EXPECTED_EXEMPTIONS
 
 

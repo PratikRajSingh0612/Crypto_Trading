@@ -41,7 +41,9 @@ Stage 8 Task 1 (Stage 8 plan section 2.6) adds ``persistence`` to the same scann
 Its allowlist is the plan's **package-level closure** -- ``domain``, the port-bearing
 packages ``experiments``, ``adapters`` and ``process_supervision``, the record packages
 ``artifacts``, ``datasets`` and ``strategy``, ``configuration`` and itself -- with a
-positive anchor that grows per task (Task 1: ``domain`` and ``configuration``); the
+positive anchor that grows per task (Task 1: ``domain`` and ``configuration``; Task 3:
+``artifacts``, ``datasets`` and ``strategy``, the record packages the codecs and the
+schema's generated CHECK lists consume); the
 Stage 8 guard narrows the allowance to the exact module set in Task 8. The prohibited
 set names ``capabilities``, ``cli`` and the composition module: the implementation of
 the application-owned ports never imports the resolver, a composition root or the
@@ -457,7 +459,10 @@ def test_persistence_reaches_only_its_stage_eight_allowlist(
 
     Anchored positively on the cross-package edges the task actually takes, so the
     assertion cannot pass on an empty scan: Task 1 reaches ``domain`` (the ``Result``
-    values and the ``Clock`` port) and ``configuration`` (``DatabaseConfig``).
+    values and the ``Clock`` port) and ``configuration`` (``DatabaseConfig``); Task 3
+    reaches ``artifacts`` (the owner variants and ``ARTIFACT_OWNER_ADAPTER``),
+    ``datasets`` (the descriptor, partition and identity helper) and ``strategy``
+    (``StrategyVersion`` and its profile version).
     """
     reached = _allowed_project_imports(
         _package_root(repository_root, _PERSISTENCE), _PERSISTENCE
@@ -470,6 +475,9 @@ def test_persistence_reaches_only_its_stage_eight_allowlist(
     assert unexpected == ()
     assert "crypto_lab.domain.results" in reached
     assert "crypto_lab.configuration.models" in reached
+    assert "crypto_lab.artifacts.ownership" in reached
+    assert "crypto_lab.datasets" in reached
+    assert "crypto_lab.strategy.versioning" in reached
 
 
 # --------------------------------------------------------------------------

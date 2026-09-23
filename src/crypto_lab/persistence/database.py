@@ -49,12 +49,22 @@ Task-local decisions, declared here and asserted by the Task 1 tests:
 - The journal-mode switch runs in the connect hook, gated by the identity check
   of the open, so it executes outside any transaction and its read-back happens
   on every physical connect; on a file already in WAL mode it is a no-op.
+
+Task 3 adds ``ConsistencyReport`` and ``SqliteDatabase.consistency_report()``
+(plan 4.6): the eight read-only counts over the Task 2 schema -- dangling
+diagnostic references, slot identity mismatches, spec projection mismatches,
+scaffolding queued without a snapshot, causal-edge mismatches, unresolved causal
+references, registry projection mismatches and ``PRAGMA foreign_key_check`` rows
+-- each computed by its own SQL statement inside one read-only session. The
+module still imports no new root: the queries are ``text()`` statements and the
+report is a frozen dataclass.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -68,6 +78,7 @@ from sqlalchemy.pool import ConnectionPoolEntry, QueuePool
 
 from crypto_lab.configuration.models import DatabaseConfig
 from crypto_lab.domain.diagnostics import DiagnosticDetailValue, ErrorCode
+from crypto_lab.domain.lifecycle import ExperimentState
 from crypto_lab.domain.ports import Clock
 from crypto_lab.domain.results import Failure, Result, Success
 from crypto_lab.persistence.diagnostics import (
@@ -83,6 +94,7 @@ __all__ = [
     "POOL_MAX_OVERFLOW",
     "POOL_SIZE",
     "POOL_TIMEOUT_SECONDS",
+    "ConsistencyReport",
     "RevisionPolicy",
     "SqliteDatabase",
     "database_path",
@@ -150,6 +162,181 @@ _WRITE_FAILED_PRIMARY_CODES: Final[frozenset[int]] = frozenset(
 )
 
 type RevisionPolicy = Callable[[Connection], Result[None]]
+
+
+# --------------------------------------------------------------------------
+# Plan 4.6: the eight read-only consistency counts (Task 3)
+# --------------------------------------------------------------------------
+
+
+def _quoted_states(states: frozenset[ExperimentState]) -> str:
+    return ", ".join(f"'{state.value}'" for state in ExperimentState if state in states)
+
+
+def _instant_text_sql(column: str) -> str:
+    """Render an E5 microsecond column back to canonical UTC text inside SQL.
+
+    Floor seconds through ``strftime(..., 'unixepoch')`` and a six-digit fraction
+    only when it is non-zero -- exactly ``format_utc``'s 20- or 27-character form
+    -- so a typed instant projection compares with its ``record`` snapshot text
+    to the microsecond (rule N6). ``%`` keeps the dividend's sign in SQLite, so
+    the fraction is normalized into ``0..999999`` before the seconds are derived.
+    """
+    fraction = f"((({column} % 1000000) + 1000000) % 1000000)"
+    seconds = f"(({column} - {fraction}) / 1000000)"
+    return (
+        f"(strftime('%Y-%m-%dT%H:%M:%S', {seconds}, 'unixepoch') || "
+        f"CASE WHEN {fraction} = 0 THEN 'Z' ELSE printf('.%06dZ', {fraction}) END)"
+    )
+
+
+def _projection_mismatch_sql(
+    table: str,
+    text_projections: tuple[tuple[str, str], ...],
+    instant_projections: tuple[str, ...],
+) -> str:
+    """Rows of ``table`` whose typed columns differ from their ``record`` snapshot."""
+    terms = [
+        f"{column} IS NOT json_extract(record, '{path}')"
+        for column, path in text_projections
+    ]
+    terms.extend(
+        f"{_instant_text_sql(column)} IS NOT json_extract(record, '$.{column}')"
+        for column in instant_projections
+    )
+    return f"SELECT count(*) FROM {table} WHERE {' OR '.join(terms)}"  # noqa: S608
+
+
+#: One spec slot and one ``engine_slots`` row agree on every projected column.
+_SLOT_AGREES: Final = (
+    "s.logical_slot_id = json_extract(j.value, '$.logical_slot_id') "
+    "AND s.slot_ordinal = json_extract(j.value, '$.slot_ordinal') "
+    "AND s.adapter_name = json_extract(j.value, '$.adapter.adapter_name') "
+    "AND s.adapter_version = json_extract(j.value, '$.adapter.adapter_version') "
+    "AND s.engine_name = json_extract(j.value, '$.engine.engine_name') "
+    "AND s.engine_version = json_extract(j.value, '$.engine.engine_version')"
+)
+_DANGLING_DIAGNOSTIC_REFERENCES_SQL: Final = (
+    "SELECT count(*) FROM ("
+    "SELECT primary_terminal_diagnostic_id AS diagnostic_id FROM engine_runs "
+    "WHERE primary_terminal_diagnostic_id IS NOT NULL "
+    "UNION ALL SELECT primary_diagnostic_id FROM command_invocations "
+    "WHERE primary_diagnostic_id IS NOT NULL "
+    "UNION ALL SELECT j.value "
+    "FROM command_invocations i, json_each(i.diagnostic_ids) j "
+    "UNION ALL SELECT primary_terminal_diagnostic_id FROM retry_decisions"
+    ") refs WHERE refs.diagnostic_id NOT IN (SELECT diagnostic_id FROM diagnostics)"
+)
+_SLOT_IDENTITY_MISMATCHES_SQL: Final = (
+    "SELECT count(*) FROM engine_runs r JOIN engine_slots s "
+    "ON s.experiment_id = r.experiment_id AND s.logical_slot_id = r.logical_slot_id "
+    "WHERE r.adapter_name <> s.adapter_name OR r.adapter_version <> s.adapter_version "
+    "OR r.engine_name <> s.engine_name OR r.engine_version <> s.engine_version"
+)
+# Composed from the module constant ``_SLOT_AGREES`` alone; no caller value enters.
+_SPEC_PROJECTION_MISMATCHES_SQL: Final = (
+    "SELECT count(*) FROM experiments e WHERE "  # noqa: S608
+    "e.strategy_version_hash IS NOT json_extract(e.spec, '$.strategy_version_hash') "
+    "OR e.dataset_version_hash IS NOT json_extract(e.spec, '$.dataset_version_hash') "
+    "OR EXISTS (SELECT 1 FROM json_each(e.spec, '$.selected_engine_slots') j "
+    "WHERE NOT EXISTS (SELECT 1 FROM engine_slots s "
+    f"WHERE s.experiment_id = e.experiment_id AND {_SLOT_AGREES})) "
+    "OR EXISTS (SELECT 1 FROM engine_slots s WHERE s.experiment_id = e.experiment_id "
+    "AND NOT EXISTS (SELECT 1 FROM json_each(e.spec, '$.selected_engine_slots') j "
+    f"WHERE {_SLOT_AGREES}))"
+)
+#: Reading 22: ``CANCELLED`` from ``DRAFT``/``VALIDATED`` lawfully has no snapshot.
+#: The state list is generated from ``ExperimentState``; no caller value enters.
+_QUEUED_WITHOUT_SNAPSHOT_SQL: Final = (
+    "SELECT count(*) FROM experiments WHERE state NOT IN ("  # noqa: S608
+    + _quoted_states(
+        frozenset(
+            {
+                ExperimentState.DRAFT,
+                ExperimentState.VALIDATED,
+                ExperimentState.CANCELLED,
+            }
+        )
+    )
+    + ") AND configuration_snapshot_json IS NULL"
+)
+_CAUSAL_EDGE_MISMATCHES_SQL: Final = (
+    "SELECT ("
+    "SELECT count(*) FROM diagnostics d, json_each(d.causal_diagnostic_ids) j "
+    "WHERE j.value IN (SELECT diagnostic_id FROM diagnostics) "
+    "AND NOT EXISTS (SELECT 1 FROM diagnostic_causes c "
+    "WHERE c.diagnostic_id = d.diagnostic_id AND c.causal_diagnostic_id = j.value)"
+    ") + ("
+    "SELECT count(*) FROM diagnostic_causes c WHERE NOT EXISTS ("
+    "SELECT 1 FROM diagnostics d, json_each(d.causal_diagnostic_ids) j "
+    "WHERE d.diagnostic_id = c.diagnostic_id AND j.value = c.causal_diagnostic_id)"
+    ")"
+)
+_UNRESOLVED_CAUSAL_REFERENCES_SQL: Final = (
+    "SELECT count(*) FROM diagnostics d, json_each(d.causal_diagnostic_ids) j "
+    "WHERE j.value NOT IN (SELECT diagnostic_id FROM diagnostics)"
+)
+_REGISTRY_PROJECTION_SQL: Final[tuple[str, ...]] = (
+    _projection_mismatch_sql(
+        "strategy_versions",
+        (
+            ("content_hash", "$.content_hash"),
+            ("strategy_version_id", "$.strategy_version_id"),
+            ("strategy_id", "$.strategy_id"),
+            ("schema_version", "$.schema_version"),
+            ("hashing_profile_version", "$.hashing_profile_version"),
+        ),
+        ("created_at_utc",),
+    ),
+    _projection_mismatch_sql(
+        "datasets",
+        (
+            ("dataset_id", "$.dataset_id"),
+            ("content_hash", "$.content_hash"),
+            ("schema_version", "$.schema_version"),
+            ("venue", "$.venue"),
+            ("instrument_canonical_id", "$.instrument.canonical_id"),
+            ("data_type", "$.data_type"),
+            ("timeframe", "$.timeframe"),
+            ("validation_status", "$.validation_status"),
+        ),
+        ("start_utc", "end_utc", "created_at_utc"),
+    ),
+    _projection_mismatch_sql(
+        "dataset_partitions",
+        (
+            ("partition_id", "$.partition_id"),
+            ("dataset_id", "$.dataset_id"),
+            ("ordinal", "$.ordinal"),
+            ("content_hash", "$.content_hash"),
+            ("raw_checksum", "$.raw_checksum"),
+            ("normalized_checksum", "$.normalized_checksum"),
+            ("relative_path", "$.relative_path"),
+            ("row_count", "$.row_count"),
+        ),
+        ("start_utc", "end_utc"),
+    ),
+)
+_FOREIGN_KEY_CHECK_SQL: Final = "PRAGMA foreign_key_check"
+
+
+@dataclass(frozen=True, slots=True)
+class ConsistencyReport:
+    """Plan 4.6: the eight read-only counts, every one computed by its own query.
+
+    The tests and the Stage 10 startup verification assert them zero;
+    ``queued_without_snapshot`` alone is non-zero for rows test scaffolding
+    inserts directly at or after ``QUEUED`` (reading 22).
+    """
+
+    dangling_diagnostic_references: int
+    slot_identity_mismatches: int
+    spec_projection_mismatches: int
+    queued_without_snapshot: int
+    causal_edge_mismatches: int
+    unresolved_causal_references: int
+    registry_projection_mismatches: int
+    foreign_key_violations: int
 
 
 class _ConnectionPolicyMismatch(Exception):
@@ -424,6 +611,43 @@ class SqliteDatabase:
         return persistence_failure(
             code, message=message, clock=self._clock, details=details
         )
+
+    def consistency_report(self) -> ConsistencyReport:
+        """Plan 4.6: the eight counts over one read-only session, none defaulted.
+
+        Every member is read-only SQL over the Task 2 schema (``json_each`` over
+        the E7/E8 columns, the composite slot key, the N6 projections rendered
+        back to canonical text, ``PRAGMA foreign_key_check``); a query that fails
+        raises rather than reporting a clean count.
+        """
+        with self.read_only() as connection:
+            return ConsistencyReport(
+                dangling_diagnostic_references=_scalar_int(
+                    connection, _DANGLING_DIAGNOSTIC_REFERENCES_SQL
+                ),
+                slot_identity_mismatches=_scalar_int(
+                    connection, _SLOT_IDENTITY_MISMATCHES_SQL
+                ),
+                spec_projection_mismatches=_scalar_int(
+                    connection, _SPEC_PROJECTION_MISMATCHES_SQL
+                ),
+                queued_without_snapshot=_scalar_int(
+                    connection, _QUEUED_WITHOUT_SNAPSHOT_SQL
+                ),
+                causal_edge_mismatches=_scalar_int(
+                    connection, _CAUSAL_EDGE_MISMATCHES_SQL
+                ),
+                unresolved_causal_references=_scalar_int(
+                    connection, _UNRESOLVED_CAUSAL_REFERENCES_SQL
+                ),
+                registry_projection_mismatches=sum(
+                    _scalar_int(connection, statement)
+                    for statement in _REGISTRY_PROJECTION_SQL
+                ),
+                foreign_key_violations=len(
+                    connection.execute(text(_FOREIGN_KEY_CHECK_SQL)).all()
+                ),
+            )
 
     def close(self) -> None:
         """Dispose the pool, closing every connection; idempotent."""

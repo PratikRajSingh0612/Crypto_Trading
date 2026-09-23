@@ -113,6 +113,7 @@ _INFRASTRUCTURE_EXEMPTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
         ("persistence/migrations/env.py", "alembic"),
         ("persistence/migrations/versions/r0001_stage8_baseline.py", "sqlalchemy"),
         ("persistence/migrations/versions/r0001_stage8_baseline.py", "alembic"),
+        ("persistence/registries.py", "sqlalchemy"),
     }
 )
 #: Resolved through the module's own import bindings, so ``from datetime import
@@ -137,6 +138,7 @@ _READER_METHODS: Final = frozenset({"get", "get_many"})
 #: Every ``DiagnosticReader`` implementation in the tree, by ``path::class``.
 _EXPECTED_READER_IMPLEMENTATIONS: Final = frozenset(
     {
+        "src/crypto_lab/persistence/registries.py::SqliteDiagnosticReader",
         "tests/doubles/experiments.py::InMemoryDiagnosticReader",
         "tests/property/test_retry_decision_determinism.py::_RecordingReader",
         "tests/unit/experiments/test_retry_decision.py::_RecordingReader",
@@ -554,7 +556,7 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
 ) -> None:
     """The whole-block, label-keyed exemptions, iterated pair by pair.
 
-    Stage 7 plan section 2.6 (Task 4) and Stage 8 plan section 2.6 (Tasks 1 and 2):
+    Stage 7 plan section 2.6 (Task 4) and Stage 8 plan section 2.6 (Tasks 1 to 3):
     exactly the reviewed ``(module, root)`` pairs are exempt and each licenses
     nothing else. The exempted module must really import its root, so a pair
     cannot outlive the import it licenses; every other denied root still fails in
@@ -577,6 +579,7 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
             ("persistence/migrations/env.py", "alembic"),
             ("persistence/migrations/versions/r0001_stage8_baseline.py", "sqlalchemy"),
             ("persistence/migrations/versions/r0001_stage8_baseline.py", "alembic"),
+            ("persistence/registries.py", "sqlalchemy"),
         }
     )
     source = repository_root / "src/crypto_lab"

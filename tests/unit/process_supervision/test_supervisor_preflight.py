@@ -1242,7 +1242,9 @@ def test_no_retained_projection_carries_the_raw_token(scripted: _Scripted) -> No
 def test_the_source_allowlist_and_import_roots_name_the_supervisor_module() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert "process_supervision/supervisor.py" in allowed
-    assert len(allowed) == 103  # Stage 8 Task 2 appended the six migration modules
+    assert (
+        len(allowed) == 107
+    )  # Stage 8 Task 3 appended the codec/registry/port modules
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "asyncio" in roots
     assert len(roots) == 29  # Stage 8 Task 2 added alembic
@@ -1252,8 +1254,8 @@ def test_the_source_allowlist_and_import_roots_name_the_supervisor_module() -> N
         modules.index("crypto_lab.process_supervision.windows_process") + 1
     )
     assert (
-        len(modules) == 103
-    )  # Stage 8 Task 1 appended the two crypto_lab.persistence modules
+        len(modules) == 107
+    )  # Stage 8 Task 3 appended the four codec, registry and port modules
 
 
 def test_the_task_five_pin_keeps_its_eleven_names_and_pins_the_nine_doubles() -> None:

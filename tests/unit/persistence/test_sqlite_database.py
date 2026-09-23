@@ -1001,7 +1001,7 @@ def test_failure_mints_one_persistence_diagnostic_from_the_injected_clock(
 def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert {"persistence/database.py", "persistence/diagnostics.py"} <= allowed
-    assert len(allowed) == 103  # Tasks 1 and 2 appended the eight persistence modules
+    assert len(allowed) == 107  # Tasks 1-3 appended the twelve Stage 8 modules
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "sqlalchemy" in roots
     assert "alembic" in roots  # Task 2 added it
@@ -1013,15 +1013,15 @@ def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> No
         "crypto_lab.persistence.database",
         "crypto_lab.persistence.diagnostics",
     )
-    assert len(modules) == 103
+    assert len(modules) == 107
 
 
 def test_the_two_cross_pins_moved_to_the_running_sizes() -> None:
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     reconciliation = _RECONCILIATION_TESTS.read_text(encoding="utf-8")
     for source in (preflight, reconciliation):
-        assert "len(allowed) == 103" in source
-        assert "len(modules) == 103" in source
+        assert "len(allowed) == 107" in source
+        assert "len(modules) == 107" in source
         assert "len(allowed) == 95" not in source
         assert "len(modules) == 95" not in source
     assert "len(roots) == 29" in preflight
@@ -1029,8 +1029,8 @@ def test_the_two_cross_pins_moved_to_the_running_sizes() -> None:
 
 
 def test_the_infrastructure_exemptions_include_the_database_module_pair() -> None:
-    """Task 1's pair is exempt; the exact nine-pair set is pinned by Task 2's
-    ``test_sqlite_migrations.py`` beside the pairs Task 2 added."""
+    """Task 1's pair is exempt; the exact set (ten pairs after Task 3's
+    ``registries.py``) is pinned by ``test_sqlite_migrations.py``."""
     pairs = _literal(_STAGE5_GUARD, "_INFRASTRUCTURE_EXEMPTIONS")
     assert ("process_supervision/windows_process.py", "subprocess") in pairs
     assert ("persistence/database.py", "sqlalchemy") in pairs
