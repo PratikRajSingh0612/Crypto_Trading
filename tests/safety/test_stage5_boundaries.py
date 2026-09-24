@@ -25,7 +25,10 @@ Declared readings, so nothing is inferred silently:
   (Task 1: ``sqlalchemy`` in ``persistence/database.py``; Task 2: ``sqlalchemy``
   in ``persistence/schema.py``, ``sqlalchemy`` and ``alembic`` in each of
   ``persistence/migration_runner.py``, ``persistence/migrations/env.py`` and
-  ``persistence/migrations/versions/r0001_stage8_baseline.py``). Every other
+  ``persistence/migrations/versions/r0001_stage8_baseline.py``; Task 3:
+  ``sqlalchemy`` in ``persistence/registries.py``; Task 4: ``sqlalchemy`` in
+  ``persistence/unit_of_work.py`` and ``persistence/repositories.py``; Task 5:
+  ``sqlalchemy`` in ``persistence/reconciliation_source.py``). Every other
   pair, the same root in any other module included, still fails, and each
   exempted module must really import its root.
 - "Stage 5 module" means exactly the eighteen paths plan section 2.7 tabulates,
@@ -116,6 +119,7 @@ _INFRASTRUCTURE_EXEMPTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
         ("persistence/registries.py", "sqlalchemy"),
         ("persistence/repositories.py", "sqlalchemy"),
         ("persistence/unit_of_work.py", "sqlalchemy"),
+        ("persistence/reconciliation_source.py", "sqlalchemy"),
     }
 )
 #: Resolved through the module's own import bindings, so ``from datetime import
@@ -558,7 +562,7 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
 ) -> None:
     """The whole-block, label-keyed exemptions, iterated pair by pair.
 
-    Stage 7 plan section 2.6 (Task 4) and Stage 8 plan section 2.6 (Tasks 1 to 3):
+    Stage 7 plan section 2.6 (Task 4) and Stage 8 plan section 2.6 (Tasks 1 to 5):
     exactly the reviewed ``(module, root)`` pairs are exempt and each licenses
     nothing else. The exempted module must really import its root, so a pair
     cannot outlive the import it licenses; every other denied root still fails in
@@ -584,6 +588,7 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
             ("persistence/registries.py", "sqlalchemy"),
             ("persistence/repositories.py", "sqlalchemy"),
             ("persistence/unit_of_work.py", "sqlalchemy"),
+            ("persistence/reconciliation_source.py", "sqlalchemy"),
         }
     )
     source = repository_root / "src/crypto_lab"

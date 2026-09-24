@@ -98,6 +98,7 @@ _ALLOWED_SOURCE_FILES = {
     "persistence/migrations/env.py",
     "persistence/migrations/versions/__init__.py",
     "persistence/migrations/versions/r0001_stage8_baseline.py",
+    "persistence/reconciliation_source.py",
     "persistence/registries.py",
     "persistence/repositories.py",
     "persistence/schema.py",

@@ -116,6 +116,7 @@ _EXPECTED_EXEMPTIONS = frozenset(
         ("persistence/registries.py", "sqlalchemy"),  # Task 3
         ("persistence/repositories.py", "sqlalchemy"),  # Task 4
         ("persistence/unit_of_work.py", "sqlalchemy"),  # Task 4
+        ("persistence/reconciliation_source.py", "sqlalchemy"),  # Task 5
     }
 )
 _EXTRA_TABLE_REVISION_SOURCE = '''"""Test-only successor: adds one table."""
@@ -1025,26 +1026,28 @@ def test_verify_migrations_imports_no_subprocess_and_reads_no_environment() -> N
 def test_the_source_allowlist_and_import_roots_name_the_migration_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert _TASK2_SOURCE_PATHS <= allowed
-    assert len(allowed) == 109  # Task 4 appended the unit of work and repositories
+    assert len(allowed) == 110  # Task 5 appended the reconciliation source
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "alembic" in roots
     assert len(roots) == 29
     modules = _literal(_PACKAGE_LAYOUT, "PACKAGE_MODULES")
     start = modules.index("crypto_lab.persistence.diagnostics") + 1
     assert tuple(modules[start : start + len(_TASK2_MODULES)]) == _TASK2_MODULES
-    assert len(modules) == 109
+    assert len(modules) == 110
 
 
 def test_the_two_cross_pins_moved_to_the_task_two_sizes() -> None:
     for path in (_PREFLIGHT_TESTS, _RECONCILIATION_TESTS):
         source = path.read_text(encoding="utf-8")
-        assert "len(allowed) == 109" in source  # moved again by Task 4
-        assert "len(modules) == 109" in source
+        assert "len(allowed) == 110" in source  # moved again by Task 5
+        assert "len(modules) == 110" in source
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     assert "len(roots) == 29" in preflight
 
 
-def test_the_infrastructure_exemptions_are_exactly_the_twelve_reviewed_pairs() -> None:
+def test_the_infrastructure_exemptions_are_exactly_the_thirteen_reviewed_pairs() -> (
+    None
+):
     assert _literal(_STAGE5_GUARD, "_INFRASTRUCTURE_EXEMPTIONS") == _EXPECTED_EXEMPTIONS
 
 

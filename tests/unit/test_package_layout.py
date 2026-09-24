@@ -94,6 +94,7 @@ PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab.persistence.registries",
     "crypto_lab.persistence.unit_of_work",
     "crypto_lab.persistence.repositories",
+    "crypto_lab.persistence.reconciliation_source",
     "crypto_lab.datasets.ports",
     "crypto_lab.strategy.ports",
     "crypto_lab.process_supervision",
