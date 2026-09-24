@@ -462,7 +462,9 @@ def test_persistence_reaches_only_its_stage_eight_allowlist(
     values and the ``Clock`` port) and ``configuration`` (``DatabaseConfig``); Task 3
     reaches ``artifacts`` (the owner variants and ``ARTIFACT_OWNER_ADAPTER``),
     ``datasets`` (the descriptor, partition and identity helper) and ``strategy``
-    (``StrategyVersion`` and its profile version).
+    (``StrategyVersion`` and its profile version); Task 4 reaches ``experiments``
+    (the ``UnitOfWork`` member protocols and ``RetryDecisionInsertOutcome``) and
+    ``adapters`` (the ``CommandInvocationRepository`` port and ``RunEvent``).
     """
     reached = _allowed_project_imports(
         _package_root(repository_root, _PERSISTENCE), _PERSISTENCE
@@ -478,6 +480,8 @@ def test_persistence_reaches_only_its_stage_eight_allowlist(
     assert "crypto_lab.artifacts.ownership" in reached
     assert "crypto_lab.datasets" in reached
     assert "crypto_lab.strategy.versioning" in reached
+    assert "crypto_lab.experiments.ports" in reached
+    assert "crypto_lab.adapters.ports" in reached
 
 
 # --------------------------------------------------------------------------

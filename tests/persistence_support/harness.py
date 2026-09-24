@@ -34,18 +34,44 @@ trigger refuses. The two builders import only the committed ``strategy`` and
 ``datasets`` modules and the doubles' constants; nothing here imports a lifecycle
 repository, ``fixtures.py`` or ``SqliteHarness`` (Task 4). The module never
 imports ``subprocess`` and never launches a child.
+
+Task 4 adds the SQLite side of the shared contract suite (plan 7.1):
+``SqliteHarness`` implements ``PortHarness`` over one migrated database, tracking
+every unit of work it hands out so ``close()`` can roll back a transaction a test
+abandoned before disposing the engine; ``put_lifecycle_parents`` inserts, each in
+its own committed transaction and only when absent, the parents the shared
+fixtures reference, and is harmless for the in-memory kind; ``commit``,
+``put_experiment``, ``put_run``, ``put_invocation``, ``bump``, ``bump_run`` and
+``bump_invocation`` are the promoted siblings of the contract module's private
+helpers, whose own names stay private and are not imported; ``sample_run_event``
+builds one sanitized heartbeat with its content hash recomputed, because the
+doubles offer no event builder; ``sql_identity_literal`` checks a value against
+the doubles' prefixed-UUID4 grammar and single-quotes it, the only way the two
+Task 4 trigger installers can name a row, since SQLite admits no bound parameter
+inside ``CREATE TRIGGER``; and ``CasSubject``/``CAS_SUBJECTS`` carry the three
+compare-and-swap repositories of C-30 through one parametrized case.
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 import sqlite3
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
+from sqlalchemy import Select, select
 from sqlalchemy.engine import Connection
 
+from crypto_lab.adapters.events import (
+    HeartbeatPayload,
+    RunEvent,
+    run_event_content_hash,
+)
+from crypto_lab.adapters.vocabulary import ProtocolEventType
 from crypto_lab.datasets.hashing import dataset_metadata_hash, validate_dataset_identity
 from crypto_lab.datasets.models import (
     DatasetDataType,
@@ -55,10 +81,28 @@ from crypto_lab.datasets.models import (
     RawSourceProvenance,
 )
 from crypto_lab.domain.canonical_json import canonical_json_bytes
-from crypto_lab.domain.hashing import sha256_bytes
+from crypto_lab.domain.command_invocation import CommandInvocationRecord
+from crypto_lab.domain.descriptors import RuntimeAvailabilityObservation
+from crypto_lab.domain.diagnostics import Diagnostic
+from crypto_lab.domain.engine_run import EngineRunRecord
+from crypto_lab.domain.experiment import ExperimentRecord
+from crypto_lab.domain.hashing import attempt_token_hash, sha256_bytes
+from crypto_lab.domain.lifecycle import (
+    CommandInvocationState,
+    EngineRunState,
+    ExperimentState,
+)
 from crypto_lab.domain.ports import Clock
 from crypto_lab.domain.records import InstrumentRef, MarketType
 from crypto_lab.domain.results import Failure, Result, Success
+from crypto_lab.domain.retry import RetryDecisionRecord
+from crypto_lab.experiments.ports import UnitOfWork
+from crypto_lab.persistence.codecs import (
+    decode_command_invocation,
+    decode_engine_run,
+    decode_experiment,
+    decode_retry_decision,
+)
 from crypto_lab.persistence.database import SqliteDatabase
 from crypto_lab.persistence.migration_runner import (
     RevisionState,
@@ -66,6 +110,14 @@ from crypto_lab.persistence.migration_runner import (
     check_revision,
     open_for_migration,
 )
+from crypto_lab.persistence.registries import SqliteDiagnosticRecorder
+from crypto_lab.persistence.schema import (
+    CommandInvocationRow,
+    EngineRunRow,
+    ExperimentRow,
+    RetryDecisionRow,
+)
+from crypto_lab.persistence.unit_of_work import SqliteTransaction, SqliteUnitOfWork
 from crypto_lab.strategy.models import StrategySpec
 from crypto_lab.strategy.versioning import (
     STRATEGY_VERSION_PROFILE_VERSION,
@@ -75,20 +127,53 @@ from crypto_lab.strategy.versioning import (
     strategy_version_hash,
     strategy_version_identifier,
 )
-from doubles.experiments import INSTANT, UUID_A, UUID_B
+from doubles.experiments import (
+    ATTEMPT_TOKEN,
+    AVAIL_A,
+    EXPERIMENT_ID,
+    INSTANT,
+    INVOCATION_ID,
+    RUN_ID,
+    UUID_A,
+    UUID_B,
+    UUID_E,
+    FixedClock,
+    sample_experiment,
+    sample_invocation,
+    sample_observation,
+    sample_run,
+)
 
 __all__ = [
+    "CAS_SUBJECTS",
+    "EVENT_ID",
+    "OTHER_EVENT_ID",
+    "CasSubject",
+    "SqliteHarness",
+    "TransactionSource",
     "accept_any_revision",
+    "bump",
+    "bump_invocation",
+    "bump_run",
     "causal_edges",
     "code",
+    "commit",
     "file_sha256",
+    "install_ignoring_update_trigger",
     "install_refusing_edge_trigger",
     "install_refusing_partition_trigger",
+    "install_refusing_slot_trigger",
     "ok",
     "open_test_database",
+    "put_experiment",
+    "put_invocation",
+    "put_lifecycle_parents",
+    "put_run",
     "raw_connection",
     "sample_dataset_with_partitions",
+    "sample_run_event",
     "sample_strategy_version",
+    "sql_identity_literal",
 ]
 
 #: Plan 7.1: the two test-only triggers, fixed DDL text (C-31, C-29 (c)).
@@ -457,3 +542,372 @@ def sample_dataset_with_partitions() -> tuple[
     descriptor = DatasetDescriptor.model_validate(payload)
     validate_dataset_identity(descriptor, partitions)
     return descriptor, partitions
+
+
+# --------------------------------------------------------------------------
+# Task 4 (plan 7.1): the promoted helpers, the SQLite harness, the lifecycle
+# parents, the two test-only triggers and the compare-and-swap subjects
+# --------------------------------------------------------------------------
+
+_E: Final = ExperimentState
+_R: Final = EngineRunState
+_C: Final = CommandInvocationState
+
+#: The two sanitized-event identities Task 4's cases use; the doubles define none.
+EVENT_ID: Final = f"evt_{UUID_A}"
+OTHER_EVENT_ID: Final = f"evt_{UUID_B}"
+#: Plan 7.1: the doubles' prefixed UUID4 grammar, the only shape a trigger
+#: installer may embed as a literal.
+_IDENTITY_GRAMMAR: Final = re.compile(
+    r"^[a-z]+_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+#: The three fixed ``(table, identity_column)`` pairs the ignoring trigger admits.
+_UPDATE_TRIGGER_TARGETS: Final[frozenset[tuple[str, str]]] = frozenset(
+    {
+        ("experiments", "experiment_id"),
+        ("engine_runs", "run_id"),
+        ("command_invocations", "invocation_id"),
+    }
+)
+
+
+class TransactionSource(Protocol):
+    """The one member the promoted ``put_*`` helpers need of either harness kind."""
+
+    def unit_of_work(self) -> UnitOfWork: ...
+
+
+class LifecycleHarness(TransactionSource, Protocol):
+    """``TransactionSource`` plus the observation seeder ``put_lifecycle_parents``
+    needs, so the helper serves the in-memory and the SQLite kind alike."""
+
+    def seed_observation(self, observation: RuntimeAvailabilityObservation) -> None: ...
+
+
+def commit(unit_of_work: UnitOfWork) -> None:
+    """Commit a transaction, failing the test on any refusal."""
+    committed = unit_of_work.commit()
+    assert isinstance(committed, Success), committed
+
+
+def put_experiment(harness: TransactionSource, record: ExperimentRecord) -> None:
+    """Insert one experiment in its own committed transaction."""
+    transaction = harness.unit_of_work().begin()
+    ok(transaction.experiments.add(record))
+    commit(transaction)
+
+
+def put_run(harness: TransactionSource, record: EngineRunRecord) -> None:
+    """Insert one attempt in its own committed transaction."""
+    transaction = harness.unit_of_work().begin()
+    ok(transaction.engine_runs.add_attempt(record))
+    commit(transaction)
+
+
+def put_invocation(harness: TransactionSource, record: CommandInvocationRecord) -> None:
+    """Insert one invocation in its own committed transaction."""
+    transaction = harness.unit_of_work().begin()
+    ok(transaction.command_invocations.add(record))
+    commit(transaction)
+
+
+def bump(record: ExperimentRecord) -> ExperimentRecord:
+    """The same experiment one revision and one second later."""
+    payload = record.model_dump(mode="python")
+    payload["revision"] = record.revision + 1
+    payload["updated_at_utc"] = record.updated_at_utc + timedelta(seconds=1)
+    return ExperimentRecord.model_validate(payload)
+
+
+def bump_run(record: EngineRunRecord, target: EngineRunState) -> EngineRunRecord:
+    """The same attempt one revision later in ``target``."""
+    payload = record.model_dump(mode="python")
+    payload["state"] = target
+    payload["revision"] = record.revision + 1
+    payload["updated_at_utc"] = record.updated_at_utc + timedelta(seconds=1)
+    if target is _R.READY:
+        payload["availability_observation_id"] = AVAIL_A
+    return EngineRunRecord.model_validate(payload)
+
+
+def bump_invocation(
+    record: CommandInvocationRecord, target: CommandInvocationState
+) -> CommandInvocationRecord:
+    """The same invocation one revision later in ``target``."""
+    payload = record.model_dump(mode="python")
+    instant = record.updated_at_utc + timedelta(seconds=1)
+    payload["state"] = target
+    payload["revision"] = record.revision + 1
+    payload["updated_at_utc"] = instant
+    if target is _C.STARTING:
+        payload["launch_attempted_at_utc"] = instant
+        payload["deadline_utc"] = instant + timedelta(seconds=record.timeout_seconds)
+    return CommandInvocationRecord.model_validate(payload)
+
+
+def sample_run_event(
+    *,
+    sequence: int = 1,
+    event_id: str = EVENT_ID,
+    invocation_id: str = INVOCATION_ID,
+    run_id: str = RUN_ID,
+    phase: str = "warmup",
+) -> RunEvent:
+    """One sanitized heartbeat with its ``RUN_EVENT_CONTENT_V1`` hash recomputed.
+
+    ``phase`` is the one material field a caller varies to obtain a second event
+    with the same key and a different ``content_hash`` (C-14); the raw attempt
+    token never enters the record, only ``attempt_token_hash``.
+    """
+    draft = RunEvent.model_construct(
+        schema_version="1.0.0",
+        protocol_version="1.0.0",
+        event_id=event_id,
+        invocation_id=invocation_id,
+        run_id=run_id,
+        attempt_token_hash=attempt_token_hash(ATTEMPT_TOKEN),
+        sequence=sequence,
+        event_type=ProtocolEventType.HEARTBEAT,
+        timestamp_utc=INSTANT + timedelta(seconds=sequence),
+        payload=HeartbeatPayload(activity_counter=sequence, phase=phase),
+        received_at_utc=INSTANT + timedelta(seconds=sequence, microseconds=1),
+        wire_event_hash="b" * 64,
+        content_hash="0" * 64,
+    )
+    payload = draft.model_dump(mode="python")
+    payload["content_hash"] = run_event_content_hash(draft)
+    return RunEvent.model_validate(payload)
+
+
+class SqliteHarness:
+    """``PortHarness`` over one migrated SQLite database (plan 7.1).
+
+    Every unit of work it hands out is tracked, so ``close()`` can roll back a
+    transaction a test abandoned -- a ``del``-ed one included -- before disposing
+    the engine, and no lock or handle survives a test. The committed readers open
+    a fresh read-only session each time, so no writer's session and no cached
+    record can stand in for durable evidence.
+    """
+
+    __slots__ = ("_clock", "_units", "database")
+
+    def __init__(self, database: SqliteDatabase) -> None:
+        self.database = database
+        self._clock = FixedClock(INSTANT)
+        self._units: list[SqliteUnitOfWork] = []
+
+    def unit_of_work(self) -> SqliteUnitOfWork:
+        """A fresh root over the same database, tracked for teardown."""
+        unit = SqliteUnitOfWork(self.database, self._clock)
+        self._units.append(unit)
+        return unit
+
+    def seed_diagnostic(self, diagnostic: Diagnostic) -> None:
+        """Record one diagnostic through the recorder's autonomous transaction."""
+        recorder = SqliteDiagnosticRecorder(self.database, clock=self._clock)
+        ok(recorder.record(diagnostic))
+
+    def seed_observation(self, observation: RuntimeAvailabilityObservation) -> None:
+        """Insert one observation through the writer in its own transaction."""
+        transaction = self.unit_of_work().begin()
+        ok(transaction.availability_observation_writer.add(observation))
+        commit(transaction)
+
+    def committed_experiments(self) -> tuple[ExperimentRecord, ...]:
+        statement = select(ExperimentRow).order_by(ExperimentRow.experiment_id)
+        return tuple(
+            ok(decode_experiment(row, clock=self._clock))
+            for row in self._rows(statement)
+        )
+
+    def committed_engine_runs(self) -> tuple[EngineRunRecord, ...]:
+        statement = select(EngineRunRow).order_by(EngineRunRow.run_id)
+        return tuple(
+            ok(decode_engine_run(row, clock=self._clock))
+            for row in self._rows(statement)
+        )
+
+    def committed_command_invocations(self) -> tuple[CommandInvocationRecord, ...]:
+        statement = select(CommandInvocationRow).order_by(
+            CommandInvocationRow.invocation_id
+        )
+        return tuple(
+            ok(decode_command_invocation(row, clock=self._clock))
+            for row in self._rows(statement)
+        )
+
+    def committed_retry_decisions(self) -> tuple[RetryDecisionRecord, ...]:
+        statement = select(RetryDecisionRow).order_by(
+            RetryDecisionRow.logical_slot_id, RetryDecisionRow.predecessor_run_id
+        )
+        return tuple(
+            ok(decode_retry_decision(row, clock=self._clock))
+            for row in self._rows(statement)
+        )
+
+    def open_transactions(self) -> tuple[SqliteTransaction, ...]:
+        """Every transaction of every unit of work this harness handed out."""
+        return tuple(
+            transaction
+            for unit in self._units
+            for transaction in unit.open_transactions()
+        )
+
+    def close(self) -> None:
+        """Roll back every surviving transaction, then dispose the engine."""
+        for transaction in self.open_transactions():
+            transaction.rollback()
+        self._units.clear()
+        self.database.close()
+
+    def _rows(self, statement: Select[Any]) -> tuple[dict[str, object], ...]:
+        with self.database.read_only() as connection:
+            return tuple(
+                {str(key): value for key, value in row.items()}
+                for row in connection.execute(statement).mappings().all()
+            )
+
+
+def _absent(harness: TransactionSource, read: Callable[[UnitOfWork], object]) -> bool:
+    """Is the row ``read`` names absent from committed state?"""
+    transaction = harness.unit_of_work().begin()
+    try:
+        return isinstance(read(transaction), Failure)
+    finally:
+        transaction.rollback()
+
+
+def put_lifecycle_parents(
+    harness: LifecycleHarness,
+    *,
+    experiment_id: str = EXPERIMENT_ID,
+    run: bool = False,
+    invocation: bool = False,
+    observation: bool = False,
+) -> None:
+    """Insert the parents the shared fixtures reference, each when absent (7.1).
+
+    The seeded experiment is inserted directly at ``QUEUED`` through ``add``, so
+    it freezes no configuration snapshot and ``consistency_report()`` counts it in
+    ``queued_without_snapshot``; only Task 7's flows, which queue through
+    ``queue_experiment``, assert that count. Harmless for the in-memory kind.
+    """
+    assert run or not invocation, "an invocation's foreign key needs its run"
+    if _absent(harness, lambda opened: opened.experiments.get(experiment_id)):
+        put_experiment(
+            harness, sample_experiment(_E.QUEUED, experiment_id=experiment_id)
+        )
+    if observation and _absent(
+        harness, lambda opened: opened.availability_observations.get(AVAIL_A)
+    ):
+        harness.seed_observation(sample_observation(AVAIL_A))
+    if run and _absent(harness, lambda opened: opened.engine_runs.get(RUN_ID)):
+        put_run(harness, sample_run(_R.PENDING, experiment_id=experiment_id))
+    if invocation and _absent(
+        harness, lambda opened: opened.command_invocations.get(INVOCATION_ID)
+    ):
+        put_invocation(harness, sample_invocation(_C.RUNNING))
+
+
+def sql_identity_literal(identity: str) -> str:
+    """The checked single-quoted literal a ``CREATE TRIGGER`` may embed (plan 7.1).
+
+    SQLite refuses a bound parameter inside ``CREATE TRIGGER`` ("trigger cannot
+    use variables"), so the two Task 4 installers compose their DDL from fixed
+    text plus this literal of a fixture constant -- never from a row value and
+    never as a general interpolation. Every data statement keeps its parameters.
+    """
+    if _IDENTITY_GRAMMAR.match(identity) is None:
+        raise ValueError("identity does not match the fixture identifier grammar")
+    return f"'{identity}'"
+
+
+def install_refusing_slot_trigger(
+    database: SqliteDatabase, logical_slot_id: str
+) -> None:
+    """C-29 (a), (b): refuse the ``engine_slots`` insert of exactly that slot."""
+    _execute_raw(
+        database,
+        "CREATE TRIGGER test_refuse_slot BEFORE INSERT ON engine_slots "
+        f"WHEN NEW.logical_slot_id = {sql_identity_literal(logical_slot_id)} "
+        "BEGIN SELECT RAISE(ABORT, 'test: slot refused'); END",
+    )
+
+
+def install_ignoring_update_trigger(
+    database: SqliteDatabase, table: str, identity_column: str, identity: str
+) -> None:
+    """C-30: make a conditional ``UPDATE`` of that row report zero affected rows.
+
+    ``RAISE(IGNORE)`` in a ``BEFORE UPDATE`` trigger skips the row silently, which
+    is the only way to reach plan 4.3.1 step f by rowcount from inside one
+    connection. ``(table, identity_column)`` must be one of the three fixed pairs.
+    """
+    if (table, identity_column) not in _UPDATE_TRIGGER_TARGETS:
+        raise ValueError("table and identity column must be a reviewed pair")
+    _execute_raw(
+        database,
+        f"CREATE TRIGGER test_ignore_update BEFORE UPDATE ON {table} "
+        f"WHEN NEW.{identity_column} = {sql_identity_literal(identity)} "
+        "BEGIN SELECT RAISE(IGNORE); END",
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CasSubject:
+    """One compare-and-swap repository with its fixtures and narrowers (C-30)."""
+
+    name: str
+    member: str
+    seed_parents: Callable[[SqliteHarness], None]
+    record: Callable[[], Any]
+    put: Callable[[SqliteHarness, Any], None]
+    identity: Callable[[Any], str]
+    rekey: Callable[[Any], Any]
+    bump: Callable[[Any], Any]
+    insert: Callable[[Any, Any], Result[None]]
+    committed: Callable[[SqliteHarness], tuple[Any, ...]]
+
+
+#: Plan 7.1: one subject per compare-and-swap repository, so the 4.3.1 order is
+#: walked once per repository rather than written three times.
+CAS_SUBJECTS: Final[tuple[CasSubject, ...]] = (
+    CasSubject(
+        name="experiments",
+        member="experiments",
+        seed_parents=lambda harness: None,
+        record=lambda: sample_experiment(_E.DRAFT),
+        put=put_experiment,
+        identity=lambda record: str(record.experiment_id),
+        rekey=lambda record: sample_experiment(_E.DRAFT, experiment_id=f"exp_{UUID_E}"),
+        bump=bump,
+        insert=lambda repository, record: repository.add(record),
+        committed=lambda harness: harness.committed_experiments(),
+    ),
+    CasSubject(
+        name="engine_runs",
+        member="engine_runs",
+        seed_parents=put_lifecycle_parents,
+        record=lambda: sample_run(_R.PENDING),
+        put=put_run,
+        identity=lambda record: str(record.run_id),
+        rekey=lambda record: sample_run(_R.PENDING, run_id=f"run_{UUID_E}"),
+        bump=lambda record: bump_run(record, _R.VALIDATING),
+        insert=lambda repository, record: repository.add_attempt(record),
+        committed=lambda harness: harness.committed_engine_runs(),
+    ),
+    CasSubject(
+        name="command_invocations",
+        member="command_invocations",
+        seed_parents=lambda harness: put_lifecycle_parents(harness, run=True),
+        record=lambda: sample_invocation(_C.PENDING),
+        put=put_invocation,
+        identity=lambda record: str(record.invocation_id),
+        rekey=lambda record: sample_invocation(
+            _C.PENDING, invocation_id=f"inv_{UUID_E}"
+        ),
+        bump=lambda record: bump_invocation(record, _C.STARTING),
+        insert=lambda repository, record: repository.add(record),
+        committed=lambda harness: harness.committed_command_invocations(),
+    ),
+)

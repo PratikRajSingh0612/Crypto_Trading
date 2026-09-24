@@ -28,6 +28,12 @@ from typing import Final
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from crypto_lab.domain.lifecycle import (
+    CommandInvocationState,
+    CommandKind,
+    EngineRunState,
+    ExperimentState,
+)
 from crypto_lab.persistence.database import SqliteDatabase
 from crypto_lab.persistence.diagnostics import (
     CONCURRENCY_CONFLICT,
@@ -56,6 +62,24 @@ from doubles.experiments import (
     UUID_C,
     UUID_D,
     UUID_E,
+    sample_experiment,
+    sample_invocation,
+    sample_run,
+)
+from persistence_support.harness import (
+    OTHER_EVENT_ID,
+    SqliteHarness,
+    bump,
+    bump_invocation,
+    bump_run,
+    code,
+    commit,
+    ok,
+    put_experiment,
+    put_invocation,
+    put_lifecycle_parents,
+    put_run,
+    sample_run_event,
 )
 
 type Statement = tuple[str, tuple[object, ...]]
@@ -2149,3 +2173,106 @@ def test_the_seed_holds_one_row_per_table(seeded_database: SqliteDatabase) -> No
             count = connection.exec_driver_sql(f"SELECT count(*) FROM {table}")  # noqa: S608
             assert count.scalar_one() >= 1, table
         assert connection.exec_driver_sql("PRAGMA foreign_key_check").all() == []
+
+
+# --------------------------------------------------------------------------
+# Task 4: the repository half of C-26 and C-27
+# --------------------------------------------------------------------------
+
+
+def test_every_composite_foreign_key_refuses_a_mismatched_reference(
+    sqlite_harness: SqliteHarness,
+) -> None:
+    """C-26 through the ports: an event for an invocation of another run, an
+    event for a ``DESCRIBE`` invocation, and a run naming an unregistered
+    observation are each ``CORE.INVARIANT_VIOLATION`` at the write, with nothing
+    written and the transaction still usable."""
+    put_lifecycle_parents(sqlite_harness, run=True, invocation=True)
+    put_run(
+        sqlite_harness,
+        sample_run(EngineRunState.PENDING, run_id=OTHER_RUN_ID, logical_slot_id=SLOT_B),
+    )
+    describing = sample_invocation(
+        CommandInvocationState.PENDING,
+        kind=CommandKind.DESCRIBE,
+        invocation_id=OTHER_INVOCATION_ID,
+    )
+    put_invocation(sqlite_harness, describing)
+    transaction = sqlite_harness.unit_of_work().begin()
+    # The invocation belongs to RUN_ID, so an event naming OTHER_RUN_ID breaks
+    # the composite (run_id, invocation_id) key.
+    foreign_run = sample_run_event(sequence=1, run_id=OTHER_RUN_ID)
+    assert code(transaction.engine_runs.append_event(foreign_run)) == (
+        INVARIANT_VIOLATION
+    )
+    # A DESCRIBE invocation carries no run_id, so no event can reference it.
+    described = sample_run_event(
+        sequence=1, event_id=OTHER_EVENT_ID, invocation_id=OTHER_INVOCATION_ID
+    )
+    assert code(transaction.engine_runs.append_event(described)) == (
+        INVARIANT_VIOLATION
+    )
+    # A run reaching READY names an observation nothing has registered.
+    unobserved = bump_run(sample_run(EngineRunState.PENDING), EngineRunState.READY)
+    assert code(transaction.engine_runs.compare_and_swap(0, unobserved)) == (
+        INVARIANT_VIOLATION
+    )
+    # Every refusal aborted its own statement; the transaction still works.
+    assert ok(transaction.engine_runs.list_events(INVOCATION_ID)) == ()
+    commit(transaction)
+    assert sqlite_harness.database.consistency_report().foreign_key_violations == 0
+
+
+def test_every_terminal_trigger_refuses_a_repository_compare_and_swap(
+    sqlite_harness: SqliteHarness,
+) -> None:
+    """C-27 through the ports: the three terminal triggers surface as
+    ``CORE.INVARIANT_VIOLATION`` and leave their rows exactly as they were."""
+    put_lifecycle_parents(sqlite_harness, run=True, observation=True)
+    terminal_experiment = sample_experiment(
+        ExperimentState.CANCELLED, experiment_id=OTHER_EXPERIMENT_ID
+    )
+    put_experiment(sqlite_harness, terminal_experiment)
+    terminal_run = sample_run(
+        EngineRunState.CANCELLED, run_id=OTHER_RUN_ID, logical_slot_id=SLOT_B
+    )
+    put_run(sqlite_harness, terminal_run)
+    terminal_invocation = sample_invocation(CommandInvocationState.CANCELLED)
+    put_invocation(sqlite_harness, terminal_invocation)
+    transaction = sqlite_harness.unit_of_work().begin()
+    assert (
+        code(
+            transaction.experiments.compare_and_swap(
+                terminal_experiment.revision, bump(terminal_experiment)
+            )
+        )
+        == INVARIANT_VIOLATION
+    )
+    assert (
+        code(
+            transaction.engine_runs.compare_and_swap(
+                terminal_run.revision,
+                bump_run(terminal_run, EngineRunState.CANCELLED),
+            )
+        )
+        == INVARIANT_VIOLATION
+    )
+    assert (
+        code(
+            transaction.command_invocations.compare_and_swap(
+                terminal_invocation.revision,
+                bump_invocation(terminal_invocation, CommandInvocationState.TIMED_OUT),
+            )
+        )
+        == INVARIANT_VIOLATION
+    )
+    commit(transaction)
+    assert sqlite_harness.committed_experiments() == (
+        sample_experiment(ExperimentState.QUEUED),
+        terminal_experiment,
+    )
+    assert sqlite_harness.committed_engine_runs() == (
+        sample_run(EngineRunState.PENDING),
+        terminal_run,
+    )
+    assert sqlite_harness.committed_command_invocations() == (terminal_invocation,)

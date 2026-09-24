@@ -14,6 +14,7 @@ requires it to resolve through pytest's prepend mode without editing the pinned
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -72,6 +73,7 @@ from doubles.experiments import (
     INSTANT,
     INVOCATION_ID,
     OTHER_DIAG_ID,
+    OTHER_EXPERIMENT_ID,
     OTHER_INVOCATION_ID,
     OTHER_RUN_ID,
     RUN_ID,
@@ -95,6 +97,13 @@ from doubles.experiments import (
     sample_observation,
     sample_retry_decision,
     sample_run,
+)
+from persistence_support.harness import (
+    OTHER_EVENT_ID,
+    SqliteHarness,
+    open_test_database,
+    put_lifecycle_parents,
+    sample_run_event,
 )
 
 _E = ExperimentState
@@ -153,10 +162,36 @@ class _InMemoryHarness:
         return self.store.committed_retry_decisions()
 
 
-@pytest.fixture(params=["in_memory"])
-def harness(request: pytest.FixtureRequest) -> PortHarness:
-    assert request.param == "in_memory"
-    return _InMemoryHarness(InMemoryBackingStore())
+@pytest.fixture(params=["in_memory", "sqlite"])
+def harness_factory(
+    request: pytest.FixtureRequest, tmp_path: Path
+) -> Iterator[Callable[[], PortHarness]]:
+    """Stage 8 plan section 7.2: one factory per kind, so a case that needs a
+    second backing store builds it in the kind under test and every SQLite
+    database is closed in teardown."""
+    built: list[SqliteHarness] = []
+
+    def build() -> PortHarness:
+        if request.param == "in_memory":
+            return _InMemoryHarness(InMemoryBackingStore())
+        directory = tmp_path / f"harness-{len(built)}"
+        directory.mkdir()
+        harness = SqliteHarness(
+            open_test_database(directory, clock=FixedClock(INSTANT))
+        )
+        built.append(harness)
+        return harness
+
+    try:
+        yield build
+    finally:
+        for harness in built:
+            harness.close()
+
+
+@pytest.fixture
+def harness(harness_factory: Callable[[], PortHarness]) -> PortHarness:
+    return harness_factory()
 
 
 def _missing(value: object) -> bool:
@@ -691,6 +726,7 @@ def test_compare_and_swap_rejects_a_missing_row_and_a_wrong_revision_step(
 def test_run_and_invocation_compare_and_swap_share_the_contract(
     harness: PortHarness,
 ) -> None:
+    put_lifecycle_parents(harness)
     run = sample_run(_R.PENDING)
     invocation = sample_invocation(_C.PENDING)
     _put_run(harness, run)
@@ -734,6 +770,7 @@ def test_run_and_invocation_compare_and_swap_share_the_contract(
 def test_the_attempt_unique_index_rejects_a_second_attempt_one_for_the_slot(
     harness: PortHarness,
 ) -> None:
+    put_lifecycle_parents(harness)
     first = sample_run(_R.PENDING)
     divergent = sample_run(_R.PENDING, run_id=OTHER_RUN_ID, request_hash="b" * 64)
     transaction = harness.unit_of_work().begin()
@@ -750,14 +787,17 @@ def test_the_attempt_unique_index_rejects_a_second_attempt_one_for_the_slot(
 def test_latest_attempt_is_missing_for_an_unattempted_slot_and_highest_otherwise(
     harness: PortHarness,
 ) -> None:
+    put_lifecycle_parents(harness, observation=True)
     transaction = harness.unit_of_work().begin()
     assert _missing(_ok(transaction.engine_runs.latest_attempt(EXPERIMENT_ID, SLOT_A)))
     assert _ok(transaction.engine_runs.count_attempts(EXPERIMENT_ID, SLOT_A)) == 0
-    # Reverse insertion order: the successor lands before the initial attempt.
+    # The initial attempt is inserted before its successor, because the
+    # successor's `predecessor_run_id` foreign key forbids the reverse order;
+    # `latest_attempt` is still the highest attempt, not the last inserted.
     successor = sample_run(_R.PENDING, run_id=OTHER_RUN_ID, attempt_number=2)
     initial = sample_run(_R.FAILED)
-    _ok(transaction.engine_runs.add_attempt(successor))
     _ok(transaction.engine_runs.add_attempt(initial))
+    _ok(transaction.engine_runs.add_attempt(successor))
     latest = _ok(transaction.engine_runs.latest_attempt(EXPERIMENT_ID, SLOT_A))
     assert not _missing(latest)
     assert latest == successor
@@ -782,6 +822,7 @@ def test_latest_attempt_is_missing_for_an_unattempted_slot_and_highest_otherwise
 def test_the_invocation_index_permits_one_non_terminal_invocation_per_run_and_kind(
     harness: PortHarness,
 ) -> None:
+    put_lifecycle_parents(harness, run=True)
     open_run = sample_invocation(_C.PENDING)
     another_open_run = sample_invocation(_C.STARTING, invocation_id=OTHER_INVOCATION_ID)
     transaction = harness.unit_of_work().begin()
@@ -806,7 +847,7 @@ def test_the_invocation_index_permits_one_non_terminal_invocation_per_run_and_ki
 
 
 def test_list_for_run_is_ordered_by_creation_then_identifier_regardless_of_insertion(
-    harness: PortHarness,
+    harness_factory: Callable[[], PortHarness],
 ) -> None:
     early = sample_invocation(
         _C.EXITED,
@@ -831,7 +872,8 @@ def test_list_for_run_is_ordered_by_creation_then_identifier_regardless_of_inser
         (latest, middle_high, early, middle_low, other_kind),
         (middle_low, early, other_kind, latest, middle_high),
     ):
-        store_harness = _InMemoryHarness(InMemoryBackingStore())
+        store_harness = harness_factory()
+        put_lifecycle_parents(store_harness, run=True)
         transaction = store_harness.unit_of_work().begin()
         for record in permutation:
             _ok(transaction.command_invocations.add(record))
@@ -846,7 +888,6 @@ def test_list_for_run_is_ordered_by_creation_then_identifier_regardless_of_inser
             == ()
         )
         transaction.rollback()
-    del harness
 
 
 # --------------------------------------------------------------------------
@@ -857,6 +898,7 @@ def test_list_for_run_is_ordered_by_creation_then_identifier_regardless_of_inser
 def test_insert_if_absent_inserts_once_and_then_returns_the_stored_winner(
     harness: PortHarness,
 ) -> None:
+    put_lifecycle_parents(harness, run=True)
     candidate = sample_retry_decision()
     divergent = sample_retry_decision(decided_at_utc=INSTANT + timedelta(minutes=5))
     transaction = harness.unit_of_work().begin()
@@ -1047,7 +1089,8 @@ def test_rollback_restores_every_store_and_commit_publishes_all_or_nothing(
 def test_a_failed_second_write_leaves_the_first_undurable_after_rollback(
     harness: PortHarness,
 ) -> None:
-    stored_run = sample_run(_R.PENDING)
+    put_lifecycle_parents(harness, experiment_id=OTHER_EXPERIMENT_ID)
+    stored_run = sample_run(_R.PENDING, experiment_id=OTHER_EXPERIMENT_ID)
     _put_run(harness, stored_run)
     transaction = harness.unit_of_work().begin()
     _ok(transaction.experiments.add(sample_experiment(_E.DRAFT)))
@@ -1056,7 +1099,12 @@ def test_a_failed_second_write_leaves_the_first_undurable_after_rollback(
     )
     assert _code(stale) == CONCURRENCY_CONFLICT
     transaction.rollback()
-    assert harness.committed_experiments() == ()
+    fresh = harness.unit_of_work().begin()
+    assert _code(fresh.experiments.get(EXPERIMENT_ID)) == INVARIANT_VIOLATION
+    fresh.rollback()
+    assert harness.committed_experiments() == (
+        sample_experiment(_E.QUEUED, experiment_id=OTHER_EXPERIMENT_ID),
+    )
     assert harness.committed_engine_runs() == (stored_run,)
 
 
@@ -1090,6 +1138,14 @@ def test_commit_detects_a_row_that_moved_since_the_transaction_began(
     )
     loser.rollback()
     assert harness.committed_experiments() == (winning,)
+
+
+def test_the_in_memory_unit_of_work_detects_a_racing_insert_at_commit() -> None:
+    """Stage 8 plan section 7.2: two transactions staging an insert of one
+    identity at the same time is unconstructible over one SQLite writer, so this
+    half stays pinned to the double, whose commit performs the check. The SQLite
+    replacement is case C-1."""
+    harness = _InMemoryHarness(InMemoryBackingStore())
     # An insert that raced a committed insert of the same identity cannot publish.
     first = harness.unit_of_work().begin()
     second = harness.unit_of_work().begin()
@@ -1103,9 +1159,11 @@ def test_commit_detects_a_row_that_moved_since_the_transaction_began(
     )
 
 
-def test_commit_rejects_distinct_identities_that_collide_on_a_unique_index(
-    harness: PortHarness,
-) -> None:
+def test_the_in_memory_unit_of_work_rejects_index_collisions_at_commit() -> None:
+    """Stage 8 plan section 7.2: both halves stage colliding inserts in two open
+    transactions, which one SQLite writer cannot do; the SQLite replacements are
+    cases C-2 and C-3."""
+    harness = _InMemoryHarness(InMemoryBackingStore())
     # Attempt index (experiment_id, logical_slot_id, attempt_number).
     first = harness.unit_of_work().begin()
     second = harness.unit_of_work().begin()
@@ -1191,9 +1249,56 @@ def test_rebuilt_units_of_work_observe_committed_state_in_deterministic_order(
     )
 
 
+def test_append_event_replays_identical_and_refuses_conflicting_content(
+    harness: PortHarness,
+) -> None:
+    """Stage 8 plan section 7.2: the port's ``append_event`` had no harness case.
+
+    An identical replay returns the stored event and writes nothing; the same
+    key with other content, and a reused ``event_id`` under another key, are
+    both ``PERSISTENCE.CONCURRENCY_CONFLICT``.
+    """
+    put_lifecycle_parents(harness, run=True, invocation=True)
+    event = sample_run_event(sequence=1)
+    transaction = harness.unit_of_work().begin()
+    assert _ok(transaction.engine_runs.append_event(event)) == event
+    assert _ok(transaction.engine_runs.append_event(event)) == event
+    assert len(_ok(transaction.engine_runs.list_events(INVOCATION_ID))) == 1
+    divergent = sample_run_event(sequence=1, phase="teardown")
+    assert divergent.content_hash != event.content_hash
+    assert _code(transaction.engine_runs.append_event(divergent)) == (
+        CONCURRENCY_CONFLICT
+    )
+    reused = sample_run_event(sequence=2, event_id=event.event_id)
+    assert _code(transaction.engine_runs.append_event(reused)) == CONCURRENCY_CONFLICT
+    assert _ok(transaction.engine_runs.list_events(INVOCATION_ID)) == (event,)
+    _commit(transaction)
+
+
+def test_list_events_is_sequence_ordered_and_empty_for_an_unknown_invocation(
+    harness: PortHarness,
+) -> None:
+    """Stage 8 plan section 7.2: the port's ``list_events`` had no harness case."""
+    put_lifecycle_parents(harness, run=True, invocation=True)
+    first = sample_run_event(sequence=1)
+    second = sample_run_event(sequence=2, event_id=OTHER_EVENT_ID)
+    transaction = harness.unit_of_work().begin()
+    for event in (second, first):
+        _ok(transaction.engine_runs.append_event(event))
+    listed = _ok(transaction.engine_runs.list_events(INVOCATION_ID))
+    assert type(listed) is tuple
+    assert listed == (first, second)
+    assert _ok(transaction.engine_runs.list_events(OTHER_INVOCATION_ID)) == ()
+    _commit(transaction)
+    rebuilt = harness.unit_of_work().begin()
+    assert _ok(rebuilt.engine_runs.list_events(INVOCATION_ID)) == (first, second)
+    rebuilt.rollback()
+
+
 def test_protocol_returns_are_immutable_projections_not_internal_collections(
     harness: PortHarness,
 ) -> None:
+    put_lifecycle_parents(harness, run=True)
     _put_invocation(harness, sample_invocation(_C.PENDING))
     listed_once = harness.committed_command_invocations()
     listed_twice = harness.committed_command_invocations()

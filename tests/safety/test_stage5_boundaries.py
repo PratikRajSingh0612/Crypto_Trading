@@ -114,6 +114,8 @@ _INFRASTRUCTURE_EXEMPTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
         ("persistence/migrations/versions/r0001_stage8_baseline.py", "sqlalchemy"),
         ("persistence/migrations/versions/r0001_stage8_baseline.py", "alembic"),
         ("persistence/registries.py", "sqlalchemy"),
+        ("persistence/repositories.py", "sqlalchemy"),
+        ("persistence/unit_of_work.py", "sqlalchemy"),
     }
 )
 #: Resolved through the module's own import bindings, so ``from datetime import
@@ -580,6 +582,8 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
             ("persistence/migrations/versions/r0001_stage8_baseline.py", "sqlalchemy"),
             ("persistence/migrations/versions/r0001_stage8_baseline.py", "alembic"),
             ("persistence/registries.py", "sqlalchemy"),
+            ("persistence/repositories.py", "sqlalchemy"),
+            ("persistence/unit_of_work.py", "sqlalchemy"),
         }
     )
     source = repository_root / "src/crypto_lab"

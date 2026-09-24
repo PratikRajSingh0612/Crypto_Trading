@@ -31,6 +31,7 @@ from crypto_lab.persistence import migrations
 from crypto_lab.persistence.database import SqliteDatabase
 from doubles.experiments import INSTANT, FixedClock
 from persistence_support.harness import (
+    SqliteHarness,
     accept_any_revision,
     open_test_database,
     raw_connection,
@@ -115,6 +116,20 @@ def seeded_database(sqlite_database: SqliteDatabase) -> SqliteDatabase:
     finally:
         connection.close()
     return sqlite_database
+
+
+@pytest.fixture
+def sqlite_harness(sqlite_database: SqliteDatabase) -> Iterator[SqliteHarness]:
+    """The Task 4 harness over the migrated database (plan 7.1).
+
+    ``close()`` rolls back every transaction a test left open -- an abandoned
+    one included -- and then disposes the engine, so no lock or handle survives.
+    """
+    harness = SqliteHarness(sqlite_database)
+    try:
+        yield harness
+    finally:
+        harness.close()
 
 
 @pytest.fixture
