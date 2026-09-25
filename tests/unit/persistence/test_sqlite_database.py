@@ -6,8 +6,12 @@ integrity checks of an open, proven against real temporary databases and
 separate connections: the library probes of plan section 2.8 and cases C-15,
 C-16, C-19 and C-20 of section 5.1, plus the Windows platform cases of section
 7.5 that Task 1 owns (spaces and Unicode in the path, the held lock, the
-read-only session). The final section pins the plan section 2.6 guard
-expectations this task trips.
+read-only session). Task 6 adds case C-18 (the read-only attribute) and the
+deferred I/O-class handler tests: injected driver faults at the cursor and
+dialect-commit boundaries exercising every ``except DBAPIError`` handler of the
+lifecycle repositories and the unit of work, each labelled as injected rather than
+physical (plan 4.2, 6.5). The final section pins the plan section 2.6 guard
+expectations Task 1 trips.
 
 Declared readings, so nothing is inferred silently:
 
@@ -26,21 +30,34 @@ Declared readings, so nothing is inferred silently:
 from __future__ import annotations
 
 import ast
+import os
 import sqlite3
+import stat
 import threading
 import time
 import tomllib
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+from sqlalchemy.pool import QueuePool
 
-from crypto_lab.configuration.models import DatabaseConfig
+from crypto_lab.artifacts.ownership import SystemArtifactOwner
+from crypto_lab.configuration.models import ApplicationConfig, DatabaseConfig
+from crypto_lab.configuration.snapshot import snapshot_configuration
 from crypto_lab.domain.diagnostics import DiagnosticCategory
+from crypto_lab.domain.lifecycle import (
+    CommandInvocationState,
+    CommandKind,
+    EngineRunState,
+    ExperimentState,
+)
 from crypto_lab.domain.results import Failure, Result, Success
 from crypto_lab.persistence import database as database_module
 from crypto_lab.persistence.database import (
@@ -56,13 +73,44 @@ from crypto_lab.persistence.diagnostics import (
     WRITE_FAILED,
     persistence_failure,
 )
-from doubles.experiments import INSTANT, FixedClock
+from crypto_lab.persistence.migration_runner import open_database
+from crypto_lab.persistence.registries import SqliteDiagnosticRecorder
+from crypto_lab.persistence.unit_of_work import SqliteTransaction, SqliteUnitOfWork
+from doubles.experiments import (
+    AVAIL_A,
+    AVAIL_B,
+    DIAG_ID,
+    EXPERIMENT_ID,
+    INSTANT,
+    INVOCATION_ID,
+    OTHER_DIAG_ID,
+    RUN_ID,
+    SLOT_A,
+    FixedClock,
+    sample_diagnostic,
+    sample_experiment,
+    sample_invocation,
+    sample_observation,
+    sample_retry_decision,
+    sample_run,
+)
 from persistence_support.harness import (
+    SqliteHarness,
     accept_any_revision,
+    bump,
+    bump_invocation,
+    bump_run,
     code,
+    commit,
     file_sha256,
     ok,
+    open_test_database,
+    put_invocation,
+    put_lifecycle_parents,
     raw_connection,
+    sample_dataset_with_partitions,
+    sample_run_event,
+    sample_strategy_version,
 )
 
 _REPOSITORY = Path(__file__).resolve().parents[3]
@@ -991,6 +1039,827 @@ def test_failure_mints_one_persistence_diagnostic_from_the_injected_clock(
     assert diagnostic.details == {"sqlite_errorcode": 13, "operation": "insert"}
     assert plain.diagnostics[0].retriable is True
     assert plain.diagnostics[0].details == {}
+
+
+# --------------------------------------------------------------------------
+# C-18 and the I/O class (Task 6): the read-only attribute, and injected driver
+# faults at the cursor and dialect-commit boundaries
+# --------------------------------------------------------------------------
+#
+# Evidence labels. The read-only attribute is a real operating-system fault: the
+# file itself refuses every write. Every other fault below is INJECTED at the
+# driver boundary -- the dialect's ``do_execute`` replaced so the DBAPI cursor
+# never runs the statement and a ``sqlite3`` error carrying one extended result
+# code is raised in its place, or the dialect's ``do_commit`` replaced so the
+# DBAPI commit is never issued -- and proves the production handler's response
+# to that error at that boundary. None of them is a disk-full, power-loss or
+# storage-hardware experiment. Every patch is undone by ``monkeypatch`` when the
+# context exits or the test ends.
+
+_E = ExperimentState
+_R = EngineRunState
+_C = CommandInvocationState
+_SQLITE_BUSY = 5
+_SQLITE_READONLY = 8
+_SQLITE_IOERR = 10
+_SQLITE_FULL = 13
+_SQLITE_IOERR_READ = 266
+#: Plan 6.5: the bounded details a refused statement may carry -- the table, the
+#: operation, the identity and the result code; never SQL, parameters or values.
+_REFUSED_DETAIL_KEYS = frozenset(
+    {"table", "operation", "identity", "sqlite_errorcode", "sqlite_errorname"}
+)
+_LEAK_MARKERS = ("SELECT", "INSERT", "UPDATE", "DELETE", "?", "{", '"')
+#: A sixth fixture identity for the rows the write attempts would insert.
+_UUID_F = "6f6f6f6f-3333-4444-a555-666677778888"
+#: ``(label, table, operation, identity, call)``; the four lifecycle repositories
+#: carry their exact details, the five persistence-owned members carry ``None``.
+_WriteAttempt = tuple[
+    str, str | None, str | None, str | None, Callable[[SqliteTransaction], object]
+]
+#: ``(table, operation, identity, call)`` for every lifecycle read handler.
+_ReadAttempt = tuple[str, str, str, Callable[[SqliteTransaction], object]]
+#: ``(table, operation, identity, when, call)``: a disk-full fault on the statement
+#: ``when`` admits, inside the multi-statement write ``call`` issues.
+_DiskFullCase = tuple[
+    str, str, str, Callable[[str], bool], Callable[[SqliteTransaction], object]
+]
+
+
+def _pool_checked_out(database: SqliteDatabase) -> int:
+    """Connections the pool has lent out, not counting this probe's own."""
+    with database.connection() as connection:
+        pool = connection.engine.pool
+        assert isinstance(pool, QueuePool)
+        return pool.checkedout() - 1
+
+
+def _engine_of(database: SqliteDatabase) -> Engine:
+    with database.connection() as connection:
+        return connection.engine
+
+
+def _sqlite_error(
+    sqlite_errorcode: int, sqlite_errorname: str
+) -> sqlite3.OperationalError:
+    """A DBAPI error carrying one extended result code (plan 2.8 row 4), raised
+    at the driver boundary before the statement reaches SQLite."""
+    error = sqlite3.OperationalError("injected driver fault")
+    error.sqlite_errorcode = sqlite_errorcode
+    error.sqlite_errorname = sqlite_errorname
+    return error
+
+
+class _CursorFault:
+    """A one-shot fault at the dialect's ``do_execute`` boundary: the last SQLAlchemy
+    step before the DBAPI cursor runs a statement, inside the block whose errors
+    the connection wraps as ``DBAPIError`` (the engine's ``before_cursor_execute``
+    event is dispatched outside that block, so an error raised there would escape
+    unwrapped and never reach a repository handler).
+
+    ``arm`` schedules one error for the next statement ``when`` admits; every
+    statement that ran instead is recorded in ``passed`` so a test can prove
+    whether an earlier statement of a multi-statement method had executed. The
+    patch is undone by ``monkeypatch`` when the context exits.
+    """
+
+    def __init__(self, engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._original = engine.dialect.do_execute
+        self._pending: sqlite3.Error | None = None
+        self._when: Callable[[str], bool] = lambda statement: True
+        self.passed: list[str] = []
+        self.fired: list[str] = []
+        monkeypatch.setattr(engine.dialect, "do_execute", self._execute)
+
+    def arm(
+        self, error: sqlite3.Error, *, when: Callable[[str], bool] | None = None
+    ) -> None:
+        self._pending = error
+        self._when = (lambda statement: True) if when is None else when
+
+    def _execute(
+        self, cursor: Any, statement: str, parameters: Any, context: Any = None
+    ) -> None:
+        if self._pending is not None and self._when(statement):
+            error, self._pending = self._pending, None
+            self.fired.append(statement)
+            raise error
+        self.passed.append(statement)
+        self._original(cursor, statement, parameters, context)
+
+
+@contextmanager
+def _cursor_fault(
+    database: SqliteDatabase, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[_CursorFault]:
+    fault = _CursorFault(_engine_of(database), monkeypatch)
+    try:
+        yield fault
+    finally:
+        monkeypatch.undo()
+
+
+def _message(result: object) -> str:
+    assert isinstance(result, Failure), result
+    (diagnostic,) = result.diagnostics
+    return diagnostic.message
+
+
+def _assert_bounded_refusal(
+    result: object,
+    *,
+    expected_code: str,
+    table: str | None,
+    operation: str | None,
+    identity: str | None,
+    sqlite_errorcode: int | None,
+    sqlite_errorname: str | None,
+) -> None:
+    """Plan 6.5: the stable code, the bounded details and no leaked SQL, parameter,
+    record value or raw token; the lifecycle repositories name their table,
+    operation and identity exactly."""
+    assert code(result) == expected_code
+    details = _details(result)
+    assert set(details) <= _REFUSED_DETAIL_KEYS
+    if table is not None:
+        assert details["table"] == table
+        assert details["operation"] == operation
+        assert details["identity"] == identity
+        assert _message(result) == f"{operation} on {table} was refused by the database"
+    if sqlite_errorcode is not None:
+        assert details["sqlite_errorcode"] == sqlite_errorcode
+        assert details["sqlite_errorname"] == sqlite_errorname
+    for value in (_message(result), *details.values()):
+        for marker in _LEAK_MARKERS:
+            assert marker not in str(value), (marker, value)
+
+
+def _seed_for_writes(harness: SqliteHarness) -> None:
+    """A QUEUED parent at 2, its observation, a PENDING run at 0, a PENDING RUN-kind
+    invocation at 0 and the fixture diagnostic: one stored row per compare-and-swap
+    repository and every parent a write attempt references."""
+    put_lifecycle_parents(harness, run=True, observation=True)
+    put_invocation(harness, sample_invocation(_C.PENDING))
+    harness.seed_diagnostic(sample_diagnostic())
+
+
+def _write_attempts() -> tuple[_WriteAttempt, ...]:
+    """Every write method of the transaction, one attempt each, over the seeded
+    rows; the four lifecycle repositories carry their exact table and operation,
+    the five persistence-owned members are asserted on code and codes alone."""
+    queued = sample_experiment(_E.QUEUED)
+    pending_run = sample_run(_R.PENDING)
+    pending_invocation = sample_invocation(_C.PENDING)
+    other_experiment = sample_experiment(_E.DRAFT, experiment_id=f"exp_{_UUID_F}")
+    other_run = sample_run(_R.PENDING, run_id=f"run_{_UUID_F}")
+    describe = sample_invocation(
+        _C.PENDING, kind=CommandKind.DESCRIBE, invocation_id=f"inv_{_UUID_F}"
+    )
+    owner = SystemArtifactOwner(
+        owner_kind="SYSTEM", core_component="persistence", correlation_id="task-six"
+    )
+    return (
+        (
+            "experiments.add",
+            "experiments",
+            "add",
+            other_experiment.experiment_id,
+            lambda transaction: transaction.experiments.add(other_experiment),
+        ),
+        (
+            "experiments.compare_and_swap",
+            "experiments",
+            "compare_and_swap",
+            EXPERIMENT_ID,
+            lambda transaction: transaction.experiments.compare_and_swap(
+                queued.revision, bump(queued)
+            ),
+        ),
+        (
+            "engine_runs.add_attempt",
+            "engine_runs",
+            "add_attempt",
+            other_run.run_id,
+            lambda transaction: transaction.engine_runs.add_attempt(other_run),
+        ),
+        (
+            "engine_runs.compare_and_swap",
+            "engine_runs",
+            "compare_and_swap",
+            RUN_ID,
+            lambda transaction: transaction.engine_runs.compare_and_swap(
+                pending_run.revision, bump_run(pending_run, _R.VALIDATING)
+            ),
+        ),
+        (
+            "engine_runs.append_event",
+            "run_events",
+            "append_event",
+            sample_run_event().event_id,
+            lambda transaction: transaction.engine_runs.append_event(
+                sample_run_event()
+            ),
+        ),
+        (
+            "command_invocations.add",
+            "command_invocations",
+            "add",
+            describe.invocation_id,
+            lambda transaction: transaction.command_invocations.add(describe),
+        ),
+        (
+            "command_invocations.compare_and_swap",
+            "command_invocations",
+            "compare_and_swap",
+            INVOCATION_ID,
+            lambda transaction: transaction.command_invocations.compare_and_swap(
+                pending_invocation.revision,
+                bump_invocation(pending_invocation, _C.STARTING),
+            ),
+        ),
+        (
+            "retry_decisions.insert_if_absent",
+            "retry_decisions",
+            "insert_if_absent",
+            RUN_ID,
+            lambda transaction: transaction.retry_decisions.insert_if_absent(
+                sample_retry_decision()
+            ),
+        ),
+        (
+            "configuration_snapshots.freeze",
+            None,
+            None,
+            None,
+            lambda transaction: transaction.configuration_snapshots.freeze(
+                EXPERIMENT_ID, snapshot_configuration(ApplicationConfig())
+            ),
+        ),
+        (
+            "availability_observation_writer.add",
+            None,
+            None,
+            None,
+            lambda transaction: transaction.availability_observation_writer.add(
+                sample_observation(AVAIL_B)
+            ),
+        ),
+        (
+            "strategy_versions.register",
+            None,
+            None,
+            None,
+            lambda transaction: transaction.strategy_versions.register(
+                sample_strategy_version()
+            ),
+        ),
+        (
+            "datasets.register",
+            None,
+            None,
+            None,
+            lambda transaction: transaction.datasets.register(
+                *sample_dataset_with_partitions()
+            ),
+        ),
+        (
+            "artifact_owners.register",
+            None,
+            None,
+            None,
+            lambda transaction: transaction.artifact_owners.register(owner),
+        ),
+    )
+
+
+#: Every read handler of the four lifecycle repositories: the method, its table,
+#: operation and identity details, and the call that reaches it first.
+_READ_ATTEMPTS: tuple[_ReadAttempt, ...] = (
+    (
+        "experiments",
+        "get",
+        EXPERIMENT_ID,
+        lambda transaction: transaction.experiments.get(EXPERIMENT_ID),
+    ),
+    (
+        "experiments",
+        "compare_and_swap",
+        EXPERIMENT_ID,
+        lambda transaction: transaction.experiments.compare_and_swap(
+            2, bump(sample_experiment(_E.QUEUED))
+        ),
+    ),
+    (
+        "engine_runs",
+        "get",
+        RUN_ID,
+        lambda transaction: transaction.engine_runs.get(RUN_ID),
+    ),
+    (
+        "engine_runs",
+        "compare_and_swap",
+        RUN_ID,
+        lambda transaction: transaction.engine_runs.compare_and_swap(
+            0, bump_run(sample_run(_R.PENDING), _R.VALIDATING)
+        ),
+    ),
+    (
+        "engine_runs",
+        "count_attempts",
+        SLOT_A,
+        lambda transaction: transaction.engine_runs.count_attempts(
+            EXPERIMENT_ID, SLOT_A
+        ),
+    ),
+    (
+        "engine_runs",
+        "latest_attempt",
+        SLOT_A,
+        lambda transaction: transaction.engine_runs.latest_attempt(
+            EXPERIMENT_ID, SLOT_A
+        ),
+    ),
+    (
+        "engine_runs",
+        "get_by_attempt_number",
+        SLOT_A,
+        lambda transaction: transaction.engine_runs.get_by_attempt_number(
+            EXPERIMENT_ID, SLOT_A, 1
+        ),
+    ),
+    (
+        "run_events",
+        "list_events",
+        INVOCATION_ID,
+        lambda transaction: transaction.engine_runs.list_events(INVOCATION_ID),
+    ),
+    (
+        "command_invocations",
+        "get",
+        INVOCATION_ID,
+        lambda transaction: transaction.command_invocations.get(INVOCATION_ID),
+    ),
+    (
+        "command_invocations",
+        "compare_and_swap",
+        INVOCATION_ID,
+        lambda transaction: transaction.command_invocations.compare_and_swap(
+            0, bump_invocation(sample_invocation(_C.PENDING), _C.STARTING)
+        ),
+    ),
+    (
+        "command_invocations",
+        "list_for_run",
+        RUN_ID,
+        lambda transaction: transaction.command_invocations.list_for_run(
+            RUN_ID, CommandKind.RUN
+        ),
+    ),
+    (
+        "retry_decisions",
+        "get_by_predecessor",
+        RUN_ID,
+        lambda transaction: transaction.retry_decisions.get_by_predecessor(
+            SLOT_A, RUN_ID
+        ),
+    ),
+    (
+        "retry_decisions",
+        "insert_if_absent",
+        RUN_ID,
+        lambda transaction: transaction.retry_decisions.insert_if_absent(
+            sample_retry_decision()
+        ),
+    ),
+)
+_READ_IDS = [f"{table}.{operation}" for table, operation, _, _ in _READ_ATTEMPTS]
+
+
+def _assert_closed_then_released(
+    database: SqliteDatabase, transaction: SqliteTransaction, refused: object
+) -> None:
+    """Plan 4.2, the I/O-class rule: the transaction is closed -- every later member
+    call and ``commit()`` return the same stored ``Failure`` -- and the release
+    returns the connection to the pool."""
+    assert transaction.open_failure() is refused
+    assert transaction.experiments.get(EXPERIMENT_ID) is refused
+    assert transaction.engine_runs.count_attempts(EXPERIMENT_ID, SLOT_A) is refused
+    assert transaction.configuration_snapshots.get(EXPERIMENT_ID) is refused
+    assert _pool_checked_out(database) == 1
+    assert transaction.commit() is refused
+    with pytest.raises(RuntimeError, match="closed"):
+        _ = transaction.experiments
+    transaction.rollback()
+    assert _pool_checked_out(database) == 0
+
+
+def test_a_read_only_database_file_fails_writes_with_write_failed(
+    tmp_path: Path,
+) -> None:
+    """C-18: the file is set read-only after initialization; ``open_database``
+    succeeds for reading; every write is ``PERSISTENCE.WRITE_FAILED`` at the write
+    with a ``SQLITE_READONLY*`` code; a lifecycle transaction so refused is closed by
+    the I/O-class rule and released by ``rollback()``; a fresh transaction and a
+    read-only session then read every row."""
+    clock = FixedClock(INSTANT)
+    database = open_test_database(tmp_path, clock=clock)
+    harness = SqliteHarness(database)
+    _seed_for_writes(harness)
+    experiments = harness.committed_experiments()
+    runs = harness.committed_engine_runs()
+    invocations = harness.committed_command_invocations()
+    harness.close()
+    path = database.path
+    os.chmod(path, stat.S_IREAD)
+    try:
+        assert not os.access(path, os.W_OK)
+        reopened = ok(open_database(path, busy_timeout_ms=100, clock=clock))
+        try:
+            for label, table, operation, identity, attempt in _write_attempts():
+                transaction = SqliteUnitOfWork(reopened, clock).begin()
+                refused = attempt(transaction)
+                assert isinstance(refused, Failure), (label, refused)
+                _assert_bounded_refusal(
+                    refused,
+                    expected_code=WRITE_FAILED,
+                    table=table,
+                    operation=operation,
+                    identity=identity,
+                    sqlite_errorcode=None,
+                    sqlite_errorname=None,
+                )
+                details = _details(refused)
+                errorcode = details["sqlite_errorcode"]
+                assert isinstance(errorcode, int)
+                assert errorcode & 0xFF == _SQLITE_READONLY
+                assert str(details["sqlite_errorname"]).startswith("SQLITE_READONLY")
+                if table is not None:
+                    _assert_closed_then_released(reopened, transaction, refused)
+                else:
+                    # The five persistence-owned members return the write failure
+                    # at the call; the transaction is released here (see the
+                    # ledger's recorded gap on the closing rule for these members).
+                    transaction.rollback()
+                    assert _pool_checked_out(reopened) == 0
+            # Reading is unaffected: a fresh transaction, then a read-only session.
+            fresh = SqliteUnitOfWork(reopened, clock).begin()
+            try:
+                assert ok(fresh.experiments.get(EXPERIMENT_ID)) == experiments[0]
+                assert ok(fresh.engine_runs.get(RUN_ID)) == runs[0]
+                assert (
+                    ok(fresh.command_invocations.get(INVOCATION_ID)) == (invocations[0])
+                )
+                assert ok(fresh.diagnostics.get(DIAG_ID)) == sample_diagnostic()
+                assert ok(fresh.availability_observations.get(AVAIL_A)) == (
+                    sample_observation(AVAIL_A)
+                )
+            finally:
+                fresh.rollback()
+            readers = SqliteHarness(reopened)
+            assert readers.committed_experiments() == experiments
+            assert readers.committed_engine_runs() == runs
+            assert readers.committed_command_invocations() == invocations
+            assert readers.committed_retry_decisions() == ()
+            report = reopened.consistency_report()
+            # The QUEUED parent was inserted by ``add`` (scaffolding, plan 4.6);
+            # every other count is zero and every count was computed read-only.
+            assert report.queued_without_snapshot == 1
+            assert report.dangling_diagnostic_references == 0
+            assert report.slot_identity_mismatches == 0
+            assert report.spec_projection_mismatches == 0
+            assert report.causal_edge_mismatches == 0
+            assert report.unresolved_causal_references == 0
+            assert report.registry_projection_mismatches == 0
+            assert report.foreign_key_violations == 0
+            assert _pool_checked_out(reopened) == 0
+        finally:
+            reopened.close()
+    finally:
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_a_read_only_file_refuses_the_autonomous_recorder_as_write_failed(
+    tmp_path: Path,
+) -> None:
+    """C-18 for the one writer with its own transaction: ``record`` returns the
+    write failure, records nothing and holds no connection afterwards."""
+    clock = FixedClock(INSTANT)
+    database = open_test_database(tmp_path, clock=clock)
+    database.close()
+    path = database.path
+    os.chmod(path, stat.S_IREAD)
+    try:
+        reopened = ok(open_database(path, busy_timeout_ms=100, clock=clock))
+        try:
+            recorder = SqliteDiagnosticRecorder(reopened, clock=clock)
+            refused = recorder.record(sample_diagnostic(OTHER_DIAG_ID))
+            _assert_bounded_refusal(
+                refused,
+                expected_code=WRITE_FAILED,
+                table="diagnostics",
+                operation="record",
+                identity=OTHER_DIAG_ID,
+                sqlite_errorcode=None,
+                sqlite_errorname=None,
+            )
+            assert str(_details(refused)["sqlite_errorname"]).startswith(
+                "SQLITE_READONLY"
+            )
+            assert _pool_checked_out(reopened) == 0
+            fresh = SqliteUnitOfWork(reopened, clock).begin()
+            try:
+                assert code(fresh.diagnostics.get(OTHER_DIAG_ID)) == INVARIANT_VIOLATION
+            finally:
+                fresh.rollback()
+        finally:
+            reopened.close()
+    finally:
+        os.chmod(path, stat.S_IREAD | stat.S_IWRITE)
+
+
+def test_the_scope_gate_refuses_a_retained_repository_after_release(
+    sqlite_database: SqliteDatabase,
+) -> None:
+    """A repository object kept past its transaction's release is a programmer
+    defect at the gate itself (reading 2), not a silent statement in autocommit."""
+    transaction = SqliteUnitOfWork(sqlite_database, FixedClock(INSTANT)).begin()
+    retained = transaction.experiments
+    commit(transaction)
+    with pytest.raises(RuntimeError, match="closed"):
+        retained.get(EXPERIMENT_ID)
+    assert _pool_checked_out(sqlite_database) == 0
+
+
+@pytest.mark.parametrize(
+    ("table", "operation", "identity", "attempt"), _READ_ATTEMPTS, ids=_READ_IDS
+)
+def test_an_injected_read_fault_closes_the_transaction_as_write_failed(
+    sqlite_harness: SqliteHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    table: str,
+    operation: str,
+    identity: str,
+    attempt: Callable[[SqliteTransaction], object],
+) -> None:
+    """The deferred ``except DBAPIError`` handler of every read: an I/O-class code
+    raised at the driver boundary before the statement reaches SQLite is the
+    write failure (plan 6.5 row 5, reading 3), it closes the transaction, and the
+    data is untouched."""
+    _seed_for_writes(sqlite_harness)
+    database = sqlite_harness.database
+    before = sqlite_harness.committed_engine_runs()
+    with _cursor_fault(database, monkeypatch) as fault:
+        transaction = sqlite_harness.unit_of_work().begin()
+        fault.arm(_sqlite_error(_SQLITE_IOERR_READ, "SQLITE_IOERR_READ"))
+        refused = attempt(transaction)
+        # The transaction's BEGIN ran; the very first read was the refused statement.
+        assert len(fault.fired) == 1
+        assert fault.passed == ["BEGIN"]
+        _assert_bounded_refusal(
+            refused,
+            expected_code=WRITE_FAILED,
+            table=table,
+            operation=operation,
+            identity=identity,
+            sqlite_errorcode=_SQLITE_IOERR_READ,
+            sqlite_errorname="SQLITE_IOERR_READ",
+        )
+        _assert_closed_then_released(database, transaction, refused)
+    assert sqlite_harness.committed_engine_runs() == before
+    fresh = sqlite_harness.unit_of_work().begin()
+    try:
+        assert ok(fresh.experiments.get(EXPERIMENT_ID)).revision == 2
+    finally:
+        fresh.rollback()
+
+
+def test_an_injected_disk_full_stages_nothing_wherever_it_strikes(
+    sqlite_harness: SqliteHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``SQLITE_FULL`` at the first statement and at a later statement of the
+    multi-statement writes: the earlier statements are proven to have executed,
+    the savepoint or statement is rolled back, the transaction is closed, and a
+    fresh reader sees nothing of the method."""
+    _seed_for_writes(sqlite_harness)
+    database = sqlite_harness.database
+    other = sample_experiment(_E.DRAFT, experiment_id=f"exp_{_UUID_F}")
+    cases: tuple[_DiskFullCase, ...] = (
+        (
+            "experiments",
+            "add",
+            other.experiment_id,
+            lambda statement: "INSERT INTO experiments" in statement,
+            lambda transaction: transaction.experiments.add(other),
+        ),
+        (
+            "engine_slots",
+            "add",
+            other.experiment_id,
+            lambda statement: "INSERT INTO engine_slots" in statement,
+            lambda transaction: transaction.experiments.add(other),
+        ),
+        (
+            "run_events",
+            "append_event",
+            sample_run_event().event_id,
+            lambda statement: statement.startswith("INSERT"),
+            lambda transaction: transaction.engine_runs.append_event(
+                sample_run_event()
+            ),
+        ),
+        (
+            "retry_decisions",
+            "insert_if_absent",
+            RUN_ID,
+            lambda statement: statement.startswith("INSERT"),
+            lambda transaction: transaction.retry_decisions.insert_if_absent(
+                sample_retry_decision()
+            ),
+        ),
+    )
+    for table, operation, identity, when, attempt in cases:
+        with _cursor_fault(database, monkeypatch) as fault:
+            transaction = sqlite_harness.unit_of_work().begin()
+            fault.arm(_sqlite_error(_SQLITE_FULL, "SQLITE_FULL"), when=when)
+            refused = attempt(transaction)
+            assert len(fault.fired) == 1
+            executed_first = [
+                statement
+                for statement in fault.passed
+                if statement.startswith(("INSERT", "SELECT"))
+            ]
+            if table == "engine_slots":
+                # The experiment row's INSERT ran before the slot INSERT was refused.
+                assert any("INSERT INTO experiments" in s for s in executed_first)
+            elif operation in {"append_event", "insert_if_absent"}:
+                # The method's reads ran; the INSERT after them was refused.
+                assert executed_first
+                assert all(s.startswith("SELECT") for s in executed_first)
+            else:
+                assert executed_first == []
+            _assert_bounded_refusal(
+                refused,
+                expected_code=WRITE_FAILED,
+                table=table,
+                operation=operation,
+                identity=identity,
+                sqlite_errorcode=_SQLITE_FULL,
+                sqlite_errorname="SQLITE_FULL",
+            )
+            _assert_closed_then_released(database, transaction, refused)
+        # Nothing of the method survived: the other experiment and its slots are
+        # absent, the events and decisions tables are still empty.
+        fresh = sqlite_harness.unit_of_work().begin()
+        try:
+            assert code(fresh.experiments.get(other.experiment_id)) == (
+                INVARIANT_VIOLATION
+            )
+            assert ok(fresh.engine_runs.list_events(INVOCATION_ID)) == ()
+            assert code(fresh.retry_decisions.get_by_predecessor(SLOT_A, RUN_ID)) == (
+                INVARIANT_VIOLATION
+            )
+        finally:
+            fresh.rollback()
+        with database.read_only() as reader:
+            slot_rows = reader.execute(
+                text(
+                    "SELECT count(*) FROM engine_slots "
+                    "WHERE experiment_id = :experiment_id"
+                ),
+                {"experiment_id": other.experiment_id},
+            ).scalar_one()
+            assert slot_rows == 0
+
+
+def test_an_unclassified_driver_error_leaves_the_transaction_usable(
+    sqlite_harness: SqliteHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A DBAPI error carrying no result code is ``PERSISTENCE.STORAGE_UNAVAILABLE``
+    with no code details; it is not the I/O class, so the transaction stays
+    usable: the repeated read succeeds and ``commit()`` succeeds."""
+    _seed_for_writes(sqlite_harness)
+    database = sqlite_harness.database
+    with _cursor_fault(database, monkeypatch) as fault:
+        transaction = sqlite_harness.unit_of_work().begin()
+        fault.arm(sqlite3.OperationalError("injected driver fault without a code"))
+        refused = transaction.experiments.get(EXPERIMENT_ID)
+        _assert_bounded_refusal(
+            refused,
+            expected_code=STORAGE_UNAVAILABLE,
+            table="experiments",
+            operation="get",
+            identity=EXPERIMENT_ID,
+            sqlite_errorcode=None,
+            sqlite_errorname=None,
+        )
+        assert "sqlite_errorcode" not in _details(refused)
+        assert transaction.open_failure() is None
+        assert ok(transaction.experiments.get(EXPERIMENT_ID)).revision == 2
+        commit(transaction)
+    assert _pool_checked_out(database) == 0
+
+
+def test_a_failed_begin_leaves_a_closed_transaction_that_rollback_releases(
+    sqlite_database: SqliteDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Plan 4.2 ``begin()``: a ``BEGIN`` the driver refuses leaves the transaction
+    closed with ``PERSISTENCE.STORAGE_UNAVAILABLE`` naming the result code; every
+    member and ``commit()`` answer with it and ``rollback()`` releases the
+    connection that was acquired."""
+    clock = FixedClock(INSTANT)
+    with _cursor_fault(sqlite_database, monkeypatch) as fault:
+        fault.arm(
+            _sqlite_error(_SQLITE_IOERR, "SQLITE_IOERR"),
+            when=lambda statement: statement == "BEGIN",
+        )
+        root = SqliteUnitOfWork(sqlite_database, clock)
+        transaction = root.begin()
+        assert fault.fired == ["BEGIN"]
+        failure = transaction.open_failure()
+        assert failure is not None
+        assert code(failure) == STORAGE_UNAVAILABLE
+        assert _details(failure) == {
+            "operation": "begin",
+            "sqlite_errorcode": _SQLITE_IOERR,
+            "sqlite_errorname": "SQLITE_IOERR",
+        }
+        assert transaction.experiments.get(EXPERIMENT_ID) is failure
+        assert transaction.datasets.get_by_hash("a" * 64) is failure
+        assert root.open_transactions() == (transaction,)
+        assert _pool_checked_out(sqlite_database) == 1
+        transaction.rollback()
+        assert root.open_transactions() == ()
+        assert _pool_checked_out(sqlite_database) == 0
+        with pytest.raises(RuntimeError, match="closed"):
+            transaction.commit()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_code"),
+    [
+        (_sqlite_error(_SQLITE_BUSY, "SQLITE_BUSY"), CONCURRENCY_CONFLICT),
+        (_sqlite_error(_SQLITE_IOERR, "SQLITE_IOERR"), WRITE_FAILED),
+    ],
+    ids=["checkpoint_race", "io_class"],
+)
+def test_a_commit_refused_before_the_dbapi_commit_rolls_back_and_releases(
+    sqlite_harness: SqliteHarness,
+    monkeypatch: pytest.MonkeyPatch,
+    error: sqlite3.OperationalError,
+    expected_code: str,
+) -> None:
+    """Plan 4.2 ``commit()``: the injection replaces the dialect's DBAPI commit, so
+    the real ``COMMIT`` is never issued and the outcome is unambiguous -- nothing
+    committed. A busy code is the conflict, an I/O code the write failure; both
+    roll back first and return the connection."""
+    database = sqlite_harness.database
+    engine = _engine_of(database)
+
+    def failing_commit(dbapi_connection: object) -> None:
+        del dbapi_connection
+        raise error
+
+    monkeypatch.setattr(engine.dialect, "do_commit", failing_commit)
+    transaction = sqlite_harness.unit_of_work().begin()
+    ok(transaction.experiments.add(sample_experiment(_E.DRAFT)))
+    refused = transaction.commit()
+    assert code(refused) == expected_code
+    assert _message(refused) == "the transaction could not be committed"
+    assert _details(refused) == {
+        "operation": "commit",
+        "sqlite_errorcode": error.sqlite_errorcode,
+        "sqlite_errorname": error.sqlite_errorname,
+    }
+    with pytest.raises(RuntimeError, match="closed"):
+        _ = transaction.experiments
+    transaction.rollback()
+    monkeypatch.undo()
+    assert _pool_checked_out(database) == 0
+    assert sqlite_harness.committed_experiments() == ()
+    assert sqlite_harness.open_transactions() == ()
+
+
+def test_a_non_dbapi_error_at_commit_releases_the_connection_before_it_escapes(
+    sqlite_harness: SqliteHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database = sqlite_harness.database
+    engine = _engine_of(database)
+
+    def defective_commit(dbapi_connection: object) -> None:
+        del dbapi_connection
+        raise RuntimeError("injected non-DBAPI defect at commit")
+
+    monkeypatch.setattr(engine.dialect, "do_commit", defective_commit)
+    transaction = sqlite_harness.unit_of_work().begin()
+    ok(transaction.experiments.add(sample_experiment(_E.DRAFT)))
+    with pytest.raises(RuntimeError, match="injected non-DBAPI defect"):
+        transaction.commit()
+    monkeypatch.undo()
+    with pytest.raises(RuntimeError, match="closed"):
+        _ = transaction.experiments
+    assert _pool_checked_out(database) == 0
+    assert sqlite_harness.committed_experiments() == ()
+    assert sqlite_harness.open_transactions() == ()
 
 
 # --------------------------------------------------------------------------

@@ -249,7 +249,12 @@ _VERIFICATION_DESCENDANT_RULE: Final = "\n".join(
 _DESCENDANT_RULE_PHRASE: Final = "not earlier than"
 _DESCENDANT_RULE_RETIRED_PHRASE: Final = "later than its parent"
 _NUMBER_WORDS: Final[Mapping[int, str]] = {10: "ten", 11: "eleven", 12: "twelve"}
-_RETIRED_SUBPROCESS_IMPORTER_PHRASE: Final = "the ten `subprocess` importers"
+#: The guide's earlier counts: "ten" retired with the Stage 7 fake script, "eleven"
+#: with the Stage 8 interrupted-writer test (Stage 8 plan section 2.6, Task 6).
+_RETIRED_SUBPROCESS_IMPORTER_PHRASES: Final[tuple[str, ...]] = (
+    "the ten `subprocess` importers",
+    "the eleven `subprocess` importers",
+)
 #: Stage 9 negatives: the finalization and manifest names that stay deferred through
 #: Stage 8 (Stage 8 plan section 2.6 keeps this half of the retired Stage 8 negative).
 _STAGE8_AND_LATER_NAMES: Final[tuple[str, ...]] = (
@@ -769,9 +774,10 @@ def test_the_guide_names_the_subprocess_importer_count_the_guard_pins(
     repository_root: Path,
 ) -> None:
     guide = _read(repository_root, _VERIFICATION_GUIDE)
-    assert len(_SUBPROCESS_IMPORTERS) == 11
+    assert len(_SUBPROCESS_IMPORTERS) == 12
     assert _subprocess_importer_phrase(len(_SUBPROCESS_IMPORTERS)) in guide
-    assert _RETIRED_SUBPROCESS_IMPORTER_PHRASE not in guide
+    for retired in _RETIRED_SUBPROCESS_IMPORTER_PHRASES:
+        assert retired not in guide
 
 
 def test_no_documentation_surface_claims_a_sandbox(repository_root: Path) -> None:

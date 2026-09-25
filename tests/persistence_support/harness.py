@@ -50,6 +50,21 @@ the doubles' prefixed-UUID4 grammar and single-quotes it, the only way the two
 Task 4 trigger installers can name a row, since SQLite admits no bound parameter
 inside ``CREATE TRIGGER``; and ``CasSubject``/``CAS_SUBJECTS`` carry the three
 compare-and-swap repositories of C-30 through one parametrized case.
+
+Task 6 adds the two units of work of plan 5.2 and 7.1. ``InterleavingUnitOfWork``
+wraps a ``SqliteUnitOfWork``: ``begin()`` counts into ``begins`` and, for each
+attempt number listed in ``on_attempts``, that transaction's first repository read
+runs ``after_read`` once after returning its value -- the read has established the
+transaction's WAL snapshot, so a winner the hook commits on its own connection is
+refused at the loser's first write by the snapshot rule, never by timing (the same
+shape as the doubles' ``MemberOverridingUnitOfWork`` and one-shot hooks; C-5 to C-8,
+C-10 to C-13). ``CountingUnitOfWork`` wraps a unit of work so that ``begin()``
+increments ``open_now`` and ``commit()``/``rollback()`` decrement it exactly once
+per actual release -- an explicit rollback, the driver's ``finally``, an early
+``Failure`` and an escaping exception all release once, a second call releases
+nothing, and a member access counts nothing -- with ``max_open`` and ``reset_max()``
+for Task 7's "no transaction across the child" assertion; it has no notion of a
+child. Neither wrapper opens a connection, sleeps or reads a clock.
 """
 
 from __future__ import annotations
@@ -61,7 +76,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, cast
 
 from sqlalchemy import Select, select
 from sqlalchemy.engine import Connection
@@ -71,6 +86,7 @@ from crypto_lab.adapters.events import (
     RunEvent,
     run_event_content_hash,
 )
+from crypto_lab.adapters.ports import CommandInvocationRepository
 from crypto_lab.adapters.vocabulary import ProtocolEventType
 from crypto_lab.datasets.hashing import dataset_metadata_hash, validate_dataset_identity
 from crypto_lab.datasets.models import (
@@ -96,7 +112,14 @@ from crypto_lab.domain.ports import Clock
 from crypto_lab.domain.records import InstrumentRef, MarketType
 from crypto_lab.domain.results import Failure, Result, Success
 from crypto_lab.domain.retry import RetryDecisionRecord
-from crypto_lab.experiments.ports import UnitOfWork
+from crypto_lab.experiments.ports import (
+    DiagnosticReader,
+    EngineRunRepository,
+    ExperimentRepository,
+    RetryDecisionRepository,
+    RuntimeAvailabilityObservationReader,
+    UnitOfWork,
+)
 from crypto_lab.persistence.codecs import (
     decode_command_invocation,
     decode_engine_run,
@@ -149,6 +172,8 @@ __all__ = [
     "EVENT_ID",
     "OTHER_EVENT_ID",
     "CasSubject",
+    "CountingUnitOfWork",
+    "InterleavingUnitOfWork",
     "SqliteHarness",
     "TransactionSource",
     "accept_any_revision",
@@ -911,3 +936,315 @@ CAS_SUBJECTS: Final[tuple[CasSubject, ...]] = (
         committed=lambda harness: harness.committed_command_invocations(),
     ),
 )
+
+
+# --------------------------------------------------------------------------
+# Task 6 (plan 5.2, 7.1): the interleaving and counting units of work
+# --------------------------------------------------------------------------
+
+#: Plan 5.2: the port methods that read. The first of them on a listed attempt
+#: fires ``after_read`` once, after it returned -- the WAL snapshot now exists.
+_READ_METHODS: Final[frozenset[str]] = frozenset(
+    {
+        "count_attempts",
+        "get",
+        "get_by_attempt_number",
+        "get_by_predecessor",
+        "get_many",
+        "latest_attempt",
+        "list_events",
+        "list_for_adapter",
+        "list_for_run",
+    }
+)
+
+
+class _InterleavingState:
+    """The ``begin()`` count and the hook, shared by a root and its transactions."""
+
+    __slots__ = ("after_read", "begins", "on_attempts")
+
+    def __init__(
+        self, after_read: Callable[[], None], on_attempts: tuple[int, ...]
+    ) -> None:
+        self.after_read = after_read
+        self.on_attempts = on_attempts
+        self.begins = 0
+
+
+class _InterleavedMember:
+    """Delegates every attribute to ``target``; a method call reports its name to
+    ``observe`` after returning its value."""
+
+    def __init__(self, target: object, observe: Callable[[str], None]) -> None:
+        self._target = target
+        self._observe = observe
+
+    def __getattr__(self, name: str) -> Any:
+        attribute = getattr(self._target, name)
+        if not callable(attribute):
+            return attribute
+
+        def call(*args: Any, **kwargs: Any) -> Any:
+            value = attribute(*args, **kwargs)
+            self._observe(name)
+            return value
+
+        return call
+
+
+class _InterleavingTransaction:
+    """One transaction of ``InterleavingUnitOfWork``: the six port members are
+    proxied so the first read of a listed attempt runs the hook exactly once."""
+
+    def __init__(
+        self, inner: SqliteTransaction, state: _InterleavingState, *, armed: bool
+    ) -> None:
+        self._inner = inner
+        self._state = state
+        self._armed = armed
+
+    def _observe(self, method: str) -> None:
+        if self._armed and method in _READ_METHODS:
+            self._armed = False
+            self._state.after_read()
+
+    def begin(self) -> UnitOfWork:
+        """A programmer defect, exactly as on the inner transaction (reading 2)."""
+        return self._inner.begin()
+
+    def commit(self) -> Result[None]:
+        return self._inner.commit()
+
+    def rollback(self) -> None:
+        self._inner.rollback()
+
+    def _member(self, name: str) -> Any:
+        return _InterleavedMember(getattr(self._inner, name), self._observe)
+
+    @property
+    def experiments(self) -> ExperimentRepository:
+        return cast("ExperimentRepository", self._member("experiments"))
+
+    @property
+    def engine_runs(self) -> EngineRunRepository:
+        return cast("EngineRunRepository", self._member("engine_runs"))
+
+    @property
+    def command_invocations(self) -> CommandInvocationRepository:
+        return cast("CommandInvocationRepository", self._member("command_invocations"))
+
+    @property
+    def retry_decisions(self) -> RetryDecisionRepository:
+        return cast("RetryDecisionRepository", self._member("retry_decisions"))
+
+    @property
+    def availability_observations(self) -> RuntimeAvailabilityObservationReader:
+        return cast(
+            "RuntimeAvailabilityObservationReader",
+            self._member("availability_observations"),
+        )
+
+    @property
+    def diagnostics(self) -> DiagnosticReader:
+        return cast("DiagnosticReader", self._member("diagnostics"))
+
+
+class InterleavingUnitOfWork:
+    """Plan 5.2 and 7.1 (Task 6): a root whose transactions run a hook once, after
+    the first repository read of each listed attempt.
+
+    ``begin()`` counts into ``begins`` and returns a transaction over the inner
+    root's; on attempt numbers in ``on_attempts`` (1-based, default the first) the
+    transaction's first read method -- the read that established its WAL snapshot
+    -- runs ``after_read`` once after returning its value. The callable commits the
+    winner on its own connection, so the loser's first write is refused by the
+    snapshot rule (``SQLITE_BUSY_SNAPSHOT``) rather than by timing.
+    ``on_attempts=(1, 2)`` builds the two-interleaving half of C-13. Every other
+    call delegates.
+    """
+
+    def __init__(
+        self,
+        inner: SqliteUnitOfWork,
+        *,
+        after_read: Callable[[], None],
+        on_attempts: tuple[int, ...] = (1,),
+    ) -> None:
+        self._inner = inner
+        self._state = _InterleavingState(after_read, on_attempts)
+
+    @property
+    def begins(self) -> int:
+        """How many transactions ``begin()`` has opened so far."""
+        return self._state.begins
+
+    def begin(self) -> _InterleavingTransaction:
+        self._state.begins += 1
+        attempt = self._state.begins
+        return _InterleavingTransaction(
+            self._inner.begin(), self._state, armed=attempt in self._state.on_attempts
+        )
+
+    def commit(self) -> Result[None]:
+        return self._inner.commit()
+
+    def rollback(self) -> None:
+        self._inner.rollback()
+
+    @property
+    def experiments(self) -> ExperimentRepository:
+        return self._inner.experiments
+
+    @property
+    def engine_runs(self) -> EngineRunRepository:
+        return self._inner.engine_runs
+
+    @property
+    def command_invocations(self) -> CommandInvocationRepository:
+        return self._inner.command_invocations
+
+    @property
+    def retry_decisions(self) -> RetryDecisionRepository:
+        return self._inner.retry_decisions
+
+    @property
+    def availability_observations(self) -> RuntimeAvailabilityObservationReader:
+        return self._inner.availability_observations
+
+    @property
+    def diagnostics(self) -> DiagnosticReader:
+        return self._inner.diagnostics
+
+
+class _CountingState:
+    """The live and maximum transaction counts shared by a root and its wrappers."""
+
+    __slots__ = ("max_open", "open_now")
+
+    def __init__(self) -> None:
+        self.open_now = 0
+        self.max_open = 0
+
+
+class _CountingTransaction:
+    """One transaction of ``CountingUnitOfWork``: released exactly once, whether
+    by ``commit()`` (a ``Result`` or an escaping exception) or by ``rollback()``."""
+
+    def __init__(self, inner: UnitOfWork, state: _CountingState) -> None:
+        self._inner = inner
+        self._state = state
+        self._released = False
+
+    def _release_once(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        self._state.open_now -= 1
+        assert self._state.open_now >= 0, "a transaction was released twice"
+
+    def begin(self) -> UnitOfWork:
+        """A programmer defect, exactly as on the inner transaction (reading 2)."""
+        return self._inner.begin()
+
+    def commit(self) -> Result[None]:
+        try:
+            return self._inner.commit()
+        finally:
+            self._release_once()
+
+    def rollback(self) -> None:
+        try:
+            self._inner.rollback()
+        finally:
+            self._release_once()
+
+    @property
+    def experiments(self) -> ExperimentRepository:
+        return self._inner.experiments
+
+    @property
+    def engine_runs(self) -> EngineRunRepository:
+        return self._inner.engine_runs
+
+    @property
+    def command_invocations(self) -> CommandInvocationRepository:
+        return self._inner.command_invocations
+
+    @property
+    def retry_decisions(self) -> RetryDecisionRepository:
+        return self._inner.retry_decisions
+
+    @property
+    def availability_observations(self) -> RuntimeAvailabilityObservationReader:
+        return self._inner.availability_observations
+
+    @property
+    def diagnostics(self) -> DiagnosticReader:
+        return self._inner.diagnostics
+
+
+class CountingUnitOfWork:
+    """Plan 7.1 (Task 6): a root that counts its live transactions.
+
+    ``begin()`` increments ``open_now`` once the inner ``begin()`` returned -- a
+    transaction the inner root returns closed still holds its connection until it
+    is rolled back, so it counts -- and records the maximum in ``max_open``;
+    ``commit()`` and ``rollback()`` on the returned transaction decrement exactly
+    once per actual release. A member access counts nothing. ``reset_max()`` sets
+    the maximum back to the live count. The wrapper has no notion of a child:
+    Task 7's ``SupervisedSqliteFlow`` samples ``open_now`` from its observer hooks.
+    """
+
+    def __init__(self, inner: UnitOfWork) -> None:
+        self._inner = inner
+        self._state = _CountingState()
+
+    @property
+    def open_now(self) -> int:
+        """Transactions opened through this root and not yet released."""
+        return self._state.open_now
+
+    @property
+    def max_open(self) -> int:
+        """The greatest ``open_now`` since construction or the last ``reset_max()``."""
+        return self._state.max_open
+
+    def reset_max(self) -> None:
+        self._state.max_open = self._state.open_now
+
+    def begin(self) -> _CountingTransaction:
+        transaction = self._inner.begin()
+        self._state.open_now += 1
+        self._state.max_open = max(self._state.max_open, self._state.open_now)
+        return _CountingTransaction(transaction, self._state)
+
+    def commit(self) -> Result[None]:
+        return self._inner.commit()
+
+    def rollback(self) -> None:
+        self._inner.rollback()
+
+    @property
+    def experiments(self) -> ExperimentRepository:
+        return self._inner.experiments
+
+    @property
+    def engine_runs(self) -> EngineRunRepository:
+        return self._inner.engine_runs
+
+    @property
+    def command_invocations(self) -> CommandInvocationRepository:
+        return self._inner.command_invocations
+
+    @property
+    def retry_decisions(self) -> RetryDecisionRepository:
+        return self._inner.retry_decisions
+
+    @property
+    def availability_observations(self) -> RuntimeAvailabilityObservationReader:
+        return self._inner.availability_observations
+
+    @property
+    def diagnostics(self) -> DiagnosticReader:
+        return self._inner.diagnostics

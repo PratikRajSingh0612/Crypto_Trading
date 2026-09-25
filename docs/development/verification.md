@@ -801,9 +801,9 @@ untrusted until reconciled, redacts every raw attempt token before a core record
 exists, and commits no success run state.
 `tests/safety/test_stage6_boundaries.py` enforces the fourteen Stage 6 modules'
 exclusions statically, pins the exact four classes that may carry a raw-token
-field, the eleven `subprocess` importers (the ten of Stage 6 and the Stage 7
-fake script) and the no-shell rule over the whole test tree, and records the
-roadmap's Stage 6 completion.
+field, the twelve `subprocess` importers (the ten of Stage 6, the Stage 7 fake
+script and the persistence interrupted-writer test) and the no-shell rule over
+the whole test tree, and records the roadmap's Stage 6 completion.
 
 Stage 7 launches the same executable fake adapters, and its own Stage 7 fake
 script, through the production `WindowsProcessSupervisor` over the real
