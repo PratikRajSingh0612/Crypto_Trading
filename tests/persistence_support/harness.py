@@ -92,6 +92,7 @@ from typing import Any, Final, Protocol, cast
 import pytest
 from sqlalchemy import Select, select
 from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine.cursor import CursorFetchStrategy
 
 from crypto_lab.adapters.events import (
     HeartbeatPayload,
@@ -186,6 +187,7 @@ __all__ = [
     "CasSubject",
     "CountingUnitOfWork",
     "CursorFault",
+    "FetchFault",
     "InterleavingUnitOfWork",
     "SqliteHarness",
     "TransactionSource",
@@ -198,6 +200,7 @@ __all__ = [
     "commit",
     "cursor_fault",
     "engine_of",
+    "fetch_fault",
     "file_sha256",
     "install_ignoring_update_trigger",
     "install_refusing_edge_trigger",
@@ -1336,6 +1339,102 @@ def cursor_fault(
 ) -> Iterator[CursorFault]:
     """Patch the database engine's ``do_execute`` for the block; undo on exit."""
     fault = CursorFault(engine_of(database), monkeypatch)
+    try:
+        yield fault
+    finally:
+        monkeypatch.undo()
+
+
+class _RaisingCursor:
+    """A DBAPI cursor whose fetch methods raise: handed to SQLAlchemy's fetch
+    strategy in place of the real cursor, so the error is raised INSIDE the block
+    that wraps a genuine fetch error as ``DBAPIError``. ``close`` closes the real
+    cursor; everything else is the real cursor's."""
+
+    def __init__(self, real: Any, error: sqlite3.Error) -> None:
+        self._real = real
+        self._error = error
+
+    def fetchone(self) -> Any:
+        raise self._error
+
+    def fetchmany(self, size: int | None = None) -> Any:
+        raise self._error
+
+    def fetchall(self) -> Any:
+        raise self._error
+
+    def close(self) -> None:
+        self._real.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
+class FetchFault:
+    """A one-shot fault at the result's fetch boundary (correction C).
+
+    The statement has executed at the driver; ``arm`` schedules one error for the
+    first ``fetchone``/``fetchall`` of a result whose statement ``when`` admits, so
+    the failure lands while the rows are materialized (``.first()``, ``.all()``,
+    ``scalar_one_or_none()``) rather than at ``do_execute``. Every fetch that ran
+    instead is recorded in ``passed`` by statement. The patch replaces the class
+    methods of SQLAlchemy's ``CursorFetchStrategy`` through ``monkeypatch`` and is
+    undone when the ``fetch_fault`` context exits. An injected driver fault, never
+    a physical failure.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._pending: sqlite3.Error | None = None
+        self._when: Callable[[str], bool] = lambda statement: True
+        self.passed: list[str] = []
+        self.fired: list[str] = []
+        original_one = CursorFetchStrategy.fetchone
+        original_all = CursorFetchStrategy.fetchall
+
+        def fetchone(
+            strategy: CursorFetchStrategy,
+            result: Any,
+            dbapi_cursor: Any,
+            hard_close: bool = False,
+        ) -> Any:
+            return original_one(
+                strategy, result, self._cursor(result, dbapi_cursor), hard_close
+            )
+
+        def fetchall(
+            strategy: CursorFetchStrategy, result: Any, dbapi_cursor: Any
+        ) -> Any:
+            return original_all(strategy, result, self._cursor(result, dbapi_cursor))
+
+        monkeypatch.setattr(CursorFetchStrategy, "fetchone", fetchone)
+        monkeypatch.setattr(CursorFetchStrategy, "fetchall", fetchall)
+
+    def arm(
+        self, error: sqlite3.Error, *, when: Callable[[str], bool] | None = None
+    ) -> None:
+        self._pending = error
+        self._when = (lambda statement: True) if when is None else when
+
+    @property
+    def armed(self) -> bool:
+        """Is an error still scheduled (it has not fired yet)?"""
+        return self._pending is not None
+
+    def _cursor(self, result: Any, dbapi_cursor: Any) -> Any:
+        statement = str(result.context.statement)
+        if self._pending is not None and self._when(statement):
+            error, self._pending = self._pending, None
+            self.fired.append(statement)
+            return _RaisingCursor(dbapi_cursor, error)
+        self.passed.append(statement)
+        return dbapi_cursor
+
+
+@contextmanager
+def fetch_fault(monkeypatch: pytest.MonkeyPatch) -> Iterator[FetchFault]:
+    """Patch SQLAlchemy's cursor fetch strategy for the block; undo on exit."""
+    fault = FetchFault(monkeypatch)
     try:
         yield fault
     finally:

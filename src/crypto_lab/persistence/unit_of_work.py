@@ -30,17 +30,20 @@ Every member routes its statements through ``TransactionScope.open_statement``,
 so a closed transaction can issue none: the six guarded members below wrap the
 Task 3 classes, which were built over a bare ``Connection``, and the four
 lifecycle repositories carry the same gate inside each method. The five
-persistence-owned members hand every result back through
-``TransactionScope.absorb`` as well, so a ``PERSISTENCE.WRITE_FAILED`` their
-registry classified closes the transaction exactly as a lifecycle repository's
-does (plan 4.2's member rule; the pre-Task-7 correction of the Task 6 finding).
-One member is not re-guarded: ``diagnostics``. A guarded wrapper for it would
-define both ``get`` and ``get_many`` and so become a sixth Stage 5 reader
-implementation, which plan section 2.6 and acceptance criterion 12 pin at five; it
-is read-only, it can publish nothing, and on a transaction that never acquired a
-connection accessing it raises ``RuntimeError`` instead of answering with the
-stored ``Failure``. That is the one documented departure from the section 4.2
-member rule.
+persistence-owned members and the observation reader hand every result back
+through ``TransactionScope.absorb`` as well, so a ``PERSISTENCE.WRITE_FAILED``
+their registry classified -- at a write or, since the read-failure correction, at
+a read -- closes the transaction exactly as a lifecycle repository's does (plan
+4.2's member rule; the two pre-Task-7 corrections of the Task 6 findings). The
+``diagnostics`` member has no wrapper, because one defining both ``get`` and
+``get_many`` would become a sixth Stage 5 reader implementation, which plan
+section 2.6 and acceptance criterion 12 pin at five; instead the
+``SqliteDiagnosticReader`` is bound with the scope as its gate, so it consults
+``open_statement`` before every read and hands a refused read to ``absorb`` like
+every other member. The one remaining departure from the section 4.2 member rule:
+on a transaction whose connection could never be checked out there is no
+connection to bind the reader to, so accessing ``diagnostics`` raises
+``RuntimeError`` instead of answering with the stored ``Failure``.
 
 ``commit()`` publishes every staged write or none. Over SQLite it never reports a
 revision or unique-key loss -- those surface at the write (reading 3) -- so its
@@ -169,7 +172,7 @@ class _GuardedObservationReader:
         if isinstance(opened, Failure):
             return opened
         reader = SqliteAvailabilityObservationReader(opened, clock=self._scope.clock)
-        return reader.get(observation_id)
+        return self._scope.absorb(reader.get(observation_id))
 
     def list_for_adapter(
         self,
@@ -181,7 +184,9 @@ class _GuardedObservationReader:
         if isinstance(opened, Failure):
             return opened
         reader = SqliteAvailabilityObservationReader(opened, clock=self._scope.clock)
-        return reader.list_for_adapter(adapter_name, adapter_version, executable_hash)
+        return self._scope.absorb(
+            reader.list_for_adapter(adapter_name, adapter_version, executable_hash)
+        )
 
 
 class _GuardedConfigurationSnapshots:
@@ -418,18 +423,6 @@ class SqliteTransaction:
         finally:
             self._root.forget(self)
 
-    def _reading_connection(self) -> Connection:
-        """The connection the unguarded diagnostic reader binds to.
-
-        A finished transaction and one closed by a storage failure are both
-        programmer defects here; see the module docstring for why this member
-        alone cannot answer a closed transaction with its stored ``Failure``.
-        """
-        opened = self._scope.open_statement()
-        if isinstance(opened, Failure):
-            raise RuntimeError(_CLOSED)
-        return opened
-
     # -- The six port members ----------------------------------------------
 
     @property
@@ -464,10 +457,19 @@ class SqliteTransaction:
 
     @property
     def diagnostics(self) -> DiagnosticReader:
-        """The diagnostic reader bound to this transaction (reads only)."""
+        """The diagnostic reader bound to this transaction (reads only).
+
+        The reader takes the scope as its gate, so every read consults
+        ``open_statement`` and a refused read reaches ``absorb`` (plan 4.2). A
+        transaction whose connection was never checked out has nothing to bind
+        the reader to and raises instead; see the module docstring.
+        """
         self._require_live()
+        connection = self._connection
+        if connection is None:
+            raise RuntimeError(_CLOSED)
         return SqliteDiagnosticReader(
-            self._reading_connection(), clock=self._scope.clock
+            connection, clock=self._scope.clock, gate=self._scope
         )
 
     # -- The five persistence-owned extras (reading 11) ---------------------

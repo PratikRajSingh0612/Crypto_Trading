@@ -244,11 +244,12 @@ def test_a_transaction_whose_connection_is_unavailable_answers_every_member(
             holder = SqliteUnitOfWork(single, clock).begin()
             refused = SqliteUnitOfWork(single, clock).begin()
             # The one member this transaction cannot answer is the diagnostic
-            # reader: a guarded wrapper would define both `get` and `get_many`
-            # and become a sixth Stage 5 reader implementation, which plan 2.6
-            # and acceptance criterion 12 pin at five. It is read-only. Checked
-            # first, while the transaction is closed but not yet released, so
-            # the refusal is the storage failure and not the release.
+            # reader: with no connection ever checked out there is nothing to
+            # bind it to, and a guarded wrapper would define both `get` and
+            # `get_many` and become a sixth Stage 5 reader implementation, which
+            # plan 2.6 and acceptance criterion 12 pin at five. Checked first,
+            # while the transaction is closed but not yet released, so the
+            # refusal is the storage failure and not the release.
             assert refused.open_failure() is not None
             with pytest.raises(RuntimeError, match="closed"):
                 _ = refused.diagnostics.get(DIAG_ID)

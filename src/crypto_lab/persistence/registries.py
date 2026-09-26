@@ -50,18 +50,28 @@ Eight persistence-owned classes over the Task 2 tables and the Task 3 codecs:
 Except for the recorder, every class is constructed over the caller's
 ``Connection`` and issues Core statements inside the enclosing transaction: it
 never commits, never rolls the transaction back and never opens a session of its
-own. A refused statement is mapped through ``SqliteDatabase.classify`` (plan 6.5)
-into one persistence diagnostic stamped from the injected clock, carrying the
-table, the operation, the identity and the SQLite result code; SQLite aborts the
-statement alone, so the caller's transaction stays usable (reading 3). No
-persistence module reads ``causal_diagnostic_ids`` by attribute: the codec
-serializes it through ``model_dump`` and the recorder's edge statements read the
-stored JSON column.
+own. A refused statement -- a write or a read -- is mapped through
+``SqliteDatabase.classify`` (plan 6.5) into one persistence diagnostic stamped
+from the injected clock, carrying the table, the operation, the identity and the
+SQLite result code; SQLite aborts the statement alone, so the caller's transaction
+stays usable (reading 3) unless the code is of the I/O class, which the enclosing
+transaction's owner treats as closing (plan 4.2). Every read issues its statement
+and materializes its rows inside one ``except DBAPIError``, so a driver error at
+the statement or while the rows are fetched is that read's classified ``Failure``
+-- never an exception, never an empty or partial answer -- while a missing row
+stays the invariant of reading 4 and a stored row the canonical model refuses
+stays its own invariant. The diagnostic reader alone can be bound to the owning
+transaction's gate (``SqliteDiagnosticReader(connection, clock=..., gate=...)``):
+the unit of work has no wrapper for it, because a wrapper defining ``get`` and
+``get_many`` would be a sixth Stage 5 reader implementation. No persistence
+module reads ``causal_diagnostic_ids`` by attribute: the codec serializes it
+through ``model_dump`` and the recorder's edge statements read the stored JSON
+column.
 """
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from pydantic import ValidationError
 from pydantic.experimental.missing_sentinel import MISSING
@@ -248,30 +258,83 @@ def _values(row: RowMapping) -> dict[str, object]:
     return {str(key): value for key, value in row.items()}
 
 
+class _TransactionGate(Protocol):
+    """The two owner hooks a transaction-bound reader needs (plan 4.2).
+
+    ``open_statement`` is the gate to the connection -- a closed transaction
+    answers with its stored ``Failure`` -- and ``absorb`` is the sink that closes
+    the owner on an I/O-class ``Failure``. The unit of work's ``TransactionScope``
+    satisfies it structurally; a reader built over a bare connection has none.
+    """
+
+    def open_statement(self) -> Connection | Failure: ...
+
+    def absorb[T](self, result: Result[T]) -> Result[T]: ...
+
+
 # --------------------------------------------------------------------------
 # Diagnostics: the reader and the recorder (plan 4.4, 3.3.8, 3.3.9)
 # --------------------------------------------------------------------------
 
 
 class SqliteDiagnosticReader:
-    """Primitive diagnostic reads over one transaction's connection (plan 8.2)."""
+    """Primitive diagnostic reads over one transaction's connection (plan 8.2).
 
-    __slots__ = ("_clock", "_connection")
+    Over a bare ``Connection`` it is the plan 4.4 shape. Bound to a transaction
+    through ``gate`` it consults the owner before every read -- a closed
+    transaction answers with its stored ``Failure`` and no SQL -- and hands a
+    refused read to ``absorb``, so an I/O-class read failure closes the owner
+    exactly as any other member's does (plan 4.2).
+    """
 
-    def __init__(self, connection: Connection, *, clock: Clock) -> None:
+    __slots__ = ("_clock", "_connection", "_gate")
+
+    def __init__(
+        self,
+        connection: Connection,
+        *,
+        clock: Clock,
+        gate: _TransactionGate | None = None,
+    ) -> None:
         self._connection = connection
         self._clock = clock
+        self._gate = gate
+
+    def _opened(self) -> Connection | Failure:
+        if self._gate is None:
+            return self._connection
+        return self._gate.open_statement()
+
+    def _refused(self, error: DBAPIError, *, operation: str, identity: str) -> Failure:
+        """The classified ``Failure`` of a refused read, handed to the owner's
+        ``absorb`` when bound (it stores an I/O-class failure and returns it)."""
+        failure = _refused(
+            error,
+            table="diagnostics",
+            operation=operation,
+            identity=identity,
+            clock=self._clock,
+        )
+        if self._gate is not None:
+            self._gate.absorb(failure)
+        return failure
 
     def get(self, diagnostic_id: DiagnosticId) -> Result[Diagnostic]:
-        row = (
-            self._connection.execute(
-                select(DiagnosticRow).where(
-                    DiagnosticRow.diagnostic_id == diagnostic_id
+        opened = self._opened()
+        if isinstance(opened, Failure):
+            return opened
+        try:
+            row = (
+                opened.execute(
+                    select(DiagnosticRow).where(
+                        DiagnosticRow.diagnostic_id == diagnostic_id
+                    )
                 )
+                .mappings()
+                .first()
             )
-            .mappings()
-            .first()
-        )
+        except DBAPIError as error:
+            return self._refused(error, operation="get", identity=diagnostic_id)
         if row is None:
             return _missing(
                 "diagnostic", diagnostic_id, table="diagnostics", clock=self._clock
@@ -281,6 +344,11 @@ class SqliteDiagnosticReader:
     def get_many(
         self, diagnostic_ids: tuple[DiagnosticId, ...]
     ) -> Result[tuple[Diagnostic, ...]]:
+        # The gate first, as every other member: a closed transaction answers with
+        # its stored failure even for an empty or invalid argument.
+        opened = self._opened()
+        if isinstance(opened, Failure):
+            return opened
         if len(set(diagnostic_ids)) != len(diagnostic_ids):
             return _invariant(
                 "diagnostic identifiers must be unique",
@@ -299,15 +367,18 @@ class SqliteDiagnosticReader:
             )
         if not diagnostic_ids:
             return Success[tuple[Diagnostic, ...]](outcome="SUCCESS", value=())
-        rows = (
-            self._connection.execute(
-                select(DiagnosticRow)
-                .where(DiagnosticRow.diagnostic_id.in_(diagnostic_ids))
-                .order_by(DiagnosticRow.diagnostic_id)
+        try:
+            rows = (
+                opened.execute(
+                    select(DiagnosticRow)
+                    .where(DiagnosticRow.diagnostic_id.in_(diagnostic_ids))
+                    .order_by(DiagnosticRow.diagnostic_id)
+                )
+                .mappings()
+                .all()
             )
-            .mappings()
-            .all()
-        )
+        except DBAPIError as error:
+            return self._refused(error, operation="get_many", identity="")
         found = {str(row["diagnostic_id"]) for row in rows}
         missing = sorted(set(diagnostic_ids) - found)
         if missing:
@@ -413,16 +484,25 @@ class SqliteAvailabilityObservationReader:
     def get(
         self, observation_id: AvailabilityObservationId
     ) -> Result[RuntimeAvailabilityObservation]:
-        row = (
-            self._connection.execute(
-                select(RuntimeAvailabilityObservationRow).where(
-                    RuntimeAvailabilityObservationRow.availability_observation_id
-                    == observation_id
+        try:
+            row = (
+                self._connection.execute(
+                    select(RuntimeAvailabilityObservationRow).where(
+                        RuntimeAvailabilityObservationRow.availability_observation_id
+                        == observation_id
+                    )
                 )
+                .mappings()
+                .first()
             )
-            .mappings()
-            .first()
-        )
+        except DBAPIError as error:
+            return _refused(
+                error,
+                table="runtime_availability_observations",
+                operation="get",
+                identity=observation_id,
+                clock=self._clock,
+            )
         if row is None:
             return _missing(
                 "availability observation",
@@ -439,19 +519,28 @@ class SqliteAvailabilityObservationReader:
         executable_hash: Sha256,
     ) -> Result[tuple[RuntimeAvailabilityObservation, ...]]:
         table = RuntimeAvailabilityObservationRow
-        rows = (
-            self._connection.execute(
-                select(table)
-                .where(
-                    table.adapter_name == adapter_name,
-                    table.adapter_version == adapter_version,
-                    table.executable_hash == executable_hash,
+        try:
+            rows = (
+                self._connection.execute(
+                    select(table)
+                    .where(
+                        table.adapter_name == adapter_name,
+                        table.adapter_version == adapter_version,
+                        table.executable_hash == executable_hash,
+                    )
+                    .order_by(table.availability_observation_id)
                 )
-                .order_by(table.availability_observation_id)
+                .mappings()
+                .all()
             )
-            .mappings()
-            .all()
-        )
+        except DBAPIError as error:
+            return _refused(
+                error,
+                table="runtime_availability_observations",
+                operation="list_for_adapter",
+                identity=f"{adapter_name}@{adapter_version}",
+                clock=self._clock,
+            )
         decoded = [decode_observation(_values(row), clock=self._clock) for row in rows]
         failures = [item for item in decoded if isinstance(item, Failure)]
         if failures:
@@ -521,21 +610,36 @@ class SqliteConfigurationSnapshotWriter:
         self._connection = connection
         self._clock = clock
 
-    def _row(self, experiment_id: ExperimentId) -> Any:
-        return (
-            self._connection.execute(
-                select(ExperimentRow.state, *_SNAPSHOT_COLUMNS).where(
-                    ExperimentRow.experiment_id == experiment_id
+    def _row(
+        self, experiment_id: ExperimentId, *, operation: str
+    ) -> RowMapping | Failure | None:
+        """The state and the four snapshot columns of the experiment row; a refused
+        read is the classified ``Failure`` of ``operation``."""
+        try:
+            return (
+                self._connection.execute(
+                    select(ExperimentRow.state, *_SNAPSHOT_COLUMNS).where(
+                        ExperimentRow.experiment_id == experiment_id
+                    )
                 )
+                .mappings()
+                .first()
             )
-            .mappings()
-            .first()
-        )
+        except DBAPIError as error:
+            return _refused(
+                error,
+                table="experiments",
+                operation=operation,
+                identity=experiment_id,
+                clock=self._clock,
+            )
 
     def freeze(
         self, experiment_id: ExperimentId, snapshot: ConfigSnapshot
     ) -> Result[None]:
-        row = self._row(experiment_id)
+        row = self._row(experiment_id, operation="freeze")
+        if isinstance(row, Failure):
+            return row
         if row is None:
             return _missing(
                 "experiment",
@@ -588,7 +692,9 @@ class SqliteConfigurationSnapshotWriter:
         return _none()
 
     def get(self, experiment_id: ExperimentId) -> Result[ConfigSnapshot | MISSING]:  # type: ignore[valid-type]
-        row = self._row(experiment_id)
+        row = self._row(experiment_id, operation="get")
+        if isinstance(row, Failure):
+            return row
         if row is None:
             return _missing(
                 "experiment", experiment_id, table="experiments", clock=self._clock
@@ -641,15 +747,24 @@ class SqliteStrategyVersionRepository:
         self._clock = clock
 
     def get_by_hash(self, content_hash: Sha256) -> Result[StrategyVersion]:
-        row = (
-            self._connection.execute(
-                select(StrategyVersionRow).where(
-                    StrategyVersionRow.content_hash == content_hash
+        try:
+            row = (
+                self._connection.execute(
+                    select(StrategyVersionRow).where(
+                        StrategyVersionRow.content_hash == content_hash
+                    )
                 )
+                .mappings()
+                .first()
             )
-            .mappings()
-            .first()
-        )
+        except DBAPIError as error:
+            return _refused(
+                error,
+                table="strategy_versions",
+                operation="get_by_hash",
+                identity=content_hash,
+                clock=self._clock,
+            )
         if row is None:
             return _missing(
                 "strategy version",
@@ -716,13 +831,22 @@ class SqliteDatasetRepository:
         self._clock = clock
 
     def get_by_hash(self, content_hash: Sha256) -> Result[DatasetDescriptor]:
-        row = (
-            self._connection.execute(
-                select(DatasetRow).where(DatasetRow.content_hash == content_hash)
+        try:
+            row = (
+                self._connection.execute(
+                    select(DatasetRow).where(DatasetRow.content_hash == content_hash)
+                )
+                .mappings()
+                .first()
             )
-            .mappings()
-            .first()
-        )
+        except DBAPIError as error:
+            return _refused(
+                error,
+                table="datasets",
+                operation="get_by_hash",
+                identity=content_hash,
+                clock=self._clock,
+            )
         if row is None:
             return _missing(
                 "dataset", content_hash, table="datasets", clock=self._clock
@@ -732,26 +856,37 @@ class SqliteDatasetRepository:
     def list_partitions(
         self, dataset_id: DatasetId
     ) -> Result[tuple[DatasetPartition, ...]]:
-        known = self._connection.execute(
-            select(DatasetRow.dataset_id).where(DatasetRow.dataset_id == dataset_id)
-        ).scalar_one_or_none()
-        if known is None:
-            return _missing(
-                "dataset",
-                dataset_id,
-                table="datasets",
-                clock=self._clock,
+        table = "datasets"
+        try:
+            known = self._connection.execute(
+                select(DatasetRow.dataset_id).where(DatasetRow.dataset_id == dataset_id)
+            ).scalar_one_or_none()
+            if known is None:
+                return _missing(
+                    "dataset",
+                    dataset_id,
+                    table=table,
+                    clock=self._clock,
+                    operation="list_partitions",
+                )
+            table = "dataset_partitions"
+            rows = (
+                self._connection.execute(
+                    select(DatasetPartitionRow)
+                    .where(DatasetPartitionRow.dataset_id == dataset_id)
+                    .order_by(DatasetPartitionRow.ordinal)
+                )
+                .mappings()
+                .all()
+            )
+        except DBAPIError as error:
+            return _refused(
+                error,
+                table=table,
                 operation="list_partitions",
+                identity=dataset_id,
+                clock=self._clock,
             )
-        rows = (
-            self._connection.execute(
-                select(DatasetPartitionRow)
-                .where(DatasetPartitionRow.dataset_id == dataset_id)
-                .order_by(DatasetPartitionRow.ordinal)
-            )
-            .mappings()
-            .all()
-        )
         decoded = [
             decode_dataset_partition(_values(row), clock=self._clock) for row in rows
         ]
@@ -854,15 +989,24 @@ class SqliteArtifactOwnerRegistry:
         return Success[Sha256](outcome="SUCCESS", value=owner_hash)
 
     def get(self, owner_hash: Sha256) -> Result[ArtifactOwnerRef]:
-        row = (
-            self._connection.execute(
-                select(ArtifactOwnerRow).where(
-                    ArtifactOwnerRow.owner_hash == owner_hash
+        try:
+            row = (
+                self._connection.execute(
+                    select(ArtifactOwnerRow).where(
+                        ArtifactOwnerRow.owner_hash == owner_hash
+                    )
                 )
+                .mappings()
+                .first()
             )
-            .mappings()
-            .first()
-        )
+        except DBAPIError as error:
+            return _refused(
+                error,
+                table="artifact_owners",
+                operation="get",
+                identity=owner_hash,
+                clock=self._clock,
+            )
         if row is None:
             return _missing(
                 "artifact owner", owner_hash, table="artifact_owners", clock=self._clock

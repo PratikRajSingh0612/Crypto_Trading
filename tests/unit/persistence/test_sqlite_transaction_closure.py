@@ -210,6 +210,8 @@ def _assert_closed_and_released_by_commit(
     assert _checked_out(database) == 1
     issued = statements_issued()
     assert transaction.experiments.get(EXPERIMENT_ID) is refused
+    assert transaction.diagnostics.get(DIAG_ID) is refused
+    assert transaction.availability_observations.get(AVAIL_A) is refused
     assert transaction.configuration_snapshots.get(EXPERIMENT_ID) is refused
     assert transaction.strategy_versions.get_by_hash("a" * 64) is refused
     assert transaction.datasets.list_partitions("ds_" + "0" * 36) is refused
