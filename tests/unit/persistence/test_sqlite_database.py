@@ -36,14 +36,13 @@ import stat
 import threading
 import time
 import tomllib
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import Connection
 from sqlalchemy.exc import DBAPIError, IntegrityError, OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.pool import QueuePool
@@ -102,6 +101,8 @@ from persistence_support.harness import (
     bump_run,
     code,
     commit,
+    cursor_fault,
+    engine_of,
     file_sha256,
     ok,
     open_test_database,
@@ -111,6 +112,7 @@ from persistence_support.harness import (
     sample_dataset_with_partitions,
     sample_run_event,
     sample_strategy_version,
+    sqlite_error,
 )
 
 _REPOSITORY = Path(__file__).resolve().parents[3]
@@ -1094,71 +1096,6 @@ def _pool_checked_out(database: SqliteDatabase) -> int:
         return pool.checkedout() - 1
 
 
-def _engine_of(database: SqliteDatabase) -> Engine:
-    with database.connection() as connection:
-        return connection.engine
-
-
-def _sqlite_error(
-    sqlite_errorcode: int, sqlite_errorname: str
-) -> sqlite3.OperationalError:
-    """A DBAPI error carrying one extended result code (plan 2.8 row 4), raised
-    at the driver boundary before the statement reaches SQLite."""
-    error = sqlite3.OperationalError("injected driver fault")
-    error.sqlite_errorcode = sqlite_errorcode
-    error.sqlite_errorname = sqlite_errorname
-    return error
-
-
-class _CursorFault:
-    """A one-shot fault at the dialect's ``do_execute`` boundary: the last SQLAlchemy
-    step before the DBAPI cursor runs a statement, inside the block whose errors
-    the connection wraps as ``DBAPIError`` (the engine's ``before_cursor_execute``
-    event is dispatched outside that block, so an error raised there would escape
-    unwrapped and never reach a repository handler).
-
-    ``arm`` schedules one error for the next statement ``when`` admits; every
-    statement that ran instead is recorded in ``passed`` so a test can prove
-    whether an earlier statement of a multi-statement method had executed. The
-    patch is undone by ``monkeypatch`` when the context exits.
-    """
-
-    def __init__(self, engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
-        self._original = engine.dialect.do_execute
-        self._pending: sqlite3.Error | None = None
-        self._when: Callable[[str], bool] = lambda statement: True
-        self.passed: list[str] = []
-        self.fired: list[str] = []
-        monkeypatch.setattr(engine.dialect, "do_execute", self._execute)
-
-    def arm(
-        self, error: sqlite3.Error, *, when: Callable[[str], bool] | None = None
-    ) -> None:
-        self._pending = error
-        self._when = (lambda statement: True) if when is None else when
-
-    def _execute(
-        self, cursor: Any, statement: str, parameters: Any, context: Any = None
-    ) -> None:
-        if self._pending is not None and self._when(statement):
-            error, self._pending = self._pending, None
-            self.fired.append(statement)
-            raise error
-        self.passed.append(statement)
-        self._original(cursor, statement, parameters, context)
-
-
-@contextmanager
-def _cursor_fault(
-    database: SqliteDatabase, monkeypatch: pytest.MonkeyPatch
-) -> Iterator[_CursorFault]:
-    fault = _CursorFault(_engine_of(database), monkeypatch)
-    try:
-        yield fault
-    finally:
-        monkeypatch.undo()
-
-
 def _message(result: object) -> str:
     assert isinstance(result, Failure), result
     (diagnostic,) = result.diagnostics
@@ -1206,7 +1143,8 @@ def _seed_for_writes(harness: SqliteHarness) -> None:
 def _write_attempts() -> tuple[_WriteAttempt, ...]:
     """Every write method of the transaction, one attempt each, over the seeded
     rows; the four lifecycle repositories carry their exact table and operation,
-    the five persistence-owned members are asserted on code and codes alone."""
+    the five persistence-owned members are asserted on code and codes alone
+    (their details are the registries' own); every one closes the transaction."""
     queued = sample_experiment(_E.QUEUED)
     pending_run = sample_run(_R.PENDING)
     pending_invocation = sample_invocation(_C.PENDING)
@@ -1458,9 +1396,10 @@ def test_a_read_only_database_file_fails_writes_with_write_failed(
 ) -> None:
     """C-18: the file is set read-only after initialization; ``open_database``
     succeeds for reading; every write is ``PERSISTENCE.WRITE_FAILED`` at the write
-    with a ``SQLITE_READONLY*`` code; a lifecycle transaction so refused is closed by
-    the I/O-class rule and released by ``rollback()``; a fresh transaction and a
-    read-only session then read every row."""
+    with a ``SQLITE_READONLY*`` code; every transaction so refused -- through a
+    lifecycle repository or a persistence-owned member -- is closed by the
+    I/O-class rule and released by ``commit()``/``rollback()``; a fresh transaction
+    and a read-only session then read every row."""
     clock = FixedClock(INSTANT)
     database = open_test_database(tmp_path, clock=clock)
     harness = SqliteHarness(database)
@@ -1493,14 +1432,10 @@ def test_a_read_only_database_file_fails_writes_with_write_failed(
                 assert isinstance(errorcode, int)
                 assert errorcode & 0xFF == _SQLITE_READONLY
                 assert str(details["sqlite_errorname"]).startswith("SQLITE_READONLY")
-                if table is not None:
-                    _assert_closed_then_released(reopened, transaction, refused)
-                else:
-                    # The five persistence-owned members return the write failure
-                    # at the call; the transaction is released here (see the
-                    # ledger's recorded gap on the closing rule for these members).
-                    transaction.rollback()
-                    assert _pool_checked_out(reopened) == 0
+                # Plan 4.2's member rule holds for the four lifecycle repositories
+                # and the five persistence-owned members alike (correction A):
+                # the transaction is closed and released by the same mechanism.
+                _assert_closed_then_released(reopened, transaction, refused)
             # Reading is unaffected: a fresh transaction, then a read-only session.
             fresh = SqliteUnitOfWork(reopened, clock).begin()
             try:
@@ -1608,9 +1543,9 @@ def test_an_injected_read_fault_closes_the_transaction_as_write_failed(
     _seed_for_writes(sqlite_harness)
     database = sqlite_harness.database
     before = sqlite_harness.committed_engine_runs()
-    with _cursor_fault(database, monkeypatch) as fault:
+    with cursor_fault(database, monkeypatch) as fault:
         transaction = sqlite_harness.unit_of_work().begin()
-        fault.arm(_sqlite_error(_SQLITE_IOERR_READ, "SQLITE_IOERR_READ"))
+        fault.arm(sqlite_error(_SQLITE_IOERR_READ, "SQLITE_IOERR_READ"))
         refused = attempt(transaction)
         # The transaction's BEGIN ran; the very first read was the refused statement.
         assert len(fault.fired) == 1
@@ -1678,9 +1613,9 @@ def test_an_injected_disk_full_stages_nothing_wherever_it_strikes(
         ),
     )
     for table, operation, identity, when, attempt in cases:
-        with _cursor_fault(database, monkeypatch) as fault:
+        with cursor_fault(database, monkeypatch) as fault:
             transaction = sqlite_harness.unit_of_work().begin()
-            fault.arm(_sqlite_error(_SQLITE_FULL, "SQLITE_FULL"), when=when)
+            fault.arm(sqlite_error(_SQLITE_FULL, "SQLITE_FULL"), when=when)
             refused = attempt(transaction)
             assert len(fault.fired) == 1
             executed_first = [
@@ -1739,7 +1674,7 @@ def test_an_unclassified_driver_error_leaves_the_transaction_usable(
     usable: the repeated read succeeds and ``commit()`` succeeds."""
     _seed_for_writes(sqlite_harness)
     database = sqlite_harness.database
-    with _cursor_fault(database, monkeypatch) as fault:
+    with cursor_fault(database, monkeypatch) as fault:
         transaction = sqlite_harness.unit_of_work().begin()
         fault.arm(sqlite3.OperationalError("injected driver fault without a code"))
         refused = transaction.experiments.get(EXPERIMENT_ID)
@@ -1767,9 +1702,9 @@ def test_a_failed_begin_leaves_a_closed_transaction_that_rollback_releases(
     member and ``commit()`` answer with it and ``rollback()`` releases the
     connection that was acquired."""
     clock = FixedClock(INSTANT)
-    with _cursor_fault(sqlite_database, monkeypatch) as fault:
+    with cursor_fault(sqlite_database, monkeypatch) as fault:
         fault.arm(
-            _sqlite_error(_SQLITE_IOERR, "SQLITE_IOERR"),
+            sqlite_error(_SQLITE_IOERR, "SQLITE_IOERR"),
             when=lambda statement: statement == "BEGIN",
         )
         root = SqliteUnitOfWork(sqlite_database, clock)
@@ -1797,8 +1732,8 @@ def test_a_failed_begin_leaves_a_closed_transaction_that_rollback_releases(
 @pytest.mark.parametrize(
     ("error", "expected_code"),
     [
-        (_sqlite_error(_SQLITE_BUSY, "SQLITE_BUSY"), CONCURRENCY_CONFLICT),
-        (_sqlite_error(_SQLITE_IOERR, "SQLITE_IOERR"), WRITE_FAILED),
+        (sqlite_error(_SQLITE_BUSY, "SQLITE_BUSY"), CONCURRENCY_CONFLICT),
+        (sqlite_error(_SQLITE_IOERR, "SQLITE_IOERR"), WRITE_FAILED),
     ],
     ids=["checkpoint_race", "io_class"],
 )
@@ -1813,7 +1748,7 @@ def test_a_commit_refused_before_the_dbapi_commit_rolls_back_and_releases(
     committed. A busy code is the conflict, an I/O code the write failure; both
     roll back first and return the connection."""
     database = sqlite_harness.database
-    engine = _engine_of(database)
+    engine = engine_of(database)
 
     def failing_commit(dbapi_connection: object) -> None:
         del dbapi_connection
@@ -1843,7 +1778,7 @@ def test_a_non_dbapi_error_at_commit_releases_the_connection_before_it_escapes(
     sqlite_harness: SqliteHarness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     database = sqlite_harness.database
-    engine = _engine_of(database)
+    engine = engine_of(database)
 
     def defective_commit(dbapi_connection: object) -> None:
         del dbapi_connection

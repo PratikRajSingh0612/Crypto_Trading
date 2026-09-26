@@ -65,6 +65,16 @@ per actual release -- an explicit rollback, the driver's ``finally``, an early
 nothing, and a member access counts nothing -- with ``max_open`` and ``reset_max()``
 for Task 7's "no transaction across the child" assertion; it has no notion of a
 child. Neither wrapper opens a connection, sleeps or reads a clock.
+
+The pre-Task-7 correction promotes the driver-fault helpers Task 6 kept
+module-local: ``sqlite_error`` builds a DBAPI error carrying one extended result
+code; ``engine_of`` returns a database's engine through a checked-out connection;
+``CursorFault``/``cursor_fault`` replace the dialect's ``do_execute`` through
+``monkeypatch`` -- the last SQLAlchemy step before the DBAPI cursor, inside the
+block whose errors become ``DBAPIError`` (the ``before_cursor_execute`` event is
+dispatched outside it) -- and raise one armed error in place of the statement
+``when`` admits, recording every statement that ran instead. The patch is undone
+when the context exits. These are injected driver faults, never physical failures.
 """
 
 from __future__ import annotations
@@ -72,14 +82,16 @@ from __future__ import annotations
 import hashlib
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Final, Protocol, cast
 
+import pytest
 from sqlalchemy import Select, select
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Engine
 
 from crypto_lab.adapters.events import (
     HeartbeatPayload,
@@ -173,6 +185,7 @@ __all__ = [
     "OTHER_EVENT_ID",
     "CasSubject",
     "CountingUnitOfWork",
+    "CursorFault",
     "InterleavingUnitOfWork",
     "SqliteHarness",
     "TransactionSource",
@@ -183,6 +196,8 @@ __all__ = [
     "causal_edges",
     "code",
     "commit",
+    "cursor_fault",
+    "engine_of",
     "file_sha256",
     "install_ignoring_update_trigger",
     "install_refusing_edge_trigger",
@@ -199,6 +214,7 @@ __all__ = [
     "sample_run_event",
     "sample_strategy_version",
     "sql_identity_literal",
+    "sqlite_error",
 ]
 
 #: Plan 7.1: the two test-only triggers, fixed DDL text (C-31, C-29 (c)).
@@ -1248,3 +1264,79 @@ class CountingUnitOfWork:
     @property
     def diagnostics(self) -> DiagnosticReader:
         return self._inner.diagnostics
+
+
+# --------------------------------------------------------------------------
+# Pre-Task-7 correction (promoted from Task 6): injected driver faults
+# --------------------------------------------------------------------------
+
+
+def sqlite_error(
+    sqlite_errorcode: int, sqlite_errorname: str
+) -> sqlite3.OperationalError:
+    """A DBAPI error carrying one extended result code (plan 2.8 row 4), to be
+    raised at the driver boundary in place of a statement."""
+    error = sqlite3.OperationalError("injected driver fault")
+    error.sqlite_errorcode = sqlite_errorcode
+    error.sqlite_errorname = sqlite_errorname
+    return error
+
+
+def engine_of(database: SqliteDatabase) -> Engine:
+    """The database's engine, reached through a connection returned at once."""
+    with database.connection() as connection:
+        return connection.engine
+
+
+class CursorFault:
+    """A one-shot fault at the dialect's ``do_execute`` boundary.
+
+    ``arm`` schedules one error for the next statement ``when`` admits; every
+    statement that ran instead is recorded in ``passed`` so a test can prove which
+    statements of a method executed, and whether a later call issued any at all.
+    The dialect method is patched through ``monkeypatch`` and undone when the
+    ``cursor_fault`` context exits. The error is wrapped by SQLAlchemy as the
+    ``DBAPIError`` the production handlers catch (the ``before_cursor_execute``
+    event would not be: it is dispatched outside the wrapping block).
+    """
+
+    def __init__(self, engine: Engine, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._original = engine.dialect.do_execute
+        self._pending: sqlite3.Error | None = None
+        self._when: Callable[[str], bool] = lambda statement: True
+        self.passed: list[str] = []
+        self.fired: list[str] = []
+        monkeypatch.setattr(engine.dialect, "do_execute", self._execute)
+
+    def arm(
+        self, error: sqlite3.Error, *, when: Callable[[str], bool] | None = None
+    ) -> None:
+        self._pending = error
+        self._when = (lambda statement: True) if when is None else when
+
+    @property
+    def armed(self) -> bool:
+        """Is an error still scheduled (it has not fired yet)?"""
+        return self._pending is not None
+
+    def _execute(
+        self, cursor: Any, statement: str, parameters: Any, context: Any = None
+    ) -> None:
+        if self._pending is not None and self._when(statement):
+            error, self._pending = self._pending, None
+            self.fired.append(statement)
+            raise error
+        self.passed.append(statement)
+        self._original(cursor, statement, parameters, context)
+
+
+@contextmanager
+def cursor_fault(
+    database: SqliteDatabase, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[CursorFault]:
+    """Patch the database engine's ``do_execute`` for the block; undo on exit."""
+    fault = CursorFault(engine_of(database), monkeypatch)
+    try:
+        yield fault
+    finally:
+        monkeypatch.undo()

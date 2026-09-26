@@ -29,13 +29,18 @@ error and has its own branch here -- which ``begin()`` returns closed with
 Every member routes its statements through ``TransactionScope.open_statement``,
 so a closed transaction can issue none: the six guarded members below wrap the
 Task 3 classes, which were built over a bare ``Connection``, and the four
-lifecycle repositories carry the same gate inside each method. One member is not
-re-guarded: ``diagnostics``. A guarded wrapper for it would define both ``get``
-and ``get_many`` and so become a sixth Stage 5 reader implementation, which plan
-section 2.6 and acceptance criterion 12 pin at five; it is read-only, it can
-publish nothing, and on a transaction that never acquired a connection accessing
-it raises ``RuntimeError`` instead of answering with the stored ``Failure``. That
-is the one documented departure from the section 4.2 member rule.
+lifecycle repositories carry the same gate inside each method. The five
+persistence-owned members hand every result back through
+``TransactionScope.absorb`` as well, so a ``PERSISTENCE.WRITE_FAILED`` their
+registry classified closes the transaction exactly as a lifecycle repository's
+does (plan 4.2's member rule; the pre-Task-7 correction of the Task 6 finding).
+One member is not re-guarded: ``diagnostics``. A guarded wrapper for it would
+define both ``get`` and ``get_many`` and so become a sixth Stage 5 reader
+implementation, which plan section 2.6 and acceptance criterion 12 pin at five; it
+is read-only, it can publish nothing, and on a transaction that never acquired a
+connection accessing it raises ``RuntimeError`` instead of answering with the
+stored ``Failure``. That is the one documented departure from the section 4.2
+member rule.
 
 ``commit()`` publishes every staged write or none. Over SQLite it never reports a
 revision or unique-key loss -- those surface at the write (reading 3) -- so its
@@ -146,7 +151,7 @@ class _GuardedObservationWriter:
         if isinstance(opened, Failure):
             return opened
         writer = SqliteAvailabilityObservationWriter(opened, clock=self._scope.clock)
-        return writer.add(observation)
+        return self._scope.absorb(writer.add(observation))
 
 
 class _GuardedObservationReader:
@@ -194,14 +199,14 @@ class _GuardedConfigurationSnapshots:
         if isinstance(opened, Failure):
             return opened
         writer = SqliteConfigurationSnapshotWriter(opened, clock=self._scope.clock)
-        return writer.freeze(experiment_id, snapshot)
+        return self._scope.absorb(writer.freeze(experiment_id, snapshot))
 
     def get(self, experiment_id: ExperimentId) -> Result[ConfigSnapshot | MISSING]:  # type: ignore[valid-type]
         opened = self._scope.open_statement()
         if isinstance(opened, Failure):
             return opened
         writer = SqliteConfigurationSnapshotWriter(opened, clock=self._scope.clock)
-        return writer.get(experiment_id)
+        return self._scope.absorb(writer.get(experiment_id))
 
 
 class _GuardedArtifactOwners:
@@ -216,17 +221,15 @@ class _GuardedArtifactOwners:
         opened = self._scope.open_statement()
         if isinstance(opened, Failure):
             return opened
-        return SqliteArtifactOwnerRegistry(opened, clock=self._scope.clock).register(
-            owner
-        )
+        registry = SqliteArtifactOwnerRegistry(opened, clock=self._scope.clock)
+        return self._scope.absorb(registry.register(owner))
 
     def get(self, owner_hash: Sha256) -> Result[ArtifactOwnerRef]:
         opened = self._scope.open_statement()
         if isinstance(opened, Failure):
             return opened
-        return SqliteArtifactOwnerRegistry(opened, clock=self._scope.clock).get(
-            owner_hash
-        )
+        registry = SqliteArtifactOwnerRegistry(opened, clock=self._scope.clock)
+        return self._scope.absorb(registry.get(owner_hash))
 
 
 class _GuardedStrategyVersions:
@@ -242,14 +245,14 @@ class _GuardedStrategyVersions:
         if isinstance(opened, Failure):
             return opened
         repository = SqliteStrategyVersionRepository(opened, clock=self._scope.clock)
-        return repository.get_by_hash(content_hash)
+        return self._scope.absorb(repository.get_by_hash(content_hash))
 
     def register(self, version: StrategyVersion) -> Result[None]:
         opened = self._scope.open_statement()
         if isinstance(opened, Failure):
             return opened
         repository = SqliteStrategyVersionRepository(opened, clock=self._scope.clock)
-        return repository.register(version)
+        return self._scope.absorb(repository.register(version))
 
 
 class _GuardedDatasets:
@@ -264,9 +267,8 @@ class _GuardedDatasets:
         opened = self._scope.open_statement()
         if isinstance(opened, Failure):
             return opened
-        return SqliteDatasetRepository(opened, clock=self._scope.clock).get_by_hash(
-            content_hash
-        )
+        repository = SqliteDatasetRepository(opened, clock=self._scope.clock)
+        return self._scope.absorb(repository.get_by_hash(content_hash))
 
     def list_partitions(
         self, dataset_id: DatasetId
@@ -275,7 +277,7 @@ class _GuardedDatasets:
         if isinstance(opened, Failure):
             return opened
         repository = SqliteDatasetRepository(opened, clock=self._scope.clock)
-        return repository.list_partitions(dataset_id)
+        return self._scope.absorb(repository.list_partitions(dataset_id))
 
     def register(
         self,
@@ -286,7 +288,7 @@ class _GuardedDatasets:
         if isinstance(opened, Failure):
             return opened
         repository = SqliteDatasetRepository(opened, clock=self._scope.clock)
-        return repository.register(descriptor, partitions)
+        return self._scope.absorb(repository.register(descriptor, partitions))
 
 
 class SqliteTransaction:

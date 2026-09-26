@@ -16,7 +16,12 @@ programmer defect, reading 2), returns the stored ``Failure`` on a transaction t
 I/O-class rule closed, and otherwise hands back the connection. The connection is
 reachable no other way, so a closed transaction cannot issue a statement -- which
 matters because SQLite may already have ended the transaction after an I/O error
-and a later statement would otherwise run, and commit, in autocommit mode.
+and a later statement would otherwise run, and commit, in autocommit mode. The
+four repositories here close the transaction through ``refused``; the five
+persistence-owned members the unit of work binds over the Task 3 registries hand
+their results back through ``absorb``, which stores a ``PERSISTENCE.WRITE_FAILED``
+the registry classified exactly as ``refused`` stores one, so plan 4.2's member
+rule holds for every member of the transaction.
 
 Compare-and-swap follows plan 4.3.1 in order and stops at the first refusal:
 (a) pre-read the stored row on this transaction's own connection, which sees its
@@ -251,6 +256,27 @@ class TransactionScope:
         if code in _CLOSING_CODES and self._failure is None:
             self._failure = failure
         return failure
+
+    def absorb[T](self, result: Result[T]) -> Result[T]:
+        """Plan 4.2 for a member built over a bare connection: its own I/O-class
+        ``Failure`` closes the transaction exactly as ``refused`` does.
+
+        The five persistence-owned members (readings 11, 12 and 22) return the
+        ``Failure`` their Task 3 registry classified through ``persistence_failure``
+        without a scope to store it in. This stores the first such
+        ``PERSISTENCE.WRITE_FAILED`` -- the same object the caller receives -- so
+        every later member call and ``commit()`` answer with it and only
+        ``rollback()`` releases the connection. Every other result -- a ``Success``,
+        a conflict, an invariant, an unclassified storage fault -- passes through
+        unchanged and the transaction stays usable.
+        """
+        if (
+            isinstance(result, Failure)
+            and self._failure is None
+            and any(item.error_code in _CLOSING_CODES for item in result.diagnostics)
+        ):
+            self._failure = result
+        return result
 
     def conflict(
         self, message: str, *, table: str, operation: str, identity: str
