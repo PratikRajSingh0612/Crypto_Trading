@@ -58,6 +58,11 @@ from crypto_lab.experiments.requests import (
     InvocationEnrichmentRequest,
     InvocationTransitionRequest,
 )
+from crypto_lab.persistence.diagnostics import (
+    STORAGE_UNAVAILABLE,
+    WRITE_FAILED,
+    persistence_failure,
+)
 from doubles.experiments import (
     ADAPTER_ALPHA,
     ADAPTER_BETA,
@@ -77,6 +82,7 @@ from doubles.experiments import (
     FixedClock,
     InMemoryBackingStore,
     InMemoryUnitOfWork,
+    MemberOverridingUnitOfWork,
     SequentialIdentitySource,
     sample_diagnostic,
     sample_experiment,
@@ -906,6 +912,87 @@ def test_an_unrecognized_exit_is_accepted_when_the_primary_resolves_to_the_code(
     assert exited.completed_at_utc == NOW
     assert exited.revision == stored.revision + 1
     assert harness.invocations() == (exited,)
+
+
+def _planted_reader_failure(code: str) -> Failure:
+    """A correctly formed persistence read ``Failure`` -- built by the factory the
+    SQLite reader uses for a refused ``diagnostics.get`` -- planted through the
+    overriding double. A result-propagation double, not a database failure."""
+    return persistence_failure(
+        code,
+        message="get on diagnostics was refused by the database",
+        clock=FixedClock(INSTANT),
+        details={"table": "diagnostics", "operation": "get", "identity": DIAG_ID},
+    )
+
+
+def _unrecognized_exit_request(revision: int) -> InvocationTransitionRequest:
+    return _transition_request(
+        INVOCATION_ID,
+        revision,
+        _C.EXITED,
+        native_exit_value=3,
+        primary_diagnostic_id=DIAG_ID,
+    )
+
+
+@pytest.mark.parametrize(
+    "code",
+    [WRITE_FAILED, STORAGE_UNAVAILABLE, CONCURRENCY_CONFLICT],
+    ids=["write-failed", "storage-unavailable", "concurrency-conflict"],
+)
+def test_a_non_invariant_primary_read_failure_is_returned_unchanged(
+    harness: _Harness, code: str
+) -> None:
+    """Result propagation (correction D): the primary diagnostic IS recorded, so
+    absence cannot explain the reader's ``Failure``; the operation returns that very
+    object -- code, details and identity intact -- from its one attempt, and
+    nothing is written. A conflict returned by a read is not a lost swap, so the
+    driver does not reload."""
+    stored = sample_invocation(_C.RUNNING, kind=_K.DESCRIBE)
+    harness.seed(invocations=(stored,))
+    harness.store.seed_diagnostic(
+        sample_diagnostic(DIAG_ID, error_code=UNRECOGNIZED_PROCESS_EXIT)
+    )
+    planted = _planted_reader_failure(code)
+    overriding = MemberOverridingUnitOfWork(
+        harness.root(), "diagnostics", {"get": lambda diagnostic_id: planted}
+    )
+    outcome = transition_invocation(
+        _unrecognized_exit_request(stored.revision),
+        unit_of_work=overriding,
+        clock=harness.clock,
+    )
+    assert outcome is planted
+    assert _code(outcome) == code
+    assert overriding.begins == 1
+    assert harness.invocations() == (stored,)
+
+
+def test_an_invariant_primary_read_keeps_the_absence_invariant(
+    harness: _Harness,
+) -> None:
+    """The invariant class keeps the operation's own "does not exist" invariant:
+    the repositories' invariant-coded reads do not distinguish a missing row from a
+    stored row the canonical model refuses (recorded limitation), so this pass
+    preserves the established behaviour for that class."""
+    stored = sample_invocation(_C.RUNNING, kind=_K.DESCRIBE)
+    harness.seed(invocations=(stored,))
+    planted = _planted_reader_failure(INVARIANT_VIOLATION)
+    overriding = MemberOverridingUnitOfWork(
+        harness.root(), "diagnostics", {"get": lambda diagnostic_id: planted}
+    )
+    outcome = transition_invocation(
+        _unrecognized_exit_request(stored.revision),
+        unit_of_work=overriding,
+        clock=harness.clock,
+    )
+    assert isinstance(outcome, Failure)
+    assert outcome is not planted
+    assert _code(outcome) == INVARIANT_VIOLATION
+    assert outcome.diagnostics[0].message.endswith("does not exist")
+    assert overriding.begins == 1
+    assert harness.invocations() == (stored,)
 
 
 def test_a_describe_fails_to_start_without_any_run_linkage(harness: _Harness) -> None:

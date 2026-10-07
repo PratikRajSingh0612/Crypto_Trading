@@ -159,6 +159,21 @@ def _is_missing(value: object) -> bool:
     return value is MISSING
 
 
+def _all_invariant(failure: Failure) -> bool:
+    """Is every diagnostic of ``failure`` the repository's
+    ``CORE.INVARIANT_VIOLATION`` -- a row the reader could not find (reading 4),
+    or a stored row the canonical model refuses, which plan 6.5 codes the same?
+
+    Any other code is a storage answer (a refused or conflicting read) that the
+    operation returns unchanged instead of restating it as absence: the pattern
+    ``retry.py`` established for the same readers.
+    """
+    return all(
+        diagnostic.error_code == INVARIANT_VIOLATION
+        for diagnostic in failure.diagnostics
+    )
+
+
 def _failure(
     code: str,
     message: str,
@@ -625,6 +640,8 @@ def _unrecognized_exit_requires_its_diagnostic(
         )
     diagnostic = transaction.diagnostics.get(request.primary_diagnostic_id)
     if isinstance(diagnostic, Failure):
+        if not _all_invariant(diagnostic):
+            return diagnostic
         return _invariant(
             f"primary diagnostic {request.primary_diagnostic_id} does not exist",
             now=now,
@@ -1094,6 +1111,8 @@ def transition_invocation_and_run(
                 invocation_request.primary_diagnostic_id
             )
             if isinstance(diagnostic, Failure):
+                if not _all_invariant(diagnostic):
+                    return diagnostic
                 return _invariant(
                     f"primary diagnostic {invocation_request.primary_diagnostic_id} "
                     "does not exist",

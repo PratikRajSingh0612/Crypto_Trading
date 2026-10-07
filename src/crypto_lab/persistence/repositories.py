@@ -261,14 +261,22 @@ class TransactionScope:
         """Plan 4.2 for a member built over a bare connection: its own I/O-class
         ``Failure`` closes the transaction exactly as ``refused`` does.
 
-        The five persistence-owned members (readings 11, 12 and 22) return the
-        ``Failure`` their Task 3 registry classified through ``persistence_failure``
-        without a scope to store it in. This stores the first such
+        The transaction-bound members that are not lifecycle repositories -- the
+        five persistence-owned writers and registries (readings 11, 12 and 22),
+        the observation reader's guard and the gate-bound diagnostic reader --
+        return the ``Failure`` their Task 3 class classified through
+        ``persistence_failure`` without a scope to store it in, whether the
+        refused statement was a write or a read. This stores the first such
         ``PERSISTENCE.WRITE_FAILED`` -- the same object the caller receives -- so
-        every later member call and ``commit()`` answer with it and only
-        ``rollback()`` releases the connection. Every other result -- a ``Success``,
-        a conflict, an invariant, an unclassified storage fault -- passes through
-        unchanged and the transaction stays usable.
+        the transaction is *logically failed* at once: every later member call
+        and ``commit()`` answer with it and issue no SQL, and ``commit()``
+        publishes nothing. Nothing is released here: the connection stays checked
+        out and the transaction registered until an owner finalizer --
+        ``commit()``, which returns the stored failure after releasing, or
+        ``rollback()`` -- *physically releases* it (the lazy-release ruling).
+        Every other result -- a ``Success``, a conflict, an invariant, an
+        unclassified storage fault -- passes through unchanged and the
+        transaction stays usable.
         """
         if (
             isinstance(result, Failure)

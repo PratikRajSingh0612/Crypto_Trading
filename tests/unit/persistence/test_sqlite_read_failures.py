@@ -62,9 +62,24 @@ from sqlalchemy.pool import QueuePool
 from crypto_lab.artifacts.ownership import SystemArtifactOwner, artifact_owner_hash
 from crypto_lab.configuration.models import ApplicationConfig
 from crypto_lab.configuration.snapshot import ConfigSnapshot, snapshot_configuration
-from crypto_lab.domain.lifecycle import EngineRunState, ExperimentState
+from crypto_lab.domain.lifecycle import (
+    CommandInvocationState,
+    CommandKind,
+    EngineRunState,
+    ExperimentState,
+)
 from crypto_lab.domain.results import Failure, Success
-from crypto_lab.experiments.requests import RetryEvaluationRequest
+from crypto_lab.experiments.diagnostics import UNRECOGNIZED_PROCESS_EXIT
+from crypto_lab.experiments.invocation_service import (
+    transition_invocation,
+    transition_invocation_and_run,
+)
+from crypto_lab.experiments.requests import (
+    CoupledTransitionRequest,
+    InvocationTransitionRequest,
+    RetryEvaluationRequest,
+    RunTransitionRequest,
+)
 from crypto_lab.experiments.retry import evaluate_retry
 from crypto_lab.persistence.codecs import encode_observation
 from crypto_lab.persistence.database import ConsistencyReport, SqliteDatabase
@@ -91,6 +106,7 @@ from doubles.experiments import (
     EXECUTABLE_HASH,
     EXPERIMENT_ID,
     INSTANT,
+    INVOCATION_ID,
     OTHER_DIAG_ID,
     OTHER_EXPERIMENT_ID,
     RUN_ID,
@@ -98,6 +114,7 @@ from doubles.experiments import (
     FixedClock,
     sample_diagnostic,
     sample_experiment,
+    sample_invocation,
     sample_observation,
     sample_run,
 )
@@ -110,6 +127,7 @@ from persistence_support.harness import (
     fetch_fault,
     ok,
     put_experiment,
+    put_invocation,
     put_lifecycle_parents,
     put_run,
     sample_dataset_with_partitions,
@@ -119,6 +137,10 @@ from persistence_support.harness import (
 
 _E: Final = ExperimentState
 _R: Final = EngineRunState
+_C: Final = CommandInvocationState
+_REASON: Final = "INVOCATION.TRANSITION_REQUESTED"
+#: A native exit value outside ``RECOGNIZED_NATIVE_EXIT_VALUES``.
+_UNRECOGNIZED_EXIT: Final = 3
 _SQLITE_BUSY: Final = 5
 _SQLITE_CORRUPT: Final = 11
 #: ``SQLITE_IOERR | (1 << 8)``: the extended code of a failed page read.
@@ -904,5 +926,139 @@ def test_the_retry_evaluation_returns_the_read_failure_with_its_transaction_rele
     )
     assert isinstance(decided, Success), decided
     assert len(sqlite_harness.committed_retry_decisions()) == 1
+    assert sqlite_harness.open_transactions() == ()
+    assert _checked_out(database) == 0
+
+
+# --------------------------------------------------------------------------
+# The invocation services (correction D): the reader's failure is not absence
+# --------------------------------------------------------------------------
+
+
+def test_the_invocation_transition_returns_the_read_failure_unchanged(
+    sqlite_harness: SqliteHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``transition_invocation`` (plan 6, 10.1 row 10): an ``EXITED`` with an
+    unrecognized native exit reads its primary diagnostic through
+    ``transaction.diagnostics`` inside ``run_operation``. With that read refused by
+    ``SQLITE_IOERR_READ`` the operation returns the reader's classified ``Failure``
+    -- not a minted "does not exist" invariant -- and by the time it returns the
+    driver's ``finally`` has rolled back and released; the invocation row is
+    unchanged. With the fault gone the same request commits the ``EXITED`` row, so
+    the valid setup reaches exactly that read."""
+    database = sqlite_harness.database
+    stored = sample_invocation(_C.RUNNING, kind=CommandKind.DESCRIBE)
+    put_invocation(sqlite_harness, stored)
+    sqlite_harness.seed_diagnostic(
+        sample_diagnostic(DIAG_ID, error_code=UNRECOGNIZED_PROCESS_EXIT)
+    )
+    request = InvocationTransitionRequest(
+        schema_version="1.0.0",
+        invocation_id=INVOCATION_ID,
+        expected_revision=stored.revision,
+        target_state=_C.EXITED,
+        reason_code=_REASON,
+        native_exit_value=_UNRECOGNIZED_EXIT,
+        primary_diagnostic_id=DIAG_ID,
+        diagnostic_ids=(DIAG_ID,),
+    )
+    clock = FixedClock(INSTANT + timedelta(minutes=1))
+    root = sqlite_harness.unit_of_work()
+    counting = CountingUnitOfWork(root)
+    with cursor_fault(database, monkeypatch) as fault:
+        fault.arm(
+            sqlite_error(_SQLITE_IOERR_READ, "SQLITE_IOERR_READ"),
+            when=_from("diagnostics"),
+        )
+        outcome = transition_invocation(request, unit_of_work=counting, clock=clock)
+        assert not fault.armed, fault.passed
+        assert isinstance(outcome, Failure), outcome
+        assert code(outcome) == WRITE_FAILED
+        assert _details(outcome) == _io_read_refusal("diagnostics", "get", DIAG_ID)
+        assert "does not exist" not in _message(outcome)
+        # Observed as the operation returned: one attempt, finalized by the driver.
+        assert (counting.open_now, counting.max_open) == (0, 1)
+        assert root.open_transactions() == ()
+        assert _checked_out(database) == 0
+    assert sqlite_harness.committed_command_invocations() == (stored,)
+    exited = ok(
+        transition_invocation(
+            request, unit_of_work=sqlite_harness.unit_of_work(), clock=clock
+        )
+    )
+    assert exited.state is _C.EXITED
+    assert exited.primary_diagnostic_id == DIAG_ID
+    assert exited.revision == stored.revision + 1
+    assert sqlite_harness.committed_command_invocations() == (exited,)
+    assert sqlite_harness.open_transactions() == ()
+    assert _checked_out(database) == 0
+
+
+def test_the_coupled_transition_returns_the_read_failure_unchanged(
+    sqlite_harness: SqliteHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``transition_invocation_and_run`` (plan 6 coupled terminals, 10.1 row 13): a
+    ``FAILED_TO_START`` reads its primary diagnostic's category through
+    ``transaction.diagnostics`` before the coupled run target is derived. With that
+    read refused the operation returns the reader's ``Failure`` unchanged, neither
+    row moves, and the transaction is released before the return. With the fault
+    gone the same request moves both rows in one commit."""
+    database = sqlite_harness.database
+    put_lifecycle_parents(sqlite_harness, observation=True)
+    run = sample_run(_R.STARTING)
+    invocation = sample_invocation(_C.STARTING)
+    put_run(sqlite_harness, run)
+    put_invocation(sqlite_harness, invocation)
+    sqlite_harness.seed_diagnostic(sample_diagnostic())
+    request = CoupledTransitionRequest(
+        schema_version="1.0.0",
+        invocation=InvocationTransitionRequest(
+            schema_version="1.0.0",
+            invocation_id=INVOCATION_ID,
+            expected_revision=invocation.revision,
+            target_state=_C.FAILED_TO_START,
+            reason_code=_REASON,
+            primary_diagnostic_id=DIAG_ID,
+            diagnostic_ids=(DIAG_ID,),
+        ),
+        run=RunTransitionRequest(
+            schema_version="1.0.0",
+            run_id=RUN_ID,
+            expected_revision=run.revision,
+            target_state=_R.FAILED,
+            reason_code=_REASON,
+            primary_terminal_diagnostic_id=DIAG_ID,
+        ),
+    )
+    clock = FixedClock(INSTANT + timedelta(minutes=1))
+    root = sqlite_harness.unit_of_work()
+    counting = CountingUnitOfWork(root)
+    with cursor_fault(database, monkeypatch) as fault:
+        fault.arm(
+            sqlite_error(_SQLITE_IOERR_READ, "SQLITE_IOERR_READ"),
+            when=_from("diagnostics"),
+        )
+        outcome = transition_invocation_and_run(
+            request, unit_of_work=counting, clock=clock
+        )
+        assert not fault.armed, fault.passed
+        assert isinstance(outcome, Failure), outcome
+        assert code(outcome) == WRITE_FAILED
+        assert _details(outcome) == _io_read_refusal("diagnostics", "get", DIAG_ID)
+        assert "does not exist" not in _message(outcome)
+        assert (counting.open_now, counting.max_open) == (0, 1)
+        assert root.open_transactions() == ()
+        assert _checked_out(database) == 0
+    assert sqlite_harness.committed_command_invocations() == (invocation,)
+    assert sqlite_harness.committed_engine_runs() == (run,)
+    pair = ok(
+        transition_invocation_and_run(
+            request, unit_of_work=sqlite_harness.unit_of_work(), clock=clock
+        )
+    )
+    assert pair.invocation.state is _C.FAILED_TO_START
+    assert pair.run.state is _R.FAILED
+    assert sqlite_harness.committed_command_invocations() == (pair.invocation,)
+    assert sqlite_harness.committed_engine_runs() == (pair.run,)
     assert sqlite_harness.open_transactions() == ()
     assert _checked_out(database) == 0

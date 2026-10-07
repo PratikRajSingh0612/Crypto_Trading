@@ -60,6 +60,11 @@ from crypto_lab.experiments.requests import (
     RunTransitionRequest,
 )
 from crypto_lab.experiments.run_service import transition_run
+from crypto_lab.persistence.diagnostics import (
+    STORAGE_UNAVAILABLE,
+    WRITE_FAILED,
+    persistence_failure,
+)
 from doubles.experiments import (
     ADAPTER_BETA,
     AVAIL_A,
@@ -73,6 +78,7 @@ from doubles.experiments import (
     FixedClock,
     InMemoryBackingStore,
     InMemoryUnitOfWork,
+    MemberOverridingUnitOfWork,
     sample_diagnostic,
     sample_experiment,
     sample_invocation,
@@ -776,6 +782,72 @@ def test_coupled_failed_to_start_requires_the_primary_diagnostic_to_resolve(
     _seed(harness, invocation, run)
     request = _coupled_request(invocation, run, _C.FAILED_TO_START, _R.FAILED)
     assert _code(harness.couple(request)) == INVARIANT_VIOLATION
+    _assert_durable(harness, invocation, run)
+
+
+def _planted_reader_failure(code: str) -> Failure:
+    """A correctly formed persistence read ``Failure`` -- built by the factory the
+    SQLite reader uses for a refused ``diagnostics.get`` -- planted through the
+    overriding double. A result-propagation double, not a database failure."""
+    return persistence_failure(
+        code,
+        message="get on diagnostics was refused by the database",
+        clock=FixedClock(INSTANT),
+        details={"table": "diagnostics", "operation": "get", "identity": DIAG_ID},
+    )
+
+
+@pytest.mark.parametrize(
+    "code",
+    [WRITE_FAILED, STORAGE_UNAVAILABLE, CONCURRENCY_CONFLICT],
+    ids=["write-failed", "storage-unavailable", "concurrency-conflict"],
+)
+def test_coupled_failed_to_start_returns_a_primary_read_failure_unchanged(
+    harness: _Harness, code: str
+) -> None:
+    """Result propagation (correction D): the primary diagnostic IS recorded, so
+    absence cannot explain the reader's ``Failure``; the coupled operation returns
+    that very object from its one attempt and neither row moves."""
+    harness.store.seed_diagnostic(sample_diagnostic(DIAG_ID))
+    invocation = sample_invocation(_C.STARTING)
+    run = sample_run(_R.STARTING)
+    _seed(harness, invocation, run)
+    planted = _planted_reader_failure(code)
+    overriding = MemberOverridingUnitOfWork(
+        harness.root, "diagnostics", {"get": lambda diagnostic_id: planted}
+    )
+    request = _coupled_request(invocation, run, _C.FAILED_TO_START, _R.FAILED)
+    outcome = transition_invocation_and_run(
+        request, unit_of_work=overriding, clock=harness.clock
+    )
+    assert outcome is planted
+    assert _code(outcome) == code
+    assert overriding.begins == 1
+    _assert_durable(harness, invocation, run)
+
+
+def test_coupled_failed_to_start_keeps_absence_for_an_invariant_read(
+    harness: _Harness,
+) -> None:
+    """The invariant class keeps the operation's own "does not exist" invariant:
+    the repositories' invariant-coded reads do not distinguish a missing row from a
+    stored row the canonical model refuses (recorded limitation)."""
+    invocation = sample_invocation(_C.STARTING)
+    run = sample_run(_R.STARTING)
+    _seed(harness, invocation, run)
+    planted = _planted_reader_failure(INVARIANT_VIOLATION)
+    overriding = MemberOverridingUnitOfWork(
+        harness.root, "diagnostics", {"get": lambda diagnostic_id: planted}
+    )
+    request = _coupled_request(invocation, run, _C.FAILED_TO_START, _R.FAILED)
+    outcome = transition_invocation_and_run(
+        request, unit_of_work=overriding, clock=harness.clock
+    )
+    assert isinstance(outcome, Failure)
+    assert outcome is not planted
+    assert _code(outcome) == INVARIANT_VIOLATION
+    assert outcome.diagnostics[0].message.endswith("does not exist")
+    assert overriding.begins == 1
     _assert_durable(harness, invocation, run)
 
 
