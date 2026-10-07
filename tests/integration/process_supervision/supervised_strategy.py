@@ -101,6 +101,7 @@ from crypto_lab.process_supervision.diagnostics import (
 )
 from crypto_lab.process_supervision.models import (
     FORCED_TERMINATION_EXIT_CODE,
+    CleanupAction,
     DescendantIdentity,
     LaunchSpecification,
     ProcessPresence,
@@ -424,6 +425,84 @@ def _starting_origin(invocation: CommandInvocationRecord) -> bool:
     return invocation.process_created is False
 
 
+def _cleaned_pre_handoff_timeout(result: CommandRun, scenario: Scenario) -> bool:
+    """Plan 9.4's STARTING-origin form of a row-26 linked entry, decided by the
+    canonical record alone: a VALIDATE or RUN of row 26 that timed out before the
+    RUNNING handoff carries no committed process-start facts (``process_created``
+    False; the record validator keeps the start instant and identity ``MISSING``
+    with it). A child may well have been launched and terminated; its start was
+    never committed. Never decided by a missing file."""
+    invocation = result.command_result.invocation
+    return (
+        scenario.row == _PROCESS_TIMEOUT_ROW
+        and scenario.command in (_K.VALIDATE, _K.RUN)
+        and invocation.state is _C.TIMED_OUT
+        and _starting_origin(invocation)
+    )
+
+
+def _assert_cleaned_command_root(result: CommandRun, token: str) -> None:
+    """The pre-handoff terminal's evidence (plan 7.5, 8.4): the supervisor removes
+    the command root of an invocation that never reached RUNNING, so the request
+    file is gone by design and cannot be read back. Proves the root is actually
+    absent -- ``lstat`` fails with ``FileNotFoundError``; any other ``OSError``
+    propagates, so "inaccessible" never passes -- while its parent survives; that
+    the retained outcome of this very invocation traces exactly one successful
+    ``COMMAND_ROOT_REMOVED`` cleanup action and no failed one; and that the raw
+    token is absent from every surviving surface (records, diagnostics, events,
+    stderr, the result, the outcome and the reconciliation). Evidence limit: this
+    branch proves cleanup and token absence in what survives; it does not inspect
+    the deleted wire bytes after the run or prove their earlier contents."""
+    root = Path(result.command_root)
+    try:
+        os.lstat(root)
+    except FileNotFoundError:
+        absent = True
+    else:
+        absent = False
+    assert absent, "the command root of a pre-handoff timeout was retained"
+    assert root.parent.is_dir(), "the supervision root above the command root is gone"
+    outcome = result.supervision_outcome
+    assert outcome is not None
+    invocation_id = result.command_result.invocation.invocation_id
+    assert outcome.command_result.invocation.invocation_id == invocation_id
+    removal = CleanupAction.COMMAND_ROOT_REMOVED.value
+    completed = [
+        entry
+        for entry in outcome.trace
+        if entry.kind is _T.CLEANUP_ACTION and entry.facts.get("action") == removal
+    ]
+    failed = [
+        entry
+        for entry in outcome.trace
+        if entry.kind is _T.CLEANUP_FAILED and entry.facts.get("action") == removal
+    ]
+    assert len(completed) == 1, (
+        "exactly one successful COMMAND_ROOT_REMOVED cleanup action is traced"
+    )
+    assert failed == [], "a COMMAND_ROOT_REMOVED cleanup failure is traced"
+    absence: list[object] = list(token_free_projections(result))
+    if result.outcome is not None:
+        absence.append(result.outcome)
+    if result.reconciliation is not None:
+        absence.append(result.reconciliation)
+    assert_token_absent(absence, token)
+
+
+def _assert_wire_material_boundary(
+    result: CommandRun, scenario: Scenario, token: str
+) -> None:
+    """Plan 11.3 item 5 on the production path: the wire-material check for every
+    row, except the pre-handoff form of row 26's two linked entries, whose request
+    file the supervisor removed with the command root (plan 9.4's tolerance). Every
+    other row -- the RUNNING-origin form of row 26 included -- keeps the request-file
+    and wire-material requirements unchanged."""
+    if _cleaned_pre_handoff_timeout(result, scenario):
+        _assert_cleaned_command_root(result, token)
+    else:
+        assert_token_only_in_wire_material(result, token)
+
+
 def _assert_describe(
     harness: OfflineCommandHarness, result: CommandRun, scenario: Scenario
 ) -> None:
@@ -550,7 +629,7 @@ def _assert_validate(
         assert len(result.command_result.accepted_events) == scenario.accepted_events
     token = harness.token_for(run.run_id)
     assert_token_absent(token_free_projections(result), token)
-    assert_token_only_in_wire_material(result, token)
+    _assert_wire_material_boundary(result, scenario, token)
     if scenario.core_won:
         _assert_core_won_common(harness, result, scenario)
         return
@@ -662,7 +741,7 @@ def _assert_core_won_run(
     _assert_core_won_common(harness, result, scenario)
     token = harness.token_for(run.run_id)
     assert_token_absent(token_free_projections(result), token)
-    assert_token_only_in_wire_material(result, token)
+    _assert_wire_material_boundary(result, scenario, token)
 
 
 def _assert_retained_outcome_token_free(

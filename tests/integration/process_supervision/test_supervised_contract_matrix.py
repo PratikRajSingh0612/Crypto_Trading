@@ -18,8 +18,12 @@ here so no scenario row can be added, dropped or renamed silently.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import json
+import os
+import shutil
 from pathlib import Path
+from typing import Final
 
 import pytest
 from pydantic.experimental.missing_sentinel import MISSING
@@ -42,6 +46,7 @@ from supervision_scenarios import (
 from contract.harness import (
     FAKE_ADAPTER_PATH,
     FAKE_ADAPTER_VERSION,
+    REQUEST_FILE_NAME,
     CommandRun,
     OfflineCommandHarness,
     build_harness,
@@ -49,6 +54,7 @@ from contract.harness import (
 from contract.scenarios import (
     DEFAULT_TIMEOUT_SECONDS,
     PLAN_ROW_COUNT,
+    PROCESS_TIMEOUT_SECONDS,
     SCENARIO_ENTRY_COUNT,
     SCENARIOS,
     Scenario,
@@ -66,10 +72,16 @@ from crypto_lab.domain.lifecycle import (
 )
 from crypto_lab.process_supervision.diagnostics import STAGE7_DIAGNOSTIC_CODES
 from crypto_lab.process_supervision.models import (
+    CleanupAction,
     SupervisionTraceKind,
     parse_creation_identity,
 )
-from doubles.supervision import SUPERVISION_FAKE_NAMES, supervised_catalog_entry_for
+from doubles.supervision import (
+    SUPERVISION_FAKE_NAMES,
+    RealtimeMonotonicClock,
+    RecordingObserver,
+    supervised_catalog_entry_for,
+)
 
 _C = CommandInvocationState
 _R = EngineRunState
@@ -400,3 +412,242 @@ def test_scenarios_reach_the_same_content_in_either_order_through_the_supervisor
     finally:
         assert_nothing_launched_survives(forward_strategy)
         assert_nothing_launched_survives(reverse_strategy)
+
+
+# --- Row 26's pre-handoff form and the cleaned command root (plan 9.4, 7.5, 8.4) -----
+
+#: The two 1 s linked entries of row 26 (plan 9.4): the VALIDATE and RUN forms, by
+#: row and command, never by a name substring.
+_ROW26_LINKED: Final = tuple(
+    item
+    for item in SCENARIOS
+    if item.row == 26 and item.command is not CommandKind.DESCRIBE
+)
+_ROW26_RUN: Final = next(
+    item for item in _ROW26_LINKED if item.command is CommandKind.RUN
+)
+#: An unaffected core-won RUN row that reaches RUNNING and keeps its command root.
+_ROW27_RUN: Final = next(
+    item for item in SCENARIOS if item.row == 27 and item.command is CommandKind.RUN
+)
+
+
+def _pre_handoff_strategy() -> ProductionSupervision:
+    """The production strategy whose monotonic reading is pushed past the 1 s budget
+    the moment the STARTING swap commits, so the pre-handoff deadline check that
+    follows the real launch fires deterministically: plan 9.4's STARTING-origin form
+    without loading the host. The child is really launched, terminated and cleaned
+    up by the production supervisor; only the clock reading moves (the doubles'
+    ``advance_monotonic`` seam), and the durable UTC instants stay fixed."""
+    observer = RecordingObserver()
+    strategy = ProductionSupervision(
+        cancellation_grace_seconds=1, observers=(observer,)
+    )
+    clock = strategy.clock
+    assert isinstance(clock, RealtimeMonotonicClock)
+
+    def push_past_the_budget(_entry: object) -> None:
+        clock.advance_monotonic(PROCESS_TIMEOUT_SECONDS + 1)
+
+    observer.on(_T.STARTING_COMMITTED, push_past_the_budget)
+    return strategy
+
+
+def _is_absent(path: Path) -> bool:
+    """Actually absent -- ``lstat`` fails with ``FileNotFoundError`` -- rather than
+    merely inaccessible (any other ``OSError`` propagates)."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return True
+    return False
+
+
+def _root_removal_entries(command_run: CommandRun) -> tuple[SupervisionTraceKind, ...]:
+    """The kinds of every retained cleanup entry naming ``COMMAND_ROOT_REMOVED``."""
+    outcome = command_run.supervision_outcome
+    assert outcome is not None
+    return tuple(
+        entry.kind
+        for entry in outcome.trace
+        if entry.kind in (_T.CLEANUP_ACTION, _T.CLEANUP_FAILED)
+        and entry.facts.get("action") == CleanupAction.COMMAND_ROOT_REMOVED.value
+    )
+
+
+def test_the_row_26_linked_entries_are_exactly_the_validate_and_run_forms() -> None:
+    assert [item.name for item in _ROW26_LINKED] == [
+        "row26-process-timeout-validate",
+        "row26-process-timeout-run",
+    ]
+    assert {item.adapter_name for item in _ROW26_LINKED} == {"fake.process-timeout"}
+    assert {item.timeout_seconds for item in _ROW26_LINKED} == {PROCESS_TIMEOUT_SECONDS}
+    assert all(item.invocation_state is _C.TIMED_OUT for item in _ROW26_LINKED)
+    assert all(item.core_won for item in _ROW26_LINKED)
+    assert _ROW27_RUN.name == "row27-cancellation-run"
+
+
+@pytest.mark.parametrize("entry", _ROW26_LINKED, ids=scenario_ids(_ROW26_LINKED))
+def test_row_26_pre_handoff_timeout_removes_the_root_and_passes_the_expectation(
+    tmp_path: Path, entry: Scenario
+) -> None:
+    """Live production composition in plan 9.4's STARTING-origin form, taken
+    deterministically through the clock seam. The terminal is ``TIMED_OUT`` with no
+    committed process-start facts (a child was launched and terminated; its start
+    was never committed), the coupled run is ``TIMED_OUT``, the supervisor removed
+    the command root and traced exactly one successful ``COMMAND_ROOT_REMOVED``,
+    and ``assert_stage_six_expectation`` accepts the form. Before the correction
+    the helper read ``request.json`` from the removed root and raised
+    ``FileNotFoundError`` -- the manual verifier failure of 2026-09-29."""
+    strategy = _pre_handoff_strategy()
+    try:
+        harness, command_run = _drive(entry, tmp_path, strategy)
+        invocation = command_run.command_result.invocation
+        assert invocation.state is _C.TIMED_OUT
+        assert invocation.process_created is False
+        assert _missing(invocation.pid_identity)
+        assert _missing(invocation.process_started_at_utc)
+        assert harness.stored_run(invocation.run_id).state is _R.TIMED_OUT
+        kinds = trace_kinds(command_run)
+        assert _T.PRE_HANDOFF_DEADLINE in kinds
+        assert _T.RUNNING_COMMITTED not in kinds
+        root = Path(command_run.command_root)
+        assert _is_absent(root)
+        assert root.parent.is_dir()
+        assert _root_removal_entries(command_run) == (_T.CLEANUP_ACTION,)
+        assert_stage_six_expectation(harness, command_run, entry)
+    finally:
+        assert_nothing_launched_survives(strategy)
+
+
+def test_a_retained_root_after_a_pre_handoff_timeout_fails_the_expectation(
+    tmp_path: Path,
+) -> None:
+    """Assertion logic over a fixture derived from one live STARTING-origin run
+    (constructing the mutation executes no supervisor): recreating the removed
+    command root as an empty directory must fail the cleaned-root branch. The
+    branch is selected by the canonical record, so a present root is caught
+    instead of being routed to the wire-material check."""
+    strategy = _pre_handoff_strategy()
+    try:
+        harness, command_run = _drive(_ROW26_RUN, tmp_path, strategy)
+        root = Path(command_run.command_root)
+        assert _is_absent(root)
+        root.mkdir()
+        try:
+            with pytest.raises(AssertionError, match="retained"):
+                assert_stage_six_expectation(harness, command_run, _ROW26_RUN)
+        finally:
+            root.rmdir()
+    finally:
+        assert_nothing_launched_survives(strategy)
+
+
+def test_a_removed_root_without_the_traced_cleanup_fails_the_expectation(
+    tmp_path: Path,
+) -> None:
+    """Assertion logic over a fixture derived from one live STARTING-origin run: the
+    same run with the ``COMMAND_ROOT_REMOVED`` cleanup entry dropped from the
+    retained trace (a synthetic outcome; production did trace it) must fail. The
+    root's absence alone is not evidence of the prescribed cleanup."""
+    strategy = _pre_handoff_strategy()
+    try:
+        harness, command_run = _drive(_ROW26_RUN, tmp_path, strategy)
+        outcome = command_run.supervision_outcome
+        assert outcome is not None
+        removal = CleanupAction.COMMAND_ROOT_REMOVED.value
+        kept = tuple(
+            entry
+            for entry in outcome.trace
+            if not (
+                entry.kind is _T.CLEANUP_ACTION and entry.facts.get("action") == removal
+            )
+        )
+        assert len(kept) == len(outcome.trace) - 1
+        mutated = dataclasses.replace(
+            command_run, supervision_outcome=outcome.model_copy(update={"trace": kept})
+        )
+        with pytest.raises(AssertionError, match="COMMAND_ROOT_REMOVED"):
+            assert_stage_six_expectation(harness, mutated, _ROW26_RUN)
+    finally:
+        assert_nothing_launched_survives(strategy)
+
+
+def test_a_missing_request_file_still_fails_the_running_origin_row_26(
+    tmp_path: Path,
+) -> None:
+    """Preservation control. Row 26 RUN in its ordinary RUNNING-origin form keeps
+    its root and its request file; with the file present the expectation holds,
+    and with the file deleted by hand the wire-material check still requires it.
+    No broad missing-file acceptance. The RUNNING-origin form cannot be forced
+    through a seam -- it needs the real launch to return inside the 1 s budget --
+    so this control is host-load-sensitive by construction: a ``TIMED_OUT`` record
+    failing the precondition below means the host did not reach the handoff in
+    time (the STARTING-origin form the matrix row now tolerates), not a regression
+    of the assertion helper; any other state is a different failure."""
+    strategy = ProductionSupervision(cancellation_grace_seconds=1)
+    try:
+        harness, command_run = _drive(_ROW26_RUN, tmp_path, strategy)
+        invocation = command_run.command_result.invocation
+        assert invocation.state is _C.TIMED_OUT, "precondition: the row timed out"
+        assert invocation.process_created is True, "precondition: RUNNING-origin form"
+        request = Path(command_run.command_root) / REQUEST_FILE_NAME
+        assert request.is_file()
+        assert_stage_six_expectation(harness, command_run, _ROW26_RUN)
+        request.unlink()
+        with pytest.raises(FileNotFoundError):
+            assert_stage_six_expectation(harness, command_run, _ROW26_RUN)
+    finally:
+        assert_nothing_launched_survives(strategy)
+
+
+def test_a_removed_root_of_an_unaffected_row_still_fails_the_expectation(
+    tmp_path: Path,
+) -> None:
+    """Preservation control. Row 27 (cancellation, RUN) reaches RUNNING and keeps
+    its root; with the root removed by hand after the run the wire-material check
+    still fails: the cleaned-root branch is not selected by the very absence it
+    validates, nor by another row's terminal state."""
+    strategy = ProductionSupervision(cancellation_grace_seconds=1)
+    try:
+        harness, command_run = _drive(_ROW27_RUN, tmp_path, strategy)
+        assert command_run.command_result.invocation.process_created is True
+        assert_stage_six_expectation(harness, command_run, _ROW27_RUN)
+        shutil.rmtree(command_run.command_root)
+        assert _is_absent(Path(command_run.command_root))
+        with pytest.raises(FileNotFoundError):
+            assert_stage_six_expectation(harness, command_run, _ROW27_RUN)
+    finally:
+        assert_nothing_launched_survives(strategy)
+
+
+def test_the_raw_token_in_a_surviving_surface_fails_despite_the_cleaned_root(
+    tmp_path: Path,
+) -> None:
+    """Assertion logic over a fixture derived from one live STARTING-origin run: a
+    synthetic diagnostic carrying the raw attempt token, planted into the retained
+    command result, must fail the token-absence walk even though the root was
+    cleaned. The walk that fires is the caller's kept ``assert_token_absent`` over
+    the token-free projections, which precedes the cleaned-root branch; the
+    branch's own mirror of that walk (its extra surfaces, the outcome and the
+    reconciliation, are ``None`` on a core-won row) is therefore not independently
+    covered by this control. Boolean assertion only: the token is never printed."""
+    strategy = _pre_handoff_strategy()
+    try:
+        harness, command_run = _drive(_ROW26_RUN, tmp_path, strategy)
+        invocation = command_run.command_result.invocation
+        token = harness.token_for(invocation.run_id)
+        result = command_run.command_result
+        assert len(result.diagnostics) >= 1
+        first = result.diagnostics[0]
+        leaking = first.model_copy(update={"message": f"leaked {token}"})
+        mutated = dataclasses.replace(
+            command_run,
+            command_result=result.model_copy(
+                update={"diagnostics": (*result.diagnostics, leaking)}
+            ),
+        )
+        with pytest.raises(AssertionError, match="raw attempt token"):
+            assert_stage_six_expectation(harness, mutated, _ROW26_RUN)
+    finally:
+        assert_nothing_launched_survives(strategy)
