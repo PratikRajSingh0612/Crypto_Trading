@@ -75,6 +75,22 @@ block whose errors become ``DBAPIError`` (the ``before_cursor_execute`` event is
 dispatched outside it) -- and raise one armed error in place of the statement
 ``when`` admits, recording every statement that ran instead. The patch is undone
 when the context exits. These are injected driver faults, never physical failures.
+
+Task 7 adds the two-slot composition of plan 7.1.1 and the steps both Task 7
+flows share. ``REASON`` is the reason code every flow-driven transition carries;
+``fresh_read`` opens a fresh root's transaction for one authoritative read and
+rolls it back; ``run_states_of`` reads every stored engine-run state through an
+independent connection; ``queue_through_freeze`` is reading 22 end to end --
+``create_experiment`` from a configuration-backed draft, ``transition_experiment``
+to ``VALIDATED``, the configuration snapshot frozen in its own committed
+transaction, then ``queue_experiment`` with the hash and policy the same
+``ApplicationConfig`` yields -- and ``DurableFlow`` drives the two shared slots
+through the real Stage 5 operations over ``SqliteUnitOfWork`` under
+``CountingUnitOfWork`` to the real ``aggregate_experiment``. The counted
+transaction gains ``sqlite()``, the accessor to the Stage 8 members (writers,
+snapshots, registries, owners) a flow's own writes need, so those writes are
+counted like every operation's. ``DurableFlow`` reaches no in-memory store, unit
+of work or seeding recorder: every read is a fresh SQLite session.
 """
 
 from __future__ import annotations
@@ -85,7 +101,7 @@ import sqlite3
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final, Protocol, cast
 
@@ -94,6 +110,7 @@ from sqlalchemy import Select, select
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.engine.cursor import CursorFetchStrategy
 
+from crypto_lab.adapters.diagnostics import COMPAT_NOT_APPLICABLE
 from crypto_lab.adapters.events import (
     HeartbeatPayload,
     RunEvent,
@@ -101,6 +118,13 @@ from crypto_lab.adapters.events import (
 )
 from crypto_lab.adapters.ports import CommandInvocationRepository
 from crypto_lab.adapters.vocabulary import ProtocolEventType
+from crypto_lab.configuration.models import ApplicationConfig
+from crypto_lab.configuration.retry_policy import retry_policy_from_config
+from crypto_lab.configuration.snapshot import (
+    ConfigSnapshot,
+    material_base_configuration_hash,
+    snapshot_configuration,
+)
 from crypto_lab.datasets.hashing import dataset_metadata_hash, validate_dataset_identity
 from crypto_lab.datasets.models import (
     DatasetDataType,
@@ -109,15 +133,21 @@ from crypto_lab.datasets.models import (
     DatasetValidationStatus,
     RawSourceProvenance,
 )
+from crypto_lab.domain.aggregation import (
+    ExperimentAggregationInput,
+    ExperimentAggregationResult,
+    SlotRetryStatus,
+)
 from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.command_invocation import CommandInvocationRecord
 from crypto_lab.domain.descriptors import RuntimeAvailabilityObservation
-from crypto_lab.domain.diagnostics import Diagnostic
+from crypto_lab.domain.diagnostics import Diagnostic, DiagnosticCategory
 from crypto_lab.domain.engine_run import EngineRunRecord
-from crypto_lab.domain.experiment import ExperimentRecord
+from crypto_lab.domain.experiment import ExperimentRecord, ExperimentSpecDraft
 from crypto_lab.domain.hashing import attempt_token_hash, sha256_bytes
 from crypto_lab.domain.lifecycle import (
     CommandInvocationState,
+    CommandKind,
     EngineRunState,
     ExperimentState,
 )
@@ -125,6 +155,21 @@ from crypto_lab.domain.ports import Clock
 from crypto_lab.domain.records import InstrumentRef, MarketType
 from crypto_lab.domain.results import Failure, Result, Success
 from crypto_lab.domain.retry import RetryDecisionRecord
+from crypto_lab.experiments.aggregation import (
+    aggregate_experiment,
+    build_aggregation_input,
+)
+from crypto_lab.experiments.experiment_service import (
+    create_experiment,
+    queue_experiment,
+    transition_experiment,
+)
+from crypto_lab.experiments.invocation_service import (
+    begin_linked_launch,
+    create_invocation,
+    start_linked_run,
+    transition_invocation,
+)
 from crypto_lab.experiments.ports import (
     DiagnosticReader,
     EngineRunRepository,
@@ -133,13 +178,29 @@ from crypto_lab.experiments.ports import (
     RuntimeAvailabilityObservationReader,
     UnitOfWork,
 )
+from crypto_lab.experiments.requests import (
+    AttemptCreationRequest,
+    ExperimentAggregationRequest,
+    ExperimentCreationRequest,
+    ExperimentQueueRequest,
+    ExperimentTransitionRequest,
+    InvocationCreationRequest,
+    InvocationTransitionRequest,
+    LinkedLaunchRequest,
+    LinkedStartRequest,
+    RetryEvaluationRequest,
+    RunTransitionRequest,
+    SuccessorCreationRequest,
+)
+from crypto_lab.experiments.retry import create_successor, evaluate_retry
+from crypto_lab.experiments.run_service import create_attempt, transition_run
 from crypto_lab.persistence.codecs import (
     decode_command_invocation,
     decode_engine_run,
     decode_experiment,
     decode_retry_decision,
 )
-from crypto_lab.persistence.database import SqliteDatabase
+from crypto_lab.persistence.database import ConsistencyReport, SqliteDatabase
 from crypto_lab.persistence.migration_runner import (
     RevisionState,
     apply_migrations,
@@ -166,27 +227,41 @@ from crypto_lab.strategy.versioning import (
 from doubles.experiments import (
     ATTEMPT_TOKEN,
     AVAIL_A,
+    DIAG_ID,
     EXPERIMENT_ID,
     INSTANT,
     INVOCATION_ID,
+    OTHER_DIAG_ID,
+    OTHER_REQUEST_HASH,
+    REQUEST_HASH,
     RUN_ID,
+    SLOT_A,
+    SLOT_B,
+    THIRD_DIAG_ID,
     UUID_A,
     UUID_B,
     UUID_E,
     FixedClock,
+    SequentialIdentitySource,
+    sample_diagnostic,
     sample_experiment,
     sample_invocation,
     sample_observation,
+    sample_process_start,
     sample_run,
+    sample_slot_compatibility,
 )
+from persistence_support.fixtures import config_backed_draft
 
 __all__ = [
     "CAS_SUBJECTS",
     "EVENT_ID",
     "OTHER_EVENT_ID",
+    "REASON",
     "CasSubject",
     "CountingUnitOfWork",
     "CursorFault",
+    "DurableFlow",
     "FetchFault",
     "InterleavingUnitOfWork",
     "SqliteHarness",
@@ -202,6 +277,7 @@ __all__ = [
     "engine_of",
     "fetch_fault",
     "file_sha256",
+    "fresh_read",
     "install_ignoring_update_trigger",
     "install_refusing_edge_trigger",
     "install_refusing_partition_trigger",
@@ -212,7 +288,9 @@ __all__ = [
     "put_invocation",
     "put_lifecycle_parents",
     "put_run",
+    "queue_through_freeze",
     "raw_connection",
+    "run_states_of",
     "sample_dataset_with_partitions",
     "sample_run_event",
     "sample_strategy_version",
@@ -1166,6 +1244,19 @@ class _CountingTransaction:
         """A programmer defect, exactly as on the inner transaction (reading 2)."""
         return self._inner.begin()
 
+    def sqlite(self) -> SqliteTransaction:
+        """The Stage 8 members of this counted transaction (Task 7).
+
+        The observation writer, the snapshot writer, the registries and the
+        owner registry are ``SqliteTransaction`` members outside the port; a
+        flow's own writes reach them here so they are counted like every
+        operation's, and release through this wrapper's ``commit``/``rollback``.
+        """
+        inner = self._inner
+        if not isinstance(inner, SqliteTransaction):
+            raise TypeError("the counted transaction is not a SQLite transaction")
+        return inner
+
     def commit(self) -> Result[None]:
         try:
             return self._inner.commit()
@@ -1439,3 +1530,597 @@ def fetch_fault(monkeypatch: pytest.MonkeyPatch) -> Iterator[FetchFault]:
         yield fault
     finally:
         monkeypatch.undo()
+
+
+# --------------------------------------------------------------------------
+# Task 7 (plan 7.1.1, 7.1.2): the shared flow steps and the two-slot flow
+# --------------------------------------------------------------------------
+
+#: The reason code every flow-driven transition carries (the Stage 5 flow's).
+REASON: Final = "FLOW.STEP"
+#: The Stage 5 flow's command timeouts for the durable flow's injected invocations.
+_VALIDATE_TIMEOUT: Final = 600
+_RUN_TIMEOUT: Final = 3600
+_RUN_STATES_SQL: Final = "SELECT state FROM engine_runs"
+#: Plan Task 7: the doubles' three diagnostic identities, assigned per attempt --
+#: slot A's first attempt, slot B's attempt, slot A's successor -- never by call
+#: order, so no identity carries another run's correlation facts.
+_DIAGNOSTIC_ID_OF_ATTEMPT: Final[dict[tuple[str, int], str]] = {
+    (SLOT_A, 1): DIAG_ID,
+    (SLOT_B, 1): OTHER_DIAG_ID,
+    (SLOT_A, 2): THIRD_DIAG_ID,
+}
+
+
+def fresh_read[T](
+    database: SqliteDatabase, clock: Clock, read: Callable[[SqliteTransaction], T]
+) -> T:
+    """One authoritative read (plan 7.1.2): a fresh root's transaction, opened
+    after the writer's operation returned and rolled back afterwards, so no
+    writer's session and no cached record can stand in for durable evidence."""
+    transaction = SqliteUnitOfWork(database, clock).begin()
+    try:
+        return read(transaction)
+    finally:
+        transaction.rollback()
+
+
+def run_states_of(database: SqliteDatabase) -> frozenset[EngineRunState]:
+    """Every stored engine-run state, read through an independent connection."""
+    return frozenset(
+        EngineRunState(str(row[0])) for row in _execute_raw(database, _RUN_STATES_SQL)
+    )
+
+
+def queue_through_freeze(
+    unit_of_work: CountingUnitOfWork,
+    *,
+    clock: Clock,
+    identity: SequentialIdentitySource,
+    draft: ExperimentSpecDraft,
+    config: ApplicationConfig,
+) -> ExperimentRecord:
+    """Reading 22 end to end: the only path to ``QUEUED`` (plan Task 7).
+
+    ``create_experiment`` receives ``draft`` and
+    ``material_base_configuration_hash(config)`` (``DRAFT`` at revision 0);
+    ``transition_experiment`` moves it to ``VALIDATED``
+    (1); the flow freezes ``snapshot_configuration(config)`` in its own committed
+    transaction; ``queue_experiment`` then carries the same hash and
+    ``retry_policy_from_config(config.scheduler.retry)`` -- exactly the values the
+    frozen snapshot yields -- with ``sample_slot_compatibility(draft)``, and the
+    kernel plus plan 4.3.1 step d' prove the two equalities (``QUEUED`` at 2).
+    """
+    created = ok(
+        create_experiment(
+            ExperimentCreationRequest(
+                schema_version="1.0.0",
+                spec_draft=draft,
+                material_base_configuration_hash=material_base_configuration_hash(
+                    config
+                ),
+            ),
+            unit_of_work=unit_of_work,
+            clock=clock,
+            identity_source=identity,
+        )
+    )
+    validated = ok(
+        transition_experiment(
+            ExperimentTransitionRequest(
+                schema_version="1.0.0",
+                experiment_id=created.experiment_id,
+                expected_revision=created.revision,
+                target_state=_E.VALIDATED,
+                reason_code=REASON,
+            ),
+            unit_of_work=unit_of_work,
+            clock=clock,
+        )
+    )
+    transaction = unit_of_work.begin()
+    try:
+        ok(
+            transaction.sqlite().configuration_snapshots.freeze(
+                validated.experiment_id, snapshot_configuration(config)
+            )
+        )
+        commit(transaction)
+    finally:
+        transaction.rollback()
+    queued = ok(
+        queue_experiment(
+            ExperimentQueueRequest(
+                schema_version="1.0.0",
+                experiment_id=validated.experiment_id,
+                expected_revision=validated.revision,
+                config_derived_retry_policy=retry_policy_from_config(
+                    config.scheduler.retry
+                ),
+                material_base_configuration_hash=material_base_configuration_hash(
+                    config
+                ),
+                slot_compatibility=sample_slot_compatibility(draft),
+            ),
+            unit_of_work=unit_of_work,
+            clock=clock,
+        )
+    )
+    assert (queued.state, queued.revision) == (_E.QUEUED, 2)
+    return queued
+
+
+class DurableFlow:
+    """Plan 7.1.1 and Task 7: the two-slot application flow over SQLite.
+
+    Every step is a committed Stage 5 operation over ``SqliteUnitOfWork`` under
+    ``CountingUnitOfWork``; the flow itself writes only the registry records, the
+    configuration snapshot, the observation rows the ``READY`` edge references
+    and -- through ``SqliteDiagnosticRecorder`` -- the diagnostics the run edges
+    cite, each in its own transaction. Every reader is a fresh session
+    (``fresh_read``) or the independent connection (``run_states_of``); no
+    in-memory store, unit of work or seeding recorder exists here. The clock is
+    ``FixedClock(INSTANT)`` and advances only through ``advance_clock_to``.
+    """
+
+    def __init__(
+        self, database: SqliteDatabase, config: ApplicationConfig, *, clock: FixedClock
+    ) -> None:
+        self.database = database
+        self.config = config
+        self.clock = clock
+        self._identity = SequentialIdentitySource("stage8-durable")
+        self._root = SqliteUnitOfWork(database, clock)
+        self.counting = CountingUnitOfWork(self._root)
+        self._recorder = SqliteDiagnosticRecorder(database, clock=clock)
+        self._experiment_id: str | None = None
+        self._observations: set[str] = set()
+
+    @classmethod
+    def open(cls, tmp_path: Path, *, config: ApplicationConfig) -> DurableFlow:
+        """Migrate ``tmp_path / "db"`` and compose the flow over it."""
+        clock = FixedClock(INSTANT)
+        directory = tmp_path / "db"
+        directory.mkdir(exist_ok=True)
+        return cls(open_test_database(directory, clock=clock), config, clock=clock)
+
+    def close(self) -> None:
+        """Roll back anything left open, fail on it, then dispose the engine."""
+        try:
+            leaked = self._root.open_transactions()
+            for transaction in leaked:
+                transaction.rollback()
+            assert not leaked, "a flow-owned transaction leaked past its finalizer"
+        finally:
+            self.database.close()
+
+    # -- bookkeeping ----------------------------------------------------------
+
+    @property
+    def experiment_id(self) -> str:
+        assert self._experiment_id is not None, "no experiment has been created"
+        return self._experiment_id
+
+    @property
+    def max_open(self) -> int:
+        """The greatest number of counted transactions ever open at once."""
+        return self.counting.max_open
+
+    @property
+    def open_now(self) -> int:
+        return self.counting.open_now
+
+    def _fresh[T](self, read: Callable[[SqliteTransaction], T]) -> T:
+        return fresh_read(self.database, self.clock, read)
+
+    def advance_clock_to(self, instant: datetime) -> None:
+        """Move the fixed clock forward to ``instant`` (never backwards)."""
+        self.clock.advance((instant - self.clock.now_utc()).total_seconds())
+
+    # -- registries, experiment, attempts ------------------------------------
+
+    def register_strategy_and_dataset(self) -> None:
+        """Register the two fixture records in one committed transaction and
+        prove the ``get_by_hash`` round trips in fresh sessions (plan 3.3.1: the
+        spec keeps the fixture hash constants; no foreign key)."""
+        version = sample_strategy_version()
+        descriptor, partitions = sample_dataset_with_partitions()
+        transaction = self.counting.begin()
+        try:
+            members = transaction.sqlite()
+            ok(members.strategy_versions.register(version))
+            ok(members.datasets.register(descriptor, partitions))
+            commit(transaction)
+        finally:
+            transaction.rollback()
+        stored_version = self._fresh(
+            lambda opened: ok(
+                opened.strategy_versions.get_by_hash(version.content_hash)
+            )
+        )
+        assert stored_version == version
+        stored_descriptor = self._fresh(
+            lambda opened: ok(opened.datasets.get_by_hash(descriptor.content_hash))
+        )
+        assert stored_descriptor == descriptor
+
+    def create_validate_and_queue_experiment(self) -> ExperimentRecord:
+        """Reading 22 through ``queue_through_freeze`` with the configuration-backed
+        draft of the shared alpha/beta slots; ``QUEUED`` at revision 2."""
+        queued = queue_through_freeze(
+            self.counting,
+            clock=self.clock,
+            identity=self._identity,
+            draft=config_backed_draft(self.config),
+            config=self.config,
+        )
+        self._experiment_id = queued.experiment_id
+        return queued
+
+    def frozen_snapshot(self) -> ConfigSnapshot:
+        """The stored configuration snapshot, read back through a fresh session."""
+        snapshot = self._fresh(
+            lambda opened: ok(opened.configuration_snapshots.get(self.experiment_id))
+        )
+        assert isinstance(snapshot, ConfigSnapshot), "no snapshot is frozen"
+        return snapshot
+
+    def experiment(self) -> ExperimentRecord:
+        return self._fresh(
+            lambda opened: ok(opened.experiments.get(self.experiment_id))
+        )
+
+    def create_attempts_for_every_slot(self) -> None:
+        """``create_attempt`` for ``SLOT_A`` then ``SLOT_B``: the experiment goes
+        ``RUNNING`` at 3 and 4; run edges never bump it afterwards."""
+        for slot in (SLOT_A, SLOT_B):
+            experiment = self.experiment()
+            creation = ok(
+                create_attempt(
+                    AttemptCreationRequest(
+                        schema_version="1.0.0",
+                        experiment_id=experiment.experiment_id,
+                        logical_slot_id=slot,
+                        expected_experiment_revision=experiment.revision,
+                        request_hash=REQUEST_HASH,
+                    ),
+                    unit_of_work=self.counting,
+                    clock=self.clock,
+                    identity_source=self._identity,
+                )
+            )
+            assert (creation.attempt.state, creation.attempt.attempt_number) == (
+                _R.PENDING,
+                1,
+            )
+        experiment = self.experiment()
+        assert (experiment.state, experiment.revision) == (_E.RUNNING, 4)
+
+    def attempt_count(self, slot: str) -> int:
+        return self._fresh(
+            lambda opened: ok(
+                opened.engine_runs.count_attempts(self.experiment_id, slot)
+            )
+        )
+
+    def run_states(self) -> frozenset[EngineRunState]:
+        return run_states_of(self.database)
+
+    def consistency_report(self) -> ConsistencyReport:
+        return self.database.consistency_report()
+
+    # -- the run and invocation edges ----------------------------------------
+
+    def _run(self, run_id: str) -> EngineRunRecord:
+        return self._fresh(lambda opened: ok(opened.engine_runs.get(run_id)))
+
+    def _first_attempt(self, slot: str) -> EngineRunRecord:
+        run = self._fresh(
+            lambda opened: ok(
+                opened.engine_runs.get_by_attempt_number(self.experiment_id, slot, 1)
+            )
+        )
+        assert isinstance(run, EngineRunRecord), "the slot has no first attempt"
+        return run
+
+    def _move_run(
+        self,
+        run: EngineRunRecord,
+        target: EngineRunState,
+        *,
+        primary_terminal_diagnostic_id: str | None = None,
+        availability_observation_id: str | None = None,
+    ) -> EngineRunRecord:
+        payload: dict[str, object] = {
+            "schema_version": "1.0.0",
+            "run_id": run.run_id,
+            "expected_revision": run.revision,
+            "target_state": target,
+            "reason_code": REASON,
+        }
+        if primary_terminal_diagnostic_id is not None:
+            payload["primary_terminal_diagnostic_id"] = primary_terminal_diagnostic_id
+        if availability_observation_id is not None:
+            payload["availability_observation_id"] = availability_observation_id
+        return ok(
+            transition_run(
+                RunTransitionRequest.model_validate(payload),
+                unit_of_work=self.counting,
+                clock=self.clock,
+            )
+        )
+
+    def _invocation(
+        self, run: EngineRunRecord, kind: CommandKind, *, timeout_seconds: int
+    ) -> CommandInvocationRecord:
+        return ok(
+            create_invocation(
+                InvocationCreationRequest(
+                    schema_version="1.0.0",
+                    command_kind=kind,
+                    adapter_name=run.adapter.adapter_name,
+                    adapter_version=run.adapter.adapter_version,
+                    run_id=run.run_id,
+                    expected_run_revision=run.revision,
+                    request_hash=run.request_hash,
+                    timeout_seconds=timeout_seconds,
+                ),
+                unit_of_work=self.counting,
+                clock=self.clock,
+                identity_source=self._identity,
+            )
+        )
+
+    def _move_invocation(
+        self,
+        invocation: CommandInvocationRecord,
+        target: CommandInvocationState,
+        *,
+        with_process_start: bool = False,
+        native_exit_value: int | None = None,
+    ) -> CommandInvocationRecord:
+        payload: dict[str, object] = {
+            "schema_version": "1.0.0",
+            "invocation_id": invocation.invocation_id,
+            "expected_revision": invocation.revision,
+            "target_state": target,
+            "reason_code": REASON,
+            "diagnostic_ids": (),
+        }
+        if with_process_start:
+            payload["process_start"] = sample_process_start(
+                process_started_at_utc=self.clock.now_utc()
+            )
+        if native_exit_value is not None:
+            payload["native_exit_value"] = native_exit_value
+        return ok(
+            transition_invocation(
+                InvocationTransitionRequest.model_validate(payload),
+                unit_of_work=self.counting,
+                clock=self.clock,
+            )
+        )
+
+    def _validate(
+        self, run: EngineRunRecord, *, native_exit_value: int
+    ) -> tuple[CommandInvocationRecord, EngineRunRecord]:
+        """``PENDING -> VALIDATING``, then the ``VALIDATE`` invocation ``PENDING ->
+        STARTING -> RUNNING -> EXITED`` with the run untouched."""
+        validating = self._move_run(run, _R.VALIDATING)
+        invocation = self._invocation(
+            validating, CommandKind.VALIDATE, timeout_seconds=_VALIDATE_TIMEOUT
+        )
+        starting = self._move_invocation(invocation, _C.STARTING)
+        running = self._move_invocation(starting, _C.RUNNING, with_process_start=True)
+        exited = self._move_invocation(
+            running, _C.EXITED, native_exit_value=native_exit_value
+        )
+        stored = self._run(run.run_id)
+        assert (stored.state, stored.revision) == (_R.VALIDATING, validating.revision)
+        return exited, stored
+
+    def _diagnostic_id_for(self, run: EngineRunRecord) -> str:
+        return _DIAGNOSTIC_ID_OF_ATTEMPT[(run.logical_slot_id, run.attempt_number)]
+
+    def _frozen_observation_id(self, slot: str) -> str:
+        entries = self.experiment().slot_compatibility
+        assert isinstance(entries, tuple), "the experiment is not frozen"
+        for entry in entries:
+            if entry.logical_slot_id == slot:
+                return str(entry.availability_observation_id)
+        raise AssertionError(f"no frozen compatibility for slot {slot}")
+
+    def _ensure_observation(self, run: EngineRunRecord) -> str:
+        """Persist the slot's frozen observation row once, through the writer, in
+        its own committed transaction; the ``READY`` edge references it."""
+        observation_id = self._frozen_observation_id(run.logical_slot_id)
+        if observation_id not in self._observations:
+            observation = sample_observation(
+                observation_id,
+                adapter_name=run.adapter.adapter_name,
+                adapter_version=run.adapter.adapter_version,
+            )
+            transaction = self.counting.begin()
+            try:
+                ok(
+                    transaction.sqlite().availability_observation_writer.add(
+                        observation
+                    )
+                )
+                commit(transaction)
+            finally:
+                transaction.rollback()
+            stored = self._fresh(
+                lambda opened: ok(opened.availability_observations.get(observation_id))
+            )
+            assert stored == observation
+            self._observations.add(observation_id)
+        return observation_id
+
+    def drive_first_attempt_to_not_applicable(self, slot: str) -> EngineRunRecord:
+        """Plan Task 7 step 4: the ``VALIDATE`` invocation exits 20, the recorder
+        records the ``COMPATIBILITY`` primary, and ``VALIDATING -> NOT_APPLICABLE``;
+        the run never reaches ``READY``, so no observation is referenced."""
+        run = self._first_attempt(slot)
+        exited, validating = self._validate(run, native_exit_value=20)
+        diagnostic = sample_diagnostic(
+            self._diagnostic_id_for(run),
+            error_code=COMPAT_NOT_APPLICABLE,
+            category=DiagnosticCategory.COMPATIBILITY,
+            retriable=False,
+            experiment_id=self.experiment_id,
+            run_id=run.run_id,
+            invocation_id=exited.invocation_id,
+        )
+        ok(self._recorder.record(diagnostic))
+        self._move_run(
+            validating,
+            _R.NOT_APPLICABLE,
+            primary_terminal_diagnostic_id=diagnostic.diagnostic_id,
+        )
+        return self._run(run.run_id)
+
+    def drive_first_attempt_to_failed(self, slot: str) -> EngineRunRecord:
+        return self.drive_run_to_failed(self._first_attempt(slot))
+
+    def drive_run_to_failed(self, run: EngineRunRecord) -> EngineRunRecord:
+        """Plan Task 7 steps 5 and 8: the observation persisted, ``VALIDATING``
+        (its ``VALIDATE`` exits 0) ``-> READY``, the ``RUN`` invocation launched and
+        started through the linked operations, ``EXITED`` (40), the retriable
+        primary recorded, then ``RUNNING -> FAILED``."""
+        assert run.state is _R.PENDING, run.state
+        observation_id = self._ensure_observation(run)
+        _exited_validate, validating = self._validate(run, native_exit_value=0)
+        ready = self._move_run(
+            validating, _R.READY, availability_observation_id=observation_id
+        )
+        invocation = self._invocation(
+            ready, CommandKind.RUN, timeout_seconds=_RUN_TIMEOUT
+        )
+        launched = ok(
+            begin_linked_launch(
+                LinkedLaunchRequest(
+                    schema_version="1.0.0",
+                    invocation_id=invocation.invocation_id,
+                    expected_invocation_revision=invocation.revision,
+                    run_id=ready.run_id,
+                    expected_run_revision=ready.revision,
+                ),
+                unit_of_work=self.counting,
+                clock=self.clock,
+            )
+        )
+        started = ok(
+            start_linked_run(
+                LinkedStartRequest(
+                    schema_version="1.0.0",
+                    invocation_id=launched.invocation.invocation_id,
+                    expected_invocation_revision=launched.invocation.revision,
+                    run_id=launched.run.run_id,
+                    expected_run_revision=launched.run.revision,
+                    process_start=sample_process_start(
+                        process_started_at_utc=self.clock.now_utc()
+                    ),
+                ),
+                unit_of_work=self.counting,
+                clock=self.clock,
+            )
+        )
+        assert (started.invocation.state, started.run.state) == (_C.RUNNING, _R.RUNNING)
+        exited = self._move_invocation(
+            started.invocation, _C.EXITED, native_exit_value=40
+        )
+        diagnostic = sample_diagnostic(
+            self._diagnostic_id_for(run),
+            experiment_id=self.experiment_id,
+            run_id=run.run_id,
+            invocation_id=exited.invocation_id,
+            retriable=True,
+        )
+        ok(self._recorder.record(diagnostic))
+        self._move_run(
+            started.run,
+            _R.FAILED,
+            primary_terminal_diagnostic_id=diagnostic.diagnostic_id,
+        )
+        return self._run(run.run_id)
+
+    # -- retry, successor and aggregation ------------------------------------
+
+    def evaluate_retry(self, run: EngineRunRecord) -> RetryDecisionRecord:
+        """The real ``evaluate_retry`` keyed on ``(run.logical_slot_id, run.run_id)``
+        at the current experiment and run revisions."""
+        experiment = self.experiment()
+        return ok(
+            evaluate_retry(
+                RetryEvaluationRequest(
+                    schema_version="1.0.0",
+                    experiment_id=experiment.experiment_id,
+                    logical_slot_id=run.logical_slot_id,
+                    predecessor_run_id=run.run_id,
+                    expected_experiment_revision=experiment.revision,
+                    expected_predecessor_revision=run.revision,
+                ),
+                unit_of_work=self.counting,
+                clock=self.clock,
+            )
+        )
+
+    def create_successor(self, run: EngineRunRecord) -> Result[EngineRunRecord]:
+        """The real ``create_successor`` at the current experiment revision with
+        ``OTHER_REQUEST_HASH``; a refusal is returned as the operation's ``Failure``."""
+        experiment = self.experiment()
+        created = create_successor(
+            SuccessorCreationRequest(
+                schema_version="1.0.0",
+                experiment_id=experiment.experiment_id,
+                logical_slot_id=run.logical_slot_id,
+                predecessor_run_id=run.run_id,
+                expected_experiment_revision=experiment.revision,
+                request_hash=OTHER_REQUEST_HASH,
+            ),
+            unit_of_work=self.counting,
+            clock=self.clock,
+            identity_source=self._identity,
+        )
+        if isinstance(created, Failure):
+            return created
+        return Success[EngineRunRecord](outcome="SUCCESS", value=created.value.attempt)
+
+    def retry_decision(self, run: EngineRunRecord) -> RetryDecisionRecord:
+        """The stored decision for ``run`` as predecessor, read in a fresh session."""
+        return self._fresh(
+            lambda opened: ok(
+                opened.retry_decisions.get_by_predecessor(
+                    run.logical_slot_id, run.run_id
+                )
+            )
+        )
+
+    def slot_retry_statuses(self) -> dict[str, SlotRetryStatus]:
+        """Plan 9.2's authoritative read set through ``build_aggregation_input``."""
+
+        def read(opened: SqliteTransaction) -> dict[str, SlotRetryStatus]:
+            experiment = ok(opened.experiments.get(self.experiment_id))
+            built = build_aggregation_input(
+                opened, experiment, now=self.clock.now_utc()
+            )
+            assert isinstance(built, ExperimentAggregationInput), built
+            return {slot.logical_slot_id: slot.retry_status for slot in built.slots}
+
+        return self._fresh(read)
+
+    def aggregate(self) -> ExperimentAggregationResult:
+        """The real ``aggregate_experiment`` at the current revision."""
+        experiment = self.experiment()
+        return ok(
+            aggregate_experiment(
+                ExperimentAggregationRequest(
+                    schema_version="1.0.0",
+                    experiment_id=experiment.experiment_id,
+                    expected_revision=experiment.revision,
+                ),
+                unit_of_work=self.counting,
+                clock=self.clock,
+            )
+        )
