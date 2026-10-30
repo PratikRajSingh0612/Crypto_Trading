@@ -226,12 +226,16 @@ _STAGE7_ROADMAP_ROW: Final = (
     "guard and this status were added by the separate Task 9 commit, which is not the "
     "implementation hash; verified offline on the complete verifier; GitNexus remains "
     "`DISABLED_WITH_EVIDENCE` with the manual source, reference, and diff fallback "
-    "recorded; Stage 8 not started |"
+    # Stage 8 plan section 2.6: the one clause of this row Task 8 changes.
+    "recorded; Stage 8 complete |"
 )
 _STAGE7_DEFERRED_ROW: Final = (
     "| 7 — Windows Process Supervision | Intentionally deferred until Stage 6 "
     "completion | Not started | Not evaluated |"
 )
+#: The roadmap's deferred Stage 8 row: a positive pin while Stage 8 was not started,
+#: a negative since Stage 8 Task 8 replaced it with the completion row the Stage 8
+#: guard pins (Stage 8 plan section 2.6).
 _STAGE8_ROADMAP_ROW: Final = (
     "| 8 — SQLite Persistence and Migrations | Intentionally deferred until Stages 3, "
     "5, and 7 completion | Not started | Not evaluated |"
@@ -731,31 +735,40 @@ def test_the_stage_seven_fake_has_exactly_its_reviewed_shape(
 # --------------------------------------------------------------------------
 
 
-def test_the_roadmap_records_stage_seven_complete_and_stage_eight_not_started(
+def test_the_roadmap_records_stage_seven_complete_and_stage_eight_complete(
     repository_root: Path,
 ) -> None:
+    """Stage 8 plan section 2.6 (Task 8): the Stage 7 row's last clause reads
+    "Stage 8 complete", the deferred Stage 8 row is gone, the Stage 7 hash stays
+    once in the roadmap and has left README and the guide (whose Stage 7 status
+    blocks were replaced by the Stage 8 blocks), and the five Stage 8 negatives of
+    the Stage 7 form are inverted where the new prose uses them."""
     roadmap = _read(repository_root, _ROADMAP)
     readme = _read(repository_root, _README)
     guide = _read(repository_root, _VERIFICATION_GUIDE)
     assert _STAGE7_ROADMAP_ROW in roadmap
     assert _STAGE7_DEFERRED_ROW not in roadmap
-    assert _STAGE8_ROADMAP_ROW in roadmap
+    assert _STAGE8_ROADMAP_ROW not in roadmap
     assert f"**Approved detailed implementation plan:** `{STAGE7_PLAN}`." in roadmap
     assert f"**Planned detailed implementation plan:** `{STAGE7_PLAN}`." not in roadmap
     assert "Stage 7 not started" not in roadmap
     assert "Stage 7 has not started" not in readme
     assert "Stage 7 is not started" not in guide
-    # The implementation hash is the Task 8 commit, written exactly once per surface.
+    assert "Stage 8 not started" not in roadmap
+    assert "Stage 8 has not started" not in readme
+    assert "Stage 8 is not started" not in guide
+    # The Stage 7 implementation hash stays in the roadmap's history row alone.
     assert roadmap.count(STAGE7_IMPLEMENTATION_COMMIT) == 1
-    assert readme.count(STAGE7_IMPLEMENTATION_COMMIT) == 1
-    assert guide.count(STAGE7_IMPLEMENTATION_COMMIT) == 1
-    # No surface may claim Stage 8 progress or a Stage 8 completion.
+    assert readme.count(STAGE7_IMPLEMENTATION_COMMIT) == 0
+    assert guide.count(STAGE7_IMPLEMENTATION_COMMIT) == 0
+    # The inverted negatives: every surface now records the Stage 8 completion.
+    assert "Stage 8 complete" in roadmap
+    assert "Stage 8 is complete" in readme
+    assert "Stage 8 is complete" in guide
+    assert "Stages 1-8" in readme
+    assert "Stages 1 through 8" in roadmap
     for text in (roadmap, readme, guide):
-        assert "Stage 8 complete" not in text
-        assert "Stage 8 is complete" not in text
-        assert "Stage 8 has started" not in text
-    assert "Stages 1-8" not in readme
-    assert "Stages 1 through 8" not in roadmap
+        assert "Stage 9 has started" not in text
 
 
 def test_the_guide_states_the_committed_descendant_creation_time_rule(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import subprocess
 import sys
@@ -128,6 +129,7 @@ import builtins
 import http.client
 import importlib
 import os
+import platform
 import socket
 import subprocess
 import sys
@@ -135,6 +137,16 @@ import urllib.request
 import winreg
 from pathlib import Path
 from typing import NoReturn
+
+# Stage 8 Task 8 (the Task 3 handoff): on Windows, CPython's ``platform.uname()``
+# tries a WMI query first and, when that times out under host load, falls back
+# to running the ``ver`` command through ``subprocess``; SQLAlchemy calls
+# ``platform.machine()`` while it is imported. The uname result is cached, so
+# completing that standard-library bootstrap here -- before any sentinel exists
+# and before any project module is imported -- makes the library's later call a
+# cache read, while a process launch attempted by any imported module still
+# meets the raising stand-in installed below.
+platform.uname()
 
 
 def _unexpected_operation(*args: object, **kwargs: object) -> NoReturn:
@@ -261,6 +273,115 @@ def test_all_planned_modules_import_fresh_without_observable_side_effects(
     assert completed.stdout == f"{_IMPORT_SENTINEL}\n"
     assert completed.stderr == ""
     assert tuple(tmp_path.iterdir()) == paths_before
+
+
+#: The probe's sentinel factories: every assignment of one of these names installs a
+#: forbidden-side-effect sentinel.
+_SENTINEL_FACTORIES = frozenset(
+    {"_unexpected_operation", "_UnexpectedPopen", "_no_entry_points"}
+)
+_PLATFORM_BOOTSTRAP = "platform.uname()"
+_FORBIDDEN_SIDE_EFFECT = "package import attempted a forbidden side effect"
+
+
+def _is_sentinel_assignment(statement: ast.stmt) -> bool:
+    return (
+        isinstance(statement, ast.Assign)
+        and isinstance(statement.value, ast.Name)
+        and statement.value.id in _SENTINEL_FACTORIES
+    )
+
+
+def test_the_probe_completes_the_platform_bootstrap_before_its_sentinels() -> None:
+    """Stage 8 Task 8 (the Task 3 handoff): CPython's Windows ``platform.uname()``
+    falls back to a ``ver`` child process when its WMI query times out under host
+    load, and SQLAlchemy calls ``platform.machine()`` at import, so the probe
+    completes that standard-library bootstrap once -- its result is cached -- before
+    any sentinel is installed and before any project module is imported. The
+    sentinels still guard every later import: the planted control below proves it.
+    """
+    body = ast.parse(_IMPORT_PROBE).body
+    bootstraps = [
+        index
+        for index, statement in enumerate(body)
+        if isinstance(statement, ast.Expr)
+        and isinstance(statement.value, ast.Call)
+        and ast.unparse(statement.value) == _PLATFORM_BOOTSTRAP
+    ]
+    sentinels = [
+        index
+        for index, statement in enumerate(body)
+        if _is_sentinel_assignment(statement)
+    ]
+    imports_platform = [
+        index
+        for index, statement in enumerate(body)
+        if isinstance(statement, ast.Import)
+        and any(alias.name == "platform" for alias in statement.names)
+    ]
+    assert len(bootstraps) == 1
+    assert sentinels
+    assert imports_platform
+    assert imports_platform[0] < bootstraps[0] < min(sentinels)
+    # Nothing project-side precedes the sentinels: no ``crypto_lab`` import and no
+    # ``import_module`` call before the first sentinel; the imports come last.
+    before_sentinels = body[: min(sentinels)]
+    for statement in before_sentinels:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Import | ast.ImportFrom):
+                names = [alias.name for alias in node.names]
+                module = getattr(node, "module", None) or ""
+                assert "crypto_lab" not in module
+                assert not any(name.startswith("crypto_lab") for name in names)
+            if isinstance(node, ast.Call):
+                assert ast.unparse(node.func) != "importlib.import_module"
+    import_calls = [
+        index
+        for index, statement in enumerate(body)
+        if any(
+            isinstance(node, ast.Call)
+            and ast.unparse(node.func) == "importlib.import_module"
+            for node in ast.walk(statement)
+        )
+    ]
+    assert import_calls
+    assert min(import_calls) > max(sentinels)
+
+
+def test_a_planted_import_time_process_launch_still_fails_the_probe(
+    tmp_path: Path,
+) -> None:
+    """The control for the bootstrap: a module that launches a process while it is
+    imported still meets the raising stand-in after ``platform.uname()`` ran, and a
+    clean module imports through the same patched probe."""
+    (tmp_path / "planted_side_effect.py").write_text(
+        "import subprocess\nsubprocess.Popen(['cmd'])\n", encoding="utf-8"
+    )
+    (tmp_path / "planted_clean.py").write_text("VALUE = 1\n", encoding="utf-8")
+    anchor = "module_names = tuple(sys.argv[2:])"
+    assert _IMPORT_PROBE.count(anchor) == 1
+    probe = _IMPORT_PROBE.replace(
+        anchor, f"sys.path.insert(0, {str(tmp_path)!r})\n{anchor}", 1
+    )
+
+    def run(module_name: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(  # noqa: S603 - fixed isolated Python command.
+            [sys.executable, "-I", "-B", "-c", probe, _IMPORT_SENTINEL, module_name],
+            cwd=tmp_path,
+            check=False,
+            capture_output=True,
+            shell=False,
+            text=True,
+            timeout=30,
+        )
+
+    failed = run("planted_side_effect")
+    assert failed.returncode != 0
+    assert _FORBIDDEN_SIDE_EFFECT in failed.stderr
+    assert failed.stdout == ""
+    clean = run("planted_clean")
+    assert clean.returncode == 0, clean.stderr
+    assert clean.stdout == f"{_IMPORT_SENTINEL}\n"
 
 
 def test_distribution_metadata_reports_initial_version() -> None:

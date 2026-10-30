@@ -176,6 +176,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pyte
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\safety\test_stage7_boundaries.py tests\unit\test_schema_registry.py -q
 ```
 
+Stage 8's focused targets are the following. `tests\unit\persistence`,
+`tests\integration\persistence`, `tests\property\test_persistence_codecs.py`,
+`tests\persistence_support` and `tests\safety\test_stage8_boundaries.py` are new
+in Stage 8; `tests\unit\datasets`, `tests\unit\strategy`,
+`tests\unit\experiments\test_port_contracts.py`, `tests\safety`,
+`tests\architecture` and `tests\unit\test_schema_registry.py` are older modules
+whose contract Stage 8 extended with the two registry ports, the SQLite side of
+the shared port contracts and the Stage 8 boundary guard; the registry stays at
+35 schemas and the relational schema has one Alembic head.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\persistence -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\integration\persistence -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\property\test_persistence_codecs.py tests\unit\datasets tests\unit\strategy -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\experiments\test_port_contracts.py tests\safety tests\architecture -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\safety\test_stage8_boundaries.py tests\unit\test_schema_registry.py -q
+```
+
 The `addopts` override removes the repository-wide coverage threshold only
 from a focused diagnostic run. The later complete suite must satisfy the
 configured branch-coverage gate.
@@ -755,17 +773,19 @@ runtime, verification, and acceptance paths.
 
 ## Stage scope
 
-Project 1 Stage 7 is complete. Shell-free absolute argument-array launch with
-a fresh empty environment, bounded stdout and stderr readers, incremental
-protocol parsing, paired UTC and monotonic deadlines, heartbeat liveness,
-graceful and forced termination with Job Object process-tree cleanup, durable
-PID creation identity, path preflight, stale-invocation rejection, and
-restart reconciliation are implemented. Stage 7 implementation completed at
-`c1b17e481e9e1c192d4cae0a70764bf4d643515a`; the Stage 7 boundary guard and
-this status were added by the separate Task 9 commit, which is not the
-implementation hash. No schema was added: the closed 35-schema registry is
-preserved byte-identical. The fake adapters run through the production
-supervisor as well as the test-resident stand-in. Stage 8 is not started.
+Project 1 Stage 8 is complete. SQLite write-ahead-log persistence with foreign
+keys, `synchronous=FULL` and a bounded busy timeout, SQLAlchemy mappings kept
+separate from the canonical models, repositories and short units of work with
+revision compare-and-swap, the Alembic baseline migration and its offline
+consistency check, durable retry decisions with their delay, invocation-scoped
+sanitized events, owner relations, and the persistence-side reconciliation
+source are implemented, and the application operations and the production
+supervisor run over them. Stage 8 implementation completed at the
+implementation checkpoint the roadmap's status table records for Stage 8; the
+Stage 8 boundary guard and this status were added by the separate Task 8
+commit, which is not the implementation hash. No schema was added: the closed
+35-schema registry is preserved byte-identical; the relational schema has one
+Alembic head, `r0001_stage8_baseline`. Stage 9 is not started.
 
 The independent sweeps agree on the falsifiable results: zero
 over-rejections, and zero disagreement between the four schema surfaces.
@@ -781,9 +801,9 @@ invoked by any verification gate. The manual source, reference, and diff
 fallback is the recorded workflow.
 
 No real trading engine, exchange connectivity, market-data download, real
-backtest, order or fill simulation, portfolio accounting, persistence, paper
-wallet, tax or TDS logic, LLM integration, user interface, Docker setup, cloud
-deployment, or server deployment exists anywhere in the repository. Stage 4
+backtest, order or fill simulation, portfolio accounting, paper wallet, tax
+or TDS logic, LLM integration, user interface, Docker setup, cloud deployment,
+or server deployment exists anywhere in the repository. Stage 4
 executes no engine, no adapter, no strategy, and no declared engine extension,
 and combines no comparison result into an averaged, voted, or synthetic figure.
 
@@ -802,7 +822,7 @@ exists, and commits no success run state.
 `tests/safety/test_stage6_boundaries.py` enforces the fourteen Stage 6 modules'
 exclusions statically, pins the exact four classes that may carry a raw-token
 field, the twelve `subprocess` importers (the ten of Stage 6, the Stage 7 fake
-script and the persistence interrupted-writer test) and the no-shell rule over
+script and the Stage 8 interrupted-writer test) and the no-shell rule over
 the whole test tree, and records the roadmap's Stage 6 completion.
 
 Stage 7 launches the same executable fake adapters, and its own Stage 7 fake
@@ -860,3 +880,66 @@ required to be leak-free: a run that leaves a task-owned process or a Stage 7
 command root behind (pytest's own retained base temporary directories are
 neither) is not acceptance evidence whatever its exit status, and the stage
 ledger records the process probes taken around every long run.
+
+Stage 8 persists the canonical lifecycle, retry, invocation, event, diagnostic,
+registry, snapshot and ownership records in one local SQLite file opened in
+write-ahead-log mode with foreign keys, `synchronous=FULL` and a bounded busy
+timeout, through SQLAlchemy mappings kept separate from the canonical models,
+repositories whose every state transition is a revision compare-and-swap, and
+units of work that never span a child process or a file operation; the Alembic baseline
+`r0001_stage8_baseline` is the single head and `migration-check` proves a fresh
+database equals the mapped metadata. The Stage 5 two-slot flow and eight Stage
+6 rows run over the durable repositories through the production supervisor,
+with every durable assertion a fresh session or an independent connection on
+the same file. It opens no network connection, hands no database path to an
+adapter, finalizes no artifact, creates no `RunManifest`, and commits no
+success run state. `tests/safety/test_stage8_boundaries.py` pins the fifteen
+Stage 8 source modules, confines `sqlalchemy` and `alembic` to their named
+importers, pins the exact `crypto_lab` modules each persistence module imports
+and the two registry ports' dependency direction, denies the infrastructure
+roots, the raw-token annotation, the bare identifiers and the deferred names in
+persistence, proves the `diagnostic_ids` column is written only through the
+whole-row command-invocation encode, pins the one Alembic head, and records the
+roadmap's Stage 8 completion.
+
+The Stage 8 evidence is recorded with its limits rather than rounded up. Two
+accepted design limitations: the diagnostic reference columns carry no foreign
+key, because the semantic-outcome operation mints diagnostics inside the
+transaction that references them, so the caller records the returned
+diagnostics afterwards and the integration flows prove zero dangling
+references at the end of every flow; and under the deferred-transaction model
+an unrelated commit between a transaction's first read and its first write is
+refused as a stale snapshot, the operation driver reruns once, and two such
+interleavings in a row surface as a bounded `PERSISTENCE.CONCURRENCY_CONFLICT`
+to a caller that already treats it as a lost swap. Two race cases are proven in
+a corrected form: the successor-versus-aggregation race cannot compete as
+first written, because an allowed successor pending on the slot's latest
+attempt leaves the classifier non-terminal, so its measured half is the
+non-competition and its other half uses a labelled compare-and-swap winner;
+and the read-set case's concurrent mover is the persistence-owned snapshot
+freeze of the experiment row, which changes no revision. A member write that
+fails fatally poisons its owning transaction logically at once, while the
+physical rollback and connection release happen through `commit()`,
+`rollback()` or the context cleanup, never eagerly inside the member. Three
+scoped production corrections landed between Task 6 and Task 7 and are part of
+the Stage 8 history (commits `b174d1decf89b1c337d84bd75dd520ffa0ef9709`,
+`4f71171ba14a89dc6fd64a10de1ec045c37b5f1b` and
+`dbb5535830dd190d0fcf376165022c54377c71dc`): closing a transaction after a
+member write failure, translating driver failures during reads into stable
+`Failure` results instead of exceptions or empty answers, and preserving those
+reader failures through the invocation services, the last of which edited the
+Stage 5 module `experiments/invocation_service.py`. The interrupted-writer case
+kills a child process mid-transaction and reopens the file with `quick_check`
+`ok`; it is process-interruption evidence, not a power-loss or storage-hardware
+proof. Two observations stay open rather than closed by a later passing run: a
+PowerShell helper used by one launcher test timed out under foreign host load,
+and one reopen in the interrupted-writer case once failed with
+`SQLITE_IOERR_TRUNCATE`; neither cause is established. Two readings of the
+Stage 8 plan were taken in the Task 7 tests and are recorded here: the
+process-timeout row follows the committed Stage 7 contract, so a pre-handoff
+timeout records `PROCESS.START_TIMED_OUT` with no native exit and a removed
+command root while a timeout after the running handoff records
+`PROCESS.RUN_TIMED_OUT` with the killed child's exit; and the durable two-slot
+flow seeds its availability observations through the writer exactly as the
+Stage 5 flow seeds them, because it runs no describe command that could mint
+one.
