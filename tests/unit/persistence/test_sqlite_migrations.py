@@ -1026,21 +1026,21 @@ def test_verify_migrations_imports_no_subprocess_and_reads_no_environment() -> N
 def test_the_source_allowlist_and_import_roots_name_the_migration_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert _TASK2_SOURCE_PATHS <= allowed
-    assert len(allowed) == 110  # Task 5 appended the reconciliation source
+    assert len(allowed) == 115  # Stage 9 Task 1 appended the five artifact modules
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "alembic" in roots
     assert len(roots) == 29
     modules = _literal(_PACKAGE_LAYOUT, "PACKAGE_MODULES")
     start = modules.index("crypto_lab.persistence.diagnostics") + 1
     assert tuple(modules[start : start + len(_TASK2_MODULES)]) == _TASK2_MODULES
-    assert len(modules) == 110
+    assert len(modules) == 115
 
 
 def test_the_two_cross_pins_moved_to_the_task_two_sizes() -> None:
     for path in (_PREFLIGHT_TESTS, _RECONCILIATION_TESTS):
         source = path.read_text(encoding="utf-8")
-        assert "len(allowed) == 110" in source  # moved again by Task 5
-        assert "len(modules) == 110" in source
+        assert "len(allowed) == 115" in source  # moved again by Stage 9 Task 1
+        assert "len(modules) == 115" in source
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     assert "len(roots) == 29" in preflight
 

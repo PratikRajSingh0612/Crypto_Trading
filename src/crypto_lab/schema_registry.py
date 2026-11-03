@@ -1,14 +1,17 @@
-"""Closed deterministic registry for the Stage 3 to Stage 6 JSON Schemas.
+"""Closed deterministic registry for the Stage 3 to Stage 9 JSON Schemas.
 
 The eleven Stage 3 entries come first, in their original order, followed by the
 nine Stage 4 strategy and capability entries, the seven Stage 5 experiment, run,
-invocation, retry and aggregation entries (Stage 5 plan Task 9) and then the
-eight Stage 6 protocol entries at positions 27-34 (Stage 6 plan Task 9, section
-12.1): the bootstrap descriptor envelope, the negotiation result, the
-command-discriminated request envelope, the wire event envelope, the sanitized
-`RunEvent`, the validation result, the adapter result manifest and the sanitized
-manifest. Existing entries are never reordered: the order is the generation
-order, and a published `$id` is a permanent contract.
+invocation, retry and aggregation entries (Stage 5 plan Task 9), the eight Stage
+6 protocol entries at positions 27-34 (Stage 6 plan Task 9, section 12.1): the
+bootstrap descriptor envelope, the negotiation result, the command-discriminated
+request envelope, the wire event envelope, the sanitized `RunEvent`, the
+validation result, the adapter result manifest and the sanitized manifest; and
+then the eight Stage 9 artifact entries at positions 35-42 (Stage 9 plan Task 1,
+section 3.2): the candidate artifact, the artifact reference, the finalization
+purpose, the artifact manifest, the two finalization requests, the finalization
+result and the finalization journal entry. Existing entries are never reordered:
+the order is the generation order, and a published `$id` is a permanent contract.
 """
 
 from __future__ import annotations
@@ -30,7 +33,19 @@ from crypto_lab.adapters.negotiation import (
     BootstrapDescriptorEnvelope,
     NegotiationResult,
 )
+from crypto_lab.artifacts.journal import FinalizationJournalEntry
+from crypto_lab.artifacts.manifest import ArtifactManifest
+from crypto_lab.artifacts.models import (
+    ArtifactFinalizationPurpose,
+    ArtifactRef,
+    CandidateArtifact,
+    FinalizationResult,
+)
 from crypto_lab.artifacts.ownership import ARTIFACT_OWNER_ADAPTER
+from crypto_lab.artifacts.requests import (
+    EvidenceFinalizationRequest,
+    ResultFinalizationRequest,
+)
 from crypto_lab.capabilities.comparison import ComparisonEligibilityResult
 from crypto_lab.capabilities.models import (
     ApproximationDeclaration,
@@ -242,6 +257,46 @@ SCHEMA_DEFINITIONS: tuple[SchemaDefinition, ...] = (
         PurePosixPath("protocol/sanitized-adapter-result-manifest-v1.schema.json"),
         "urn:crypto-lab:schema:protocol:sanitized-adapter-result-manifest:1.0.0",
         TypeAdapter(SanitizedAdapterResultManifest),
+    ),
+    SchemaDefinition(
+        PurePosixPath("artifacts/candidate-artifact-v1.schema.json"),
+        "urn:crypto-lab:schema:artifacts:candidate-artifact:1.0.0",
+        TypeAdapter(CandidateArtifact),
+    ),
+    SchemaDefinition(
+        PurePosixPath("artifacts/artifact-ref-v1.schema.json"),
+        "urn:crypto-lab:schema:artifacts:artifact-ref:1.0.0",
+        TypeAdapter(ArtifactRef),
+    ),
+    SchemaDefinition(
+        PurePosixPath("artifacts/artifact-finalization-purpose-v1.schema.json"),
+        "urn:crypto-lab:schema:artifacts:artifact-finalization-purpose:1.0.0",
+        TypeAdapter(ArtifactFinalizationPurpose),
+    ),
+    SchemaDefinition(
+        PurePosixPath("artifacts/artifact-manifest-v1.schema.json"),
+        "urn:crypto-lab:schema:artifacts:artifact-manifest:1.0.0",
+        TypeAdapter(ArtifactManifest),
+    ),
+    SchemaDefinition(
+        PurePosixPath("artifacts/result-finalization-request-v1.schema.json"),
+        "urn:crypto-lab:schema:artifacts:result-finalization-request:1.0.0",
+        TypeAdapter(ResultFinalizationRequest),
+    ),
+    SchemaDefinition(
+        PurePosixPath("artifacts/evidence-finalization-request-v1.schema.json"),
+        "urn:crypto-lab:schema:artifacts:evidence-finalization-request:1.0.0",
+        TypeAdapter(EvidenceFinalizationRequest),
+    ),
+    SchemaDefinition(
+        PurePosixPath("artifacts/finalization-result-v1.schema.json"),
+        "urn:crypto-lab:schema:artifacts:finalization-result:1.0.0",
+        TypeAdapter(FinalizationResult),
+    ),
+    SchemaDefinition(
+        PurePosixPath("artifacts/finalization-journal-entry-v1.schema.json"),
+        "urn:crypto-lab:schema:artifacts:finalization-journal-entry:1.0.0",
+        TypeAdapter(FinalizationJournalEntry),
     ),
 )
 

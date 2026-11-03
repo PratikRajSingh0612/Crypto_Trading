@@ -46,13 +46,15 @@ Declared readings, so nothing is inferred silently:
   two creations can share a clock tick). The verification guide states the same rule and
   both texts are pinned; the plan's own "later than" phrasing (plan 2026) is planning
   prose outside Task 9's file map and is recorded in the stage ledger.
-- The Stage 9 negative boundary is proved as absence: every finalization and manifest
-  name stays deferred, and the roadmap's Stage 8 row is the deferred row until the
-  Stage 8 guard advances it. The Stage 8 shape scan and the empty ``persistence``
-  package assertion this guard carried while Stage 8 was unstarted retired with Stage
-  8 Task 1 (Stage 8 plan section 2.6), which created the first persistence modules;
-  the deferred-name half survives under
-  ``test_stage_nine_finalization_names_stay_deferred``.
+- The roadmap's Stage 8 row is the deferred row until the Stage 8 guard advances it.
+  The Stage 8 shape scan and the empty ``persistence`` package assertion this guard
+  carried while Stage 8 was unstarted retired with Stage 8 Task 1 (Stage 8 plan
+  section 2.6), which created the first persistence modules; the deferred-name half
+  (``test_stage_nine_finalization_names_stay_deferred`` over the
+  ``_STAGE8_AND_LATER_NAMES`` literal) retired with Stage 9 Task 1 (Stage 9 plan
+  section 2.6), which defined the first of those names, in favour of the Stage 3
+  guard's positive that each released name is defined exactly once in its module
+  while the still-deferred names stay in ``_DEFERRED_DEFINITIONS``.
 """
 
 from __future__ import annotations
@@ -65,7 +67,6 @@ from typing import Final
 import pytest
 from test_stage3_boundaries import (
     _ALLOWED_SOURCE_FILES,
-    _DEFERRED_DEFINITIONS,
     STAGE7_IMPLEMENTATION_COMMIT,
     STAGE7_PLAN,
     _environment_access_violations,
@@ -258,19 +259,6 @@ _NUMBER_WORDS: Final[Mapping[int, str]] = {10: "ten", 11: "eleven", 12: "twelve"
 _RETIRED_SUBPROCESS_IMPORTER_PHRASES: Final[tuple[str, ...]] = (
     "the ten `subprocess` importers",
     "the eleven `subprocess` importers",
-)
-#: Stage 9 negatives: the finalization and manifest names that stay deferred through
-#: Stage 8 (Stage 8 plan section 2.6 keeps this half of the retired Stage 8 negative).
-_STAGE8_AND_LATER_NAMES: Final[tuple[str, ...]] = (
-    "ArtifactFinalizer",
-    "ArtifactRef",
-    "ArtifactRepository",
-    "CandidateArtifact",
-    "CandidateArtifactRepository",
-    "CandidateFinalization",
-    "FinalizationResult",
-    "ResultFinalizationRequest",
-    "RunManifest",
 )
 
 
@@ -798,23 +786,6 @@ def test_no_documentation_surface_claims_a_sandbox(repository_root: Path) -> Non
     the word at all (the roadmap names it only inside the Stage 7 exclusion list)."""
     assert _SANDBOX not in _read(repository_root, _VERIFICATION_GUIDE).lower()
     assert _SANDBOX not in _read(repository_root, _README).lower()
-
-
-def test_stage_nine_finalization_names_stay_deferred(repository_root: Path) -> None:
-    """The surviving half of the Stage 7 "Stage 8 has not started" negative.
-
-    Stage 8 plan section 2.6: the Stage 8 shape scan and the empty ``persistence``
-    package assertion retired when Stage 8 Task 1 created the first persistence
-    modules; the nine finalization and manifest names keep their deferral (in
-    ``_DEFERRED_DEFINITIONS`` and defined nowhere under ``src``) until Stage 9
-    defines them, so the Stage 9 negative is never weakened.
-    """
-    defined: set[str] = set()
-    for path in _source_files(repository_root):
-        defined |= _defined_names(_parse(path))
-    for name in _STAGE8_AND_LATER_NAMES:
-        assert name in _DEFERRED_DEFINITIONS
-        assert name not in defined
 
 
 # --------------------------------------------------------------------------

@@ -73,7 +73,6 @@ from test_stage5_boundaries import (
 from test_stage6_boundaries import _SUBPROCESS_IMPORTERS, STAGE6_SOURCE_FILES
 from test_stage7_boundaries import (
     _STAGE7_ROADMAP_ROW,
-    _STAGE8_AND_LATER_NAMES,
     _STAGE8_ROADMAP_ROW,
     STAGE7_SOURCE_FILES,
     _defined_names,
@@ -669,8 +668,11 @@ def _bare_identifier_violations(tree: ast.AST, label: str) -> list[str]:
 
 
 def _deferred_name_violations(tree: ast.AST, label: str) -> list[str]:
+    # Stage 9 plan section 2.6 (Task 1): the Stage 7 `_STAGE8_AND_LATER_NAMES` literal
+    # retired with the first released finalization names; the Stage 3 set alone is
+    # the deferred authority.
     defined = _defined_names(tree)
-    deferred = set(_DEFERRED_DEFINITIONS) | set(_STAGE8_AND_LATER_NAMES)
+    deferred = set(_DEFERRED_DEFINITIONS)
     return [
         f"{label}: defines deferred name {name}" for name in sorted(defined & deferred)
     ]
@@ -766,9 +768,10 @@ def test_the_stage_eight_source_files_are_exactly_the_fifteen_plan_paths(
         assert _source_path(repository_root, relative_path).is_file()
     assert _PERSISTENCE_PACKAGE_INIT in _ALLOWED_SOURCE_FILES
     assert _PERSISTENCE_PACKAGE_INIT not in STAGE8_SOURCE_FILES
-    # The whole inventory: 95 at the planning base plus the fifteen.
-    assert len(_ALLOWED_SOURCE_FILES) == 110
-    assert len(_source_files(repository_root)) == 110
+    # The whole inventory: 95 at the planning base plus the fifteen, plus the five
+    # artifact contract modules of Stage 9 Task 1 (Stage 9 plan section 2.6).
+    assert len(_ALLOWED_SOURCE_FILES) == 115
+    assert len(_source_files(repository_root)) == 115
     on_disk = {
         _label(repository_root, path)
         for path in _source_files(repository_root)
@@ -877,8 +880,9 @@ def test_persistence_names_no_raw_token_bare_identifier_or_deferred_name(
         in _defined_names(_parse(_source_path(repository_root, label)))
     ]
     assert definers == ["datasets/ports.py"]
-    assert len(_DEFERRED_DEFINITIONS) == 33
-    assert set(_STAGE8_AND_LATER_NAMES) <= _DEFERRED_DEFINITIONS
+    # Stage 9 plan section 2.6 (Task 1): 33 -> 22; the `<=` pin over the retired
+    # Stage 7 literal is replaced by the Stage 3 guard's released-names positive.
+    assert len(_DEFERRED_DEFINITIONS) == 22
 
 
 def test_diagnostic_ids_are_written_only_through_the_whole_row_encode(
@@ -936,9 +940,11 @@ def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
     constants and the tree; the seven live mutation cases and the four digest
     blocks stay pinned by their owning tests (the Stage 3 guard and
     ``tests/unit/test_schema_registry.py``)."""
-    assert len(_ALLOWED_SOURCE_FILES) == 110
+    # Stage 9 plan section 2.6, Task 1: paths 110 -> 115, deferred names 33 -> 22,
+    # registry and files 35 -> 43, hashing profiles 12 -> 17; the rest is unchanged.
+    assert len(_ALLOWED_SOURCE_FILES) == 115
     assert len(_ALLOWED_IMPORT_ROOTS) == 29
-    assert len(_DEFERRED_DEFINITIONS) == 33
+    assert len(_DEFERRED_DEFINITIONS) == 22
     assert len(_INFRASTRUCTURE_EXEMPTIONS) == 13
     assert len(_EXPECTED_READER_IMPLEMENTATIONS) == 5
     assert len(_SUBPROCESS_IMPORTERS) == 12
@@ -947,9 +953,9 @@ def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
     assert len(_EXPECTED_OPERATIONS) == 21
     assert len(_EXPECTED_VERIFICATION_PROFILES) == 10
     assert len(_verifier_step_lines()) == 11
-    assert len(SCHEMA_DEFINITIONS) == 35
-    assert len(sorted((repository_root / "schemas").rglob("*.schema.json"))) == 35
-    assert len(HashingProfile) == 12
+    assert len(SCHEMA_DEFINITIONS) == 43
+    assert len(sorted((repository_root / "schemas").rglob("*.schema.json"))) == 43
+    assert len(HashingProfile) == 17
 
 
 # --------------------------------------------------------------------------

@@ -161,6 +161,29 @@ _ALLOWED_FOR_PERSISTENCE: tuple[str, ...] = (
     "crypto_lab.configuration",
     "crypto_lab.persistence",
 )
+_ARTIFACTS = "artifacts"
+#: Stage 9 plan section 2.6 (architecture closure): every central package
+#: ``artifacts`` may never reach. ``adapters`` is first -- the artifact records
+#: re-declare the four shared diagnostic literals and the two path/media grammars
+#: rather than import them (plan 4.5, Task 1) -- and ``schema_registry`` is
+#: repeated so the scanner's self-test names it explicitly for this package too.
+_PROHIBITED_FOR_ARTIFACTS: tuple[str, ...] = (
+    "crypto_lab.adapters",
+    "crypto_lab.experiments",
+    "crypto_lab.strategy",
+    "crypto_lab.capabilities",
+    "crypto_lab.datasets",
+    "crypto_lab.persistence",
+    "crypto_lab.process_supervision",
+    "crypto_lab.configuration",
+    "crypto_lab.audit",
+    "crypto_lab.cli",
+    _COMPOSITION_MODULE,
+)
+#: Stage 9 plan section 2.6: the scope closure of ``artifacts`` -- ``domain`` and
+#: itself (specification 27.1: the record package depends on canonical domain
+#: types alone).
+_ALLOWED_FOR_ARTIFACTS: tuple[str, ...] = ("crypto_lab.domain", "crypto_lab.artifacts")
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -488,6 +511,47 @@ def test_persistence_reaches_only_its_stage_eight_allowlist(
     assert "crypto_lab.process_supervision.models" in reached
 
 
+def test_artifacts_imports_nothing_from_any_prohibited_package(
+    repository_root: Path,
+) -> None:
+    """Stage 9 plan section 2.6: the artifact record package never imports
+    ``adapters`` (whose shared literals and grammars it re-declares), any other
+    central package, or the composition module."""
+    assert _PROHIBITED_FOR_ARTIFACTS[-1] == _COMPOSITION_MODULE
+    assert (
+        find_package_import_violations(
+            _package_root(repository_root, _ARTIFACTS),
+            _ARTIFACTS,
+            _PROHIBITED_FOR_ARTIFACTS,
+        )
+        == ()
+    )
+
+
+def test_artifacts_reaches_only_domain_and_itself(repository_root: Path) -> None:
+    """The Stage 9 scope closure of ``artifacts`` (module constant).
+
+    Anchored positively on the cross-package edges Task 1 actually takes -- the
+    derived identities of ``domain.hashing`` and the base, identifier, diagnostic
+    and lifecycle-table modules -- and on the one in-package edge the records take
+    to ``artifacts.ownership``, so the assertion cannot pass on an empty scan.
+    """
+    reached = _allowed_project_imports(
+        _package_root(repository_root, _ARTIFACTS), _ARTIFACTS
+    )
+    unexpected = tuple(
+        name
+        for name in reached
+        if not any(_is_within(name, allowed) for allowed in _ALLOWED_FOR_ARTIFACTS)
+    )
+    assert unexpected == ()
+    assert "crypto_lab.domain.hashing" in reached
+    assert "crypto_lab.domain.base" in reached
+    assert "crypto_lab.domain.diagnostics" in reached
+    assert "crypto_lab.domain.lifecycle" in reached
+    assert "crypto_lab.artifacts.ownership" in reached
+
+
 # --------------------------------------------------------------------------
 # Scanner self-tests -- a guard that cannot fail is not a guard
 # --------------------------------------------------------------------------
@@ -619,6 +683,45 @@ def test_the_persistence_allowlist_rejects_the_table_permitted_audit_edge(
     assert reached == ("crypto_lab.audit",)
     assert not any(
         _is_within(reached[0], allowed) for allowed in _ALLOWED_FOR_PERSISTENCE
+    )
+
+
+@pytest.mark.parametrize("prohibited_package", _PROHIBITED_FOR_ARTIFACTS)
+def test_the_scanner_rejects_every_package_prohibited_for_artifacts(
+    tmp_path: Path,
+    prohibited_package: str,
+) -> None:
+    """Stage 9 Task 1: the same self-test over the ``artifacts`` prohibited set."""
+    package_root = _write_package(
+        tmp_path, _ARTIFACTS, f"import {prohibited_package}\n"
+    )
+
+    violations = find_package_import_violations(
+        package_root, _ARTIFACTS, _PROHIBITED_FOR_ARTIFACTS
+    )
+
+    assert tuple(item.imported_name for item in violations) == (prohibited_package,)
+
+
+def test_the_artifacts_allowlist_rejects_the_adapter_grammar_edge(
+    tmp_path: Path,
+) -> None:
+    """The allowlist is a scope closure: importing the adapter path grammar
+    instead of restating it must surface as unexpected -- a function-local import
+    just the same."""
+    package_root = _write_package(
+        tmp_path,
+        _ARTIFACTS,
+        "def grammar() -> None:\n"
+        "    from crypto_lab.adapters.paths import RelativeCandidatePath\n"
+        "    del RelativeCandidatePath\n",
+    )
+
+    reached = _allowed_project_imports(package_root, _ARTIFACTS)
+
+    assert reached == ("crypto_lab.adapters.paths",)
+    assert not any(
+        _is_within(reached[0], allowed) for allowed in _ALLOWED_FOR_ARTIFACTS
     )
 
 

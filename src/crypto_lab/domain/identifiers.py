@@ -110,6 +110,14 @@ def _adapter_manifest_id(value: str) -> str:
     return validate_prefixed_uuid4(value, "amf_")
 
 
+def _finalization_id(value: str) -> str:
+    return validate_prefixed_uuid4(value, "fin_")
+
+
+def _run_manifest_id(value: str) -> str:
+    return validate_prefixed_uuid4(value, "rmf_")
+
+
 type ExperimentId = Annotated[
     str,
     StringConstraints(strict=True, pattern=rf"^exp_{_UUID4}$"),
@@ -214,6 +222,22 @@ type AdapterManifestId = Annotated[
     StringConstraints(strict=True, pattern=rf"^amf_{_UUID4}$"),
     AfterValidator(_adapter_manifest_id),
     WithJsonSchema(exact_string_schema(rf"^amf_{_UUID4}$")),
+]
+#: Stage 9 plan section 3.2: derived by ``finalization_id_for`` in
+#: ``domain/hashing.py`` from ``finalization_identity``, never drawn.
+type FinalizationId = Annotated[
+    str,
+    StringConstraints(strict=True, pattern=rf"^fin_{_UUID4}$"),
+    AfterValidator(_finalization_id),
+    WithJsonSchema(exact_string_schema(rf"^fin_{_UUID4}$")),
+]
+#: Stage 9 plan section 3.2: derived by ``run_manifest_id_for`` (Task 7) from
+#: the run and its result-finalization invocation.
+type RunManifestId = Annotated[
+    str,
+    StringConstraints(strict=True, pattern=rf"^rmf_{_UUID4}$"),
+    AfterValidator(_run_manifest_id),
+    WithJsonSchema(exact_string_schema(rf"^rmf_{_UUID4}$")),
 ]
 type Sha256 = Annotated[
     str,

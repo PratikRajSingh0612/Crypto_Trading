@@ -1,0 +1,1 @@
+{"$id":"urn:crypto-lab:schema:artifacts:artifact-finalization-purpose:1.0.0","$schema":"https://json-schema.org/draft/2020-12/schema","enum":["RESULT","EVIDENCE"],"title":"ArtifactFinalizationPurpose","type":"string"}

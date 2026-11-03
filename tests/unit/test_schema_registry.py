@@ -81,7 +81,19 @@ from crypto_lab.adapters.vocabulary import (
     SemanticStatus,
     ValidationOutcome,
 )
+from crypto_lab.artifacts.journal import FinalizationJournalEntry
+from crypto_lab.artifacts.manifest import ArtifactManifest
+from crypto_lab.artifacts.models import (
+    ArtifactFinalizationPurpose,
+    ArtifactRef,
+    CandidateArtifact,
+    FinalizationResult,
+)
 from crypto_lab.artifacts.ownership import ARTIFACT_OWNER_ADAPTER
+from crypto_lab.artifacts.requests import (
+    EvidenceFinalizationRequest,
+    ResultFinalizationRequest,
+)
 from crypto_lab.capabilities.comparison import (
     ComparisonEligibilityResult,
     ComparisonMaterial,
@@ -270,6 +282,30 @@ _EXPECTED = {
     PurePosixPath(
         "protocol/sanitized-adapter-result-manifest-v1.schema.json"
     ): "urn:crypto-lab:schema:protocol:sanitized-adapter-result-manifest:1.0.0",
+    PurePosixPath(
+        "artifacts/candidate-artifact-v1.schema.json"
+    ): "urn:crypto-lab:schema:artifacts:candidate-artifact:1.0.0",
+    PurePosixPath(
+        "artifacts/artifact-ref-v1.schema.json"
+    ): "urn:crypto-lab:schema:artifacts:artifact-ref:1.0.0",
+    PurePosixPath(
+        "artifacts/artifact-finalization-purpose-v1.schema.json"
+    ): "urn:crypto-lab:schema:artifacts:artifact-finalization-purpose:1.0.0",
+    PurePosixPath(
+        "artifacts/artifact-manifest-v1.schema.json"
+    ): "urn:crypto-lab:schema:artifacts:artifact-manifest:1.0.0",
+    PurePosixPath(
+        "artifacts/result-finalization-request-v1.schema.json"
+    ): "urn:crypto-lab:schema:artifacts:result-finalization-request:1.0.0",
+    PurePosixPath(
+        "artifacts/evidence-finalization-request-v1.schema.json"
+    ): "urn:crypto-lab:schema:artifacts:evidence-finalization-request:1.0.0",
+    PurePosixPath(
+        "artifacts/finalization-result-v1.schema.json"
+    ): "urn:crypto-lab:schema:artifacts:finalization-result:1.0.0",
+    PurePosixPath(
+        "artifacts/finalization-journal-entry-v1.schema.json"
+    ): "urn:crypto-lab:schema:artifacts:finalization-journal-entry:1.0.0",
 }
 
 
@@ -346,12 +382,12 @@ def _resolve_local_ref(
     return resolved
 
 
-def test_registry_has_exactly_the_closed_thirty_five_paths_and_ids() -> None:
+def test_registry_has_exactly_the_closed_forty_three_paths_and_ids() -> None:
     assert {
         definition.relative_path: definition.schema_id
         for definition in SCHEMA_DEFINITIONS
     } == _EXPECTED
-    assert len(SCHEMA_DEFINITIONS) == 35
+    assert len(SCHEMA_DEFINITIONS) == 43
 
 
 def test_every_schema_is_deterministic_draft_2020_12() -> None:
@@ -935,10 +971,29 @@ _STAGE6_PATHS: Final = (
     "protocol/sanitized-adapter-result-manifest-v1.schema.json",
 )
 
+#: Stage 9 plan section 3.2: the eight artifact entries Task 1 appends in this order
+#: at positions 35-42 (the running slice; Tasks 2, 3 and 7 extend it). Every path
+#: is a new lexical descendant of `schemas/artifacts/` beside the frozen Stage 3
+#: owner-reference entry and every identifier a new permanent
+#: `urn:crypto-lab:schema:artifacts:*`.
+_STAGE9_PATHS: Final = (
+    "artifacts/candidate-artifact-v1.schema.json",
+    "artifacts/artifact-ref-v1.schema.json",
+    "artifacts/artifact-finalization-purpose-v1.schema.json",
+    "artifacts/artifact-manifest-v1.schema.json",
+    "artifacts/result-finalization-request-v1.schema.json",
+    "artifacts/evidence-finalization-request-v1.schema.json",
+    "artifacts/finalization-result-v1.schema.json",
+    "artifacts/finalization-journal-entry-v1.schema.json",
+)
+_ALL_PATHS: Final = (
+    _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS + _STAGE6_PATHS + _STAGE9_PATHS
+)
+
 # Two entries register a module-level adapter singleton rather than a fresh
 # `TypeAdapter`, so identity is the exact assertion for them and the adapted
-# type is the exact assertion for the other thirty-three. Stage 5 and Stage 6 add
-# no singleton.
+# type is the exact assertion for the other forty-one. Stage 5, Stage 6 and Stage 9
+# add no singleton.
 _EXPECTED_ADAPTER_SINGLETONS: Final = {
     "artifacts/artifact-owner-ref-v1.schema.json": ARTIFACT_OWNER_ADAPTER,
     "strategy/expression-v1.schema.json": EXPRESSION_ADAPTER,
@@ -990,6 +1045,18 @@ _EXPECTED_ADAPTED_TYPES: Final = {
     "protocol/sanitized-adapter-result-manifest-v1.schema.json": (
         SanitizedAdapterResultManifest
     ),
+    "artifacts/candidate-artifact-v1.schema.json": CandidateArtifact,
+    "artifacts/artifact-ref-v1.schema.json": ArtifactRef,
+    "artifacts/artifact-finalization-purpose-v1.schema.json": (
+        ArtifactFinalizationPurpose
+    ),
+    "artifacts/artifact-manifest-v1.schema.json": ArtifactManifest,
+    "artifacts/result-finalization-request-v1.schema.json": ResultFinalizationRequest,
+    "artifacts/evidence-finalization-request-v1.schema.json": (
+        EvidenceFinalizationRequest
+    ),
+    "artifacts/finalization-result-v1.schema.json": FinalizationResult,
+    "artifacts/finalization-journal-entry-v1.schema.json": FinalizationJournalEntry,
 }
 
 _EXPRESSION_OPERATORS: Final = (
@@ -1135,11 +1202,11 @@ def test_the_seven_stage_five_entries_are_appended_in_the_approved_order() -> No
 
 
 def test_the_eight_stage_six_entries_are_appended_in_the_approved_order() -> None:
-    """Stage 6 plan Task 9: positions 27-34, in the plan's order, and nothing after."""
-    assert _ordered_paths()[27:] == _STAGE6_PATHS
+    """Stage 6 plan Task 9: positions 27-34, in the plan's order; Stage 9 follows."""
+    assert _ordered_paths()[27:35] == _STAGE6_PATHS
     assert len(_STAGE6_PATHS) == 8
     assert tuple(
-        definition.schema_id for definition in SCHEMA_DEFINITIONS[27:]
+        definition.schema_id for definition in SCHEMA_DEFINITIONS[27:35]
     ) == tuple(_EXPECTED[PurePosixPath(name)] for name in _STAGE6_PATHS)
     assert all(name.startswith("protocol/") for name in _STAGE6_PATHS)
     assert all(
@@ -1154,28 +1221,63 @@ def test_the_eight_stage_six_entries_are_appended_in_the_approved_order() -> Non
     }
 
 
+def test_stage_nine_entries_rendered_and_registered() -> None:
+    """Stage 9 plan section 3.2 and 2.6: Task 1's eight entries at positions 35-42,
+    in the plan's order, each rendered and each equal to its committed file; the
+    thirty-five earlier entries keep their positions and bytes (the four digest
+    blocks below are unedited)."""
+    assert _ordered_paths()[35:43] == _STAGE9_PATHS
+    assert _ordered_paths()[35:] == _STAGE9_PATHS
+    assert len(_STAGE9_PATHS) == 8
+    assert len(SCHEMA_DEFINITIONS) == 43
+    assert tuple(
+        definition.schema_id for definition in SCHEMA_DEFINITIONS[35:43]
+    ) == tuple(_EXPECTED[PurePosixPath(name)] for name in _STAGE9_PATHS)
+    assert all(name.startswith("artifacts/") for name in _STAGE9_PATHS)
+    assert all(
+        _EXPECTED[PurePosixPath(name)].startswith("urn:crypto-lab:schema:artifacts:")
+        for name in _STAGE9_PATHS
+    )
+    assert not set(_STAGE9_PATHS) & set(_STAGE3_PATHS)
+    assert not {_EXPECTED[PurePosixPath(name)] for name in _STAGE9_PATHS} & {
+        _EXPECTED[PurePosixPath(name)] for name in _STAGE3_PATHS
+    }
+    rendered = render_schema_files()
+    root = _REPOSITORY_ROOT / "schemas"
+    for name in _STAGE9_PATHS:
+        key = PurePosixPath(name)
+        assert key in rendered, name
+        assert (root / name).read_bytes() == rendered[key], name
+        document = json.loads(rendered[key])
+        assert document["$id"] == _EXPECTED[key]
+    purpose_path = PurePosixPath(
+        "artifacts/artifact-finalization-purpose-v1.schema.json"
+    )
+    purpose = json.loads(rendered[purpose_path])
+    assert purpose["enum"] == ["RESULT", "EVIDENCE"]
+    assert purpose["type"] == "string"
+
+
 def test_the_ordered_path_and_identifier_tuples_are_exact_and_unique() -> None:
     paths = _ordered_paths()
     identifiers = tuple(definition.schema_id for definition in SCHEMA_DEFINITIONS)
-    assert paths == _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS + _STAGE6_PATHS
-    assert identifiers == tuple(
-        _EXPECTED[PurePosixPath(name)]
-        for name in _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS + _STAGE6_PATHS
-    )
-    assert len(paths) == 35
-    assert len(set(paths)) == 35
-    assert len(set(identifiers)) == 35
-    assert len({path.rsplit("/", 1)[-1] for path in paths}) == 35
+    assert paths == _ALL_PATHS
+    assert identifiers == tuple(_EXPECTED[PurePosixPath(name)] for name in _ALL_PATHS)
+    assert len(paths) == 43
+    assert len(set(paths)) == 43
+    assert len(set(identifiers)) == 43
+    assert len({path.rsplit("/", 1)[-1] for path in paths}) == 43
 
 
 def test_every_registry_entry_carries_its_exact_adapter() -> None:
-    assert len(_EXPECTED_ADAPTER_SINGLETONS) + len(_EXPECTED_ADAPTED_TYPES) == 35
+    assert len(_EXPECTED_ADAPTER_SINGLETONS) + len(_EXPECTED_ADAPTED_TYPES) == 43
     assert not any(name in _EXPECTED_ADAPTER_SINGLETONS for name in _STAGE5_PATHS)
     assert not any(name in _EXPECTED_ADAPTER_SINGLETONS for name in _STAGE6_PATHS)
+    assert not any(name in _EXPECTED_ADAPTER_SINGLETONS for name in _STAGE9_PATHS)
     # Stage 6 plan 12.1: every Stage 6 entry is a fresh `TypeAdapter`, and no two
-    # entries share one adapter object.
+    # entries share one adapter object; Stage 9 Task 1 keeps both properties.
     adapters = [definition.adapter for definition in SCHEMA_DEFINITIONS]
-    assert len({id(adapter) for adapter in adapters}) == 35
+    assert len({id(adapter) for adapter in adapters}) == 43
     for definition in SCHEMA_DEFINITIONS:
         name = definition.relative_path.as_posix()
         singleton = _EXPECTED_ADAPTER_SINGLETONS.get(name)
@@ -1190,14 +1292,14 @@ def test_every_rendered_schema_equals_its_committed_generated_file() -> None:
     """Generated bytes are reviewed source, so the file is the contract."""
     rendered = render_schema_files()
     root = _REPOSITORY_ROOT / "schemas"
-    assert len(rendered) == 35
+    assert len(rendered) == 43
     for path, contents in rendered.items():
         target = root.joinpath(*path.parts)
         assert target.is_file(), path
         assert target.read_bytes() == contents, path
 
 
-def test_the_schemas_directory_holds_exactly_the_thirty_five_registered_files() -> None:
+def test_the_schemas_directory_holds_exactly_the_forty_three_registered_files() -> None:
     """Two directions: every registered file exists, and no unregistered file does."""
     root = _REPOSITORY_ROOT / "schemas"
     found = tuple(
@@ -1207,15 +1309,13 @@ def test_the_schemas_directory_holds_exactly_the_thirty_five_registered_files() 
             if candidate.is_file()
         )
     )
-    assert found == tuple(
-        sorted(_STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS + _STAGE6_PATHS)
-    )
-    assert len(found) == 35
+    assert found == tuple(sorted(_ALL_PATHS))
+    assert len(found) == 43
 
 
 def test_every_committed_schema_file_is_valid_draft_2020_12_json() -> None:
     root = _REPOSITORY_ROOT / "schemas"
-    for name in _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS + _STAGE6_PATHS:
+    for name in _ALL_PATHS:
         document = json.loads((root / name).read_bytes())
         assert isinstance(document, dict), name
         assert document["$schema"] == JSON_SCHEMA_DRAFT, name

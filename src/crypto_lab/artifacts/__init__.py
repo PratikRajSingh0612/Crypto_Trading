@@ -1,5 +1,66 @@
-"""Artifact ownership foundation; finalization remains deferred."""
+"""Artifact ownership, candidate and finalized records, requests and journal.
 
+Stage 3 placed the owner variants here; Stage 9 Task 1 adds the canonical
+contracts of the finalization flow -- the candidate and reference records, the
+two typed finalization requests, the journal entry with its move records, the
+artifact manifest and the artifact diagnostic table -- all importing ``domain``
+alone (specification 27.1). The finalizer, store and recovery arrive in later
+Stage 9 tasks.
+"""
+
+from crypto_lab.artifacts.diagnostics import (
+    ARTIFACT_DIAGNOSTIC_CODES,
+    ARTIFACT_FINALIZATION_TIMED_OUT,
+    ARTIFACT_MOVE_FAILED,
+    ARTIFACT_PATH_BOUNDARY_VIOLATION,
+    ARTIFACT_QUARANTINE_OVERDUE,
+    ARTIFACT_RESULT_MANIFEST_INVALID,
+    ARTIFACT_SOURCE_COMPONENT,
+    ARTIFACT_VALIDATION_FAILED,
+    SECURITY_SENSITIVE_MATERIAL_LEAKAGE,
+    ArtifactDiagnosticPosture,
+    artifact_diagnostic,
+    artifact_failure,
+)
+from crypto_lab.artifacts.journal import (
+    FINALIZATION_JOURNAL_TRANSITIONS,
+    FinalizationJournalEntry,
+    FinalizationJournalRuleViolation,
+    FinalizationJournalState,
+    ObservedMove,
+    PlannedMove,
+    assert_journal_transition,
+)
+from crypto_lab.artifacts.manifest import (
+    ARTIFACT_VALIDATION_PROFILE,
+    ArtifactLineage,
+    ArtifactManifest,
+    artifact_manifest_hash,
+)
+from crypto_lab.artifacts.models import (
+    CANDIDATE_ARTIFACT_TRANSITIONS,
+    EVIDENCE_ROLES,
+    PERMITTED_ROLE_TUPLES,
+    RESULT_ROLES,
+    ArtifactFinalizationPurpose,
+    ArtifactOwnerKind,
+    ArtifactRef,
+    ArtifactSourceRole,
+    CandidateArtifact,
+    CandidateArtifactProducerKind,
+    CandidateArtifactRuleViolation,
+    CandidateArtifactState,
+    CandidateFinalization,
+    FinalizationResult,
+    FinalizedRelativePath,
+    MediaType,
+    RelativeStagingPath,
+    ValidationObservation,
+    assert_candidate_transition,
+    finalized_relative_path_for,
+    owner_kind_of,
+    validate_role_combination,
+)
 from crypto_lab.artifacts.ownership import (
     ARTIFACT_OWNER_ADAPTER,
     AdapterArtifactOwner,
@@ -12,16 +73,73 @@ from crypto_lab.artifacts.ownership import (
     artifact_owner_hash,
     owner_presentation,
 )
+from crypto_lab.artifacts.requests import (
+    PERMITTED_CORRELATION_KINDS,
+    EvidenceCorrelation,
+    EvidenceFinalizationRequest,
+    ResultFinalizationRequest,
+    validate_evidence_correlation_kind,
+)
 
 __all__ = (
+    "ARTIFACT_DIAGNOSTIC_CODES",
+    "ARTIFACT_FINALIZATION_TIMED_OUT",
+    "ARTIFACT_MOVE_FAILED",
     "ARTIFACT_OWNER_ADAPTER",
+    "ARTIFACT_PATH_BOUNDARY_VIOLATION",
+    "ARTIFACT_QUARANTINE_OVERDUE",
+    "ARTIFACT_RESULT_MANIFEST_INVALID",
+    "ARTIFACT_SOURCE_COMPONENT",
+    "ARTIFACT_VALIDATION_FAILED",
+    "ARTIFACT_VALIDATION_PROFILE",
+    "CANDIDATE_ARTIFACT_TRANSITIONS",
+    "EVIDENCE_ROLES",
+    "FINALIZATION_JOURNAL_TRANSITIONS",
+    "PERMITTED_CORRELATION_KINDS",
+    "PERMITTED_ROLE_TUPLES",
+    "RESULT_ROLES",
+    "SECURITY_SENSITIVE_MATERIAL_LEAKAGE",
     "AdapterArtifactOwner",
+    "ArtifactDiagnosticPosture",
+    "ArtifactFinalizationPurpose",
+    "ArtifactLineage",
+    "ArtifactManifest",
+    "ArtifactOwnerKind",
     "ArtifactOwnerRef",
+    "ArtifactRef",
+    "ArtifactSourceRole",
+    "CandidateArtifact",
+    "CandidateArtifactProducerKind",
+    "CandidateArtifactRuleViolation",
+    "CandidateArtifactState",
+    "CandidateFinalization",
     "DatasetArtifactOwner",
+    "EvidenceCorrelation",
+    "EvidenceFinalizationRequest",
     "ExperimentArtifactOwner",
+    "FinalizationJournalEntry",
+    "FinalizationJournalRuleViolation",
+    "FinalizationJournalState",
+    "FinalizationResult",
+    "FinalizedRelativePath",
+    "MediaType",
+    "ObservedMove",
+    "PlannedMove",
+    "RelativeStagingPath",
+    "ResultFinalizationRequest",
     "RunArtifactOwner",
     "StrategyArtifactOwner",
     "SystemArtifactOwner",
+    "ValidationObservation",
+    "artifact_diagnostic",
+    "artifact_failure",
+    "artifact_manifest_hash",
     "artifact_owner_hash",
+    "assert_candidate_transition",
+    "assert_journal_transition",
+    "finalized_relative_path_for",
+    "owner_kind_of",
     "owner_presentation",
+    "validate_evidence_correlation_kind",
+    "validate_role_combination",
 )

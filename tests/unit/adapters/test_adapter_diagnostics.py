@@ -433,8 +433,10 @@ def test_the_four_stage_six_profiles_have_the_plan_values_in_order() -> None:
         "sanitized-adapter-result-manifest/v1",
         "candidate-artifact-identity/v1",
     )
-    assert tuple(HashingProfile)[8:] == stage6_profiles
-    assert len(HashingProfile) == 12
+    # Stage 9 plan section 2.6: Task 1 appended five members after these four
+    # (12 -> 17), so the Stage 6 four are the slice at positions 8 through 11.
+    assert tuple(HashingProfile)[8:12] == stage6_profiles
+    assert len(HashingProfile) == 17
 
 
 def test_the_four_stage_six_profiles_are_domain_separated() -> None:

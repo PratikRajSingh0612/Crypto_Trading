@@ -1805,7 +1805,7 @@ def test_a_non_dbapi_error_at_commit_releases_the_connection_before_it_escapes(
 def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert {"persistence/database.py", "persistence/diagnostics.py"} <= allowed
-    assert len(allowed) == 110  # Tasks 1-5 appended the fifteen Stage 8 modules
+    assert len(allowed) == 115  # Stage 9 Task 1 appended the five artifact modules
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "sqlalchemy" in roots
     assert "alembic" in roots  # Task 2 added it
@@ -1817,15 +1817,15 @@ def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> No
         "crypto_lab.persistence.database",
         "crypto_lab.persistence.diagnostics",
     )
-    assert len(modules) == 110
+    assert len(modules) == 115
 
 
 def test_the_two_cross_pins_moved_to_the_running_sizes() -> None:
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     reconciliation = _RECONCILIATION_TESTS.read_text(encoding="utf-8")
     for source in (preflight, reconciliation):
-        assert "len(allowed) == 110" in source
-        assert "len(modules) == 110" in source
+        assert "len(allowed) == 115" in source
+        assert "len(modules) == 115" in source
         assert "len(allowed) == 95" not in source
         assert "len(modules) == 95" not in source
     assert "len(roots) == 29" in preflight
@@ -1870,7 +1870,11 @@ def test_the_dependency_guards_admit_exactly_the_four_runtime_requirements() -> 
     assert '"sqlalchemy>=2.0,<3",' in tooling
 
 
-def test_the_stage_seven_shape_scan_is_retired_and_its_stage_nine_half_kept() -> None:
+def test_the_stage_seven_shape_scan_and_its_stage_nine_half_are_retired() -> None:
+    """Stage 9 plan section 2.6 (Task 1): the deferred-name half this test had kept
+    retired with the first released finalization names; the Stage 3 guard's
+    released-names positive replaces it and still pins the four names Task 1 did
+    not release."""
     source = _STAGE7_GUARD.read_text(encoding="utf-8")
     for retired in (
         "def test_stage_eight_persistence_has_not_started",
@@ -1879,12 +1883,22 @@ def test_the_stage_seven_shape_scan_is_retired_and_its_stage_nine_half_kept() ->
         "_STAGE8_SHAPED_PATTERN",
         "_STAGE8_SCAN_ROOTS",
         "_STAGE8_SCAN_SKIP",
+        "def test_stage_nine_finalization_names_stay_deferred",
+        "_STAGE8_AND_LATER_NAMES: Final",
     ):
         assert retired not in source, retired
-    assert "def test_stage_nine_finalization_names_stay_deferred" in source
-    names = _literal(_STAGE7_GUARD, "_STAGE8_AND_LATER_NAMES")
-    assert len(names) == 9
-    assert "RunManifest" in names
+    released = _literal(_STAGE3_GUARD, "_STAGE9_TASK1_RELEASED_DEFINITIONS")
+    assert len(released) == 11
+    still_deferred = _literal(
+        _STAGE3_GUARD, "_STAGE9_STILL_DEFERRED_FINALIZATION_NAMES"
+    )
+    assert still_deferred == (
+        "ArtifactFinalizer",
+        "ArtifactRepository",
+        "CandidateArtifactRepository",
+        "RunManifest",
+    )
+    assert set(still_deferred) <= set(_literal(_STAGE3_GUARD, "_DEFERRED_DEFINITIONS"))
 
 
 def test_the_architecture_closure_names_persistence() -> None:
