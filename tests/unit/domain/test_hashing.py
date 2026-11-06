@@ -80,12 +80,17 @@ _STAGE9_TASK1_PROFILE_TAIL = (
     HashingProfile.FINALIZATION_IDENTITY_V1,
     HashingProfile.CORE_CANDIDATE_IDENTITY_V1,
 )
+#: Stage 9 plan section 3.2: Task 2 appends the audit details profile (17 -> 18).
+_STAGE9_TASK2_PROFILE_TAIL = (HashingProfile.AUDIT_EVENT_DETAILS_V1,)
 
 
 def test_stage_nine_profiles_are_named_and_ordered() -> None:
     members = tuple(HashingProfile)
-    assert len(members) == 17
-    assert members[-5:] == _STAGE9_TASK1_PROFILE_TAIL
+    assert len(members) == 18
+    assert members[12:17] == _STAGE9_TASK1_PROFILE_TAIL
+    assert members[17:] == _STAGE9_TASK2_PROFILE_TAIL
+    assert HashingProfile.AUDIT_EVENT_DETAILS_V1.value == "audit-event-details/v1"
+    assert members[-6:] == _STAGE9_TASK1_PROFILE_TAIL + _STAGE9_TASK2_PROFILE_TAIL
 
 
 _CANDIDATE = "cand_1e6f2a4c-4b3d-4f2e-8a1b-0c9d8e7f6a5b"

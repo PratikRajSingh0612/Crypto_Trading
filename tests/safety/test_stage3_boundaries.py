@@ -42,6 +42,11 @@ _ALLOWED_SOURCE_FILES = {
     "artifacts/ownership.py",
     "artifacts/requests.py",
     "audit/__init__.py",
+    "audit/correlation.py",
+    "audit/jsonl.py",
+    "audit/models.py",
+    "audit/redaction.py",
+    "audit/sink.py",
     "capabilities/__init__.py",
     "capabilities/comparison.py",
     "capabilities/models.py",
@@ -77,6 +82,7 @@ _ALLOWED_SOURCE_FILES = {
     "domain/hashing.py",
     "domain/identifiers.py",
     "domain/lifecycle.py",
+    "domain/metrics.py",
     "domain/ports.py",
     "domain/records.py",
     "domain/results.py",
@@ -186,8 +192,6 @@ _PROHIBITED_CONTROL_LITERAL = "PYDANTIC_DISABLE_PLUGINS"
 _DEFERRED_DEFINITIONS = {
     "ArtifactFinalizer",
     "ArtifactRepository",
-    "AuditSink",
-    "AuditEvent",
     "CandidateArtifactRepository",
     "CanonicalFill",
     "CanonicalOrder",
@@ -195,7 +199,6 @@ _DEFERRED_DEFINITIONS = {
     "ContentHasher",
     "EquityPoint",
     "Fee",
-    "MetricValue",
     "OrderSide",
     "OrderType",
     "PortfolioSnapshot",
@@ -713,14 +716,14 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     `EvidenceFinalizationRequest` and `ResultFinalizationRequest`
     (`artifacts/requests.py`), giving 22, and swapped the three released members
     of the representative-mutation list for still-deferred names so seven live
-    cases remain.
+    cases remain; Task 2 released `AuditEvent` (`audit/models.py`), `AuditSink`
+    (`audit/sink.py`) and `MetricValue` (`domain/metrics.py`), giving 19, and
+    swapped its two released members of the mutation list the same way.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 22
+    assert len(_DEFERRED_DEFINITIONS) == 19
     assert _DEFERRED_DEFINITIONS == {
         "ArtifactFinalizer",
         "ArtifactRepository",
-        "AuditSink",
-        "AuditEvent",
         "CandidateArtifactRepository",
         "CanonicalFill",
         "CanonicalOrder",
@@ -728,7 +731,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "ContentHasher",
         "EquityPoint",
         "Fee",
-        "MetricValue",
         "OrderSide",
         "OrderType",
         "PortfolioSnapshot",
@@ -765,10 +767,11 @@ def test_each_normative_deferred_symbol_is_detected_by_the_stage3_guard(
     [
         # Stage 9 plan section 2.6: Task 1 released `CandidateArtifact` and
         # `CandidateArtifactState` (the names Stage 6 Task 5 had swapped in for
-        # `AdapterResultManifest`) and swapped in still-deferred names so seven
+        # `AdapterResultManifest`) and swapped in `MetricValue` and `AuditEvent`;
+        # Task 2 released those two and swapped in still-deferred names so seven
         # live cases remain.
-        "MetricValue",
-        "AuditEvent",
+        "ComparisonEligibilityService",
+        "ArtifactRepository",
         "CanonicalOrder",
         # Stage 6 plan section 2.6: Task 2 released `EngineRunRequest` and
         # swapped in a still-deferred name so seven live cases remain.
@@ -850,6 +853,46 @@ def test_each_stage_nine_task_one_name_is_defined_exactly_once_in_its_module(
     assert {*_STAGE9_TASK1_RELEASED_DEFINITIONS.values()} <= _ALLOWED_SOURCE_FILES
 
 
+#: Stage 9 plan section 2.6 (released-names table), Task 2: the three names the
+#: audit and metric contracts define, each in exactly its module. The Task 1
+#: mapping above stays at eleven (it is cross-pinned by
+#: ``tests/unit/persistence/test_sqlite_database.py``); this one is Task 2's own.
+_STAGE9_TASK2_RELEASED_DEFINITIONS = {
+    "AuditEvent": "audit/models.py",
+    "AuditSink": "audit/sink.py",
+    "MetricValue": "domain/metrics.py",
+}
+
+
+def test_each_stage_nine_task_two_name_is_defined_exactly_once_in_its_module(
+    repository_root: Path,
+) -> None:
+    """Task 2's positive, the same shape as Task 1's (plan 2.6)."""
+    assert len(_STAGE9_TASK2_RELEASED_DEFINITIONS) == 3
+    assert set(_STAGE9_TASK2_RELEASED_DEFINITIONS).isdisjoint(_DEFERRED_DEFINITIONS)
+    assert set(_STAGE9_TASK2_RELEASED_DEFINITIONS).isdisjoint(
+        _STAGE9_TASK1_RELEASED_DEFINITIONS
+    )
+    assert set(_STAGE9_STILL_DEFERRED_FINALIZATION_NAMES) <= _DEFERRED_DEFINITIONS
+    source_root = repository_root / "src/crypto_lab"
+    definers: dict[str, list[str]] = {
+        name: [] for name in _STAGE9_TASK2_RELEASED_DEFINITIONS
+    }
+    for path in _source_files(repository_root):
+        relative = path.relative_to(source_root).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+                and node.name in definers
+            ):
+                definers[node.name].append(relative)
+    assert definers == {
+        name: [module] for name, module in _STAGE9_TASK2_RELEASED_DEFINITIONS.items()
+    }
+    assert {*_STAGE9_TASK2_RELEASED_DEFINITIONS.values()} <= _ALLOWED_SOURCE_FILES
+
+
 def test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctly() -> (
     None
 ):
@@ -858,8 +901,9 @@ def test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctl
     )
     identifiers = tuple(definition.schema_id for definition in SCHEMA_DEFINITIONS)
     # Stage 6 plan section 2.6: Task 9 appended the eight protocol entries; Stage 9
-    # plan section 2.6: Task 1 appended the eight artifact entries (35 -> 43).
-    assert len(paths) == 43
+    # plan section 2.6: Task 1 appended the eight artifact entries (35 -> 43) and
+    # Task 2 the two audit entries and the metric entry (43 -> 46).
+    assert len(paths) == 46
     assert len(paths) == len(set(paths))
     assert len(identifiers) == len(set(identifiers))
     assert "protocol/engine-descriptor-v1.schema.json" in paths

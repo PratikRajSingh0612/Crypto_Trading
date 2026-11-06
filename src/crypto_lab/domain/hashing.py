@@ -46,6 +46,8 @@ class HashingProfile(StrEnum):
     CANDIDATE_SET_V1 = "candidate-set/v1"
     FINALIZATION_IDENTITY_V1 = "finalization-identity/v1"
     CORE_CANDIDATE_IDENTITY_V1 = "core-candidate-identity/v1"
+    # Stage 9 plan section 3.2: the Task 2 audit profile over an event's details.
+    AUDIT_EVENT_DETAILS_V1 = "audit-event-details/v1"
 
 
 class CanonicalHashEnvelope(CanonicalModel):

@@ -10,8 +10,10 @@ validation result, the adapter result manifest and the sanitized manifest; and
 then the eight Stage 9 artifact entries at positions 35-42 (Stage 9 plan Task 1,
 section 3.2): the candidate artifact, the artifact reference, the finalization
 purpose, the artifact manifest, the two finalization requests, the finalization
-result and the finalization journal entry. Existing entries are never reordered:
-the order is the generation order, and a published `$id` is a permanent contract.
+result and the finalization journal entry; and then the two Stage 9 audit entries
+and the metric entry at positions 43-45 (Stage 9 plan Task 2): the audit event,
+the log record and the metric value. Existing entries are never reordered: the
+order is the generation order, and a published `$id` is a permanent contract.
 """
 
 from __future__ import annotations
@@ -46,6 +48,7 @@ from crypto_lab.artifacts.requests import (
     EvidenceFinalizationRequest,
     ResultFinalizationRequest,
 )
+from crypto_lab.audit.models import AuditEvent, LogRecord
 from crypto_lab.capabilities.comparison import ComparisonEligibilityResult
 from crypto_lab.capabilities.models import (
     ApproximationDeclaration,
@@ -66,6 +69,7 @@ from crypto_lab.domain.descriptors import (
 from crypto_lab.domain.diagnostics import Diagnostic
 from crypto_lab.domain.engine_run import EngineRunRecord
 from crypto_lab.domain.experiment import ExperimentRecord, ExperimentSpec
+from crypto_lab.domain.metrics import MetricValue
 from crypto_lab.domain.records import InstrumentRef, Money, Price, Quantity
 from crypto_lab.domain.retry import RetryDecisionRecord, RetryPolicy
 from crypto_lab.strategy.expressions import EXPRESSION_ADAPTER
@@ -297,6 +301,21 @@ SCHEMA_DEFINITIONS: tuple[SchemaDefinition, ...] = (
         PurePosixPath("artifacts/finalization-journal-entry-v1.schema.json"),
         "urn:crypto-lab:schema:artifacts:finalization-journal-entry:1.0.0",
         TypeAdapter(FinalizationJournalEntry),
+    ),
+    SchemaDefinition(
+        PurePosixPath("audit/audit-event-v1.schema.json"),
+        "urn:crypto-lab:schema:audit:audit-event:1.0.0",
+        TypeAdapter(AuditEvent),
+    ),
+    SchemaDefinition(
+        PurePosixPath("audit/log-record-v1.schema.json"),
+        "urn:crypto-lab:schema:audit:log-record:1.0.0",
+        TypeAdapter(LogRecord),
+    ),
+    SchemaDefinition(
+        PurePosixPath("domain/metric-value-v1.schema.json"),
+        "urn:crypto-lab:schema:domain:metric-value:1.0.0",
+        TypeAdapter(MetricValue),
     ),
 )
 

@@ -156,6 +156,7 @@ from crypto_lab.domain.lifecycle import (
     permitted_successors,
     process_exit_category_for,
 )
+from crypto_lab.domain.metrics import MetricStatus, MetricValue, MetricValueType
 from crypto_lab.domain.ports import CancellationToken, Clock, IdentitySource
 from crypto_lab.domain.records import (
     InstrumentId,
@@ -278,6 +279,9 @@ __all__ = (
     "InvocationId",
     "LogicalSlotId",
     "MarketType",
+    "MetricStatus",
+    "MetricValue",
+    "MetricValueType",
     "Money",
     "MonotonicInstant",
     "NonNegativeDecimal",

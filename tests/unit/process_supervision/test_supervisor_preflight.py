@@ -1243,8 +1243,8 @@ def test_the_source_allowlist_and_import_roots_name_the_supervisor_module() -> N
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert "process_supervision/supervisor.py" in allowed
     assert (
-        len(allowed) == 115
-    )  # Stage 9 Task 1 appended the five artifact contract modules
+        len(allowed) == 121
+    )  # Stage 9 Task 2 appended the five audit modules and the metric module
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "asyncio" in roots
     assert len(roots) == 29  # Stage 8 Task 2 added alembic
@@ -1254,8 +1254,8 @@ def test_the_source_allowlist_and_import_roots_name_the_supervisor_module() -> N
         modules.index("crypto_lab.process_supervision.windows_process") + 1
     )
     assert (
-        len(modules) == 115
-    )  # Stage 9 Task 1 appended the five artifact contract modules
+        len(modules) == 121
+    )  # Stage 9 Task 2 appended the five audit modules and the metric module
 
 
 def test_the_task_five_pin_keeps_its_eleven_names_and_pins_the_nine_doubles() -> None:

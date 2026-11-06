@@ -94,6 +94,7 @@ from crypto_lab.artifacts.requests import (
     EvidenceFinalizationRequest,
     ResultFinalizationRequest,
 )
+from crypto_lab.audit.models import AuditEvent, LogRecord
 from crypto_lab.capabilities.comparison import (
     ComparisonEligibilityResult,
     ComparisonMaterial,
@@ -135,6 +136,7 @@ from crypto_lab.domain.lifecycle import (
     ExperimentState,
     ProcessExitCategory,
 )
+from crypto_lab.domain.metrics import MetricValue
 from crypto_lab.domain.records import InstrumentRef, Money, Price, Quantity
 from crypto_lab.domain.results import Success
 from crypto_lab.domain.retry import RetryDecisionRecord, RetryPolicy
@@ -306,6 +308,15 @@ _EXPECTED = {
     PurePosixPath(
         "artifacts/finalization-journal-entry-v1.schema.json"
     ): "urn:crypto-lab:schema:artifacts:finalization-journal-entry:1.0.0",
+    PurePosixPath(
+        "audit/audit-event-v1.schema.json"
+    ): "urn:crypto-lab:schema:audit:audit-event:1.0.0",
+    PurePosixPath(
+        "audit/log-record-v1.schema.json"
+    ): "urn:crypto-lab:schema:audit:log-record:1.0.0",
+    PurePosixPath(
+        "domain/metric-value-v1.schema.json"
+    ): "urn:crypto-lab:schema:domain:metric-value:1.0.0",
 }
 
 
@@ -382,12 +393,12 @@ def _resolve_local_ref(
     return resolved
 
 
-def test_registry_has_exactly_the_closed_forty_three_paths_and_ids() -> None:
+def test_registry_has_exactly_the_closed_forty_six_paths_and_ids() -> None:
     assert {
         definition.relative_path: definition.schema_id
         for definition in SCHEMA_DEFINITIONS
     } == _EXPECTED
-    assert len(SCHEMA_DEFINITIONS) == 43
+    assert len(SCHEMA_DEFINITIONS) == 46
 
 
 def test_every_schema_is_deterministic_draft_2020_12() -> None:
@@ -972,11 +983,10 @@ _STAGE6_PATHS: Final = (
 )
 
 #: Stage 9 plan section 3.2: the eight artifact entries Task 1 appends in this order
-#: at positions 35-42 (the running slice; Tasks 2, 3 and 7 extend it). Every path
-#: is a new lexical descendant of `schemas/artifacts/` beside the frozen Stage 3
-#: owner-reference entry and every identifier a new permanent
-#: `urn:crypto-lab:schema:artifacts:*`.
-_STAGE9_PATHS: Final = (
+#: at positions 35-42. Every path is a new lexical descendant of
+#: `schemas/artifacts/` beside the frozen Stage 3 owner-reference entry and every
+#: identifier a new permanent `urn:crypto-lab:schema:artifacts:*`.
+_STAGE9_TASK1_PATHS: Final = (
     "artifacts/candidate-artifact-v1.schema.json",
     "artifacts/artifact-ref-v1.schema.json",
     "artifacts/artifact-finalization-purpose-v1.schema.json",
@@ -986,13 +996,24 @@ _STAGE9_PATHS: Final = (
     "artifacts/finalization-result-v1.schema.json",
     "artifacts/finalization-journal-entry-v1.schema.json",
 )
+#: Stage 9 plan section 3.2: the two audit entries and the metric entry Task 2
+#: appends at positions 43-45; `schemas/audit/` is a new directory and the metric
+#: entry is a new lexical descendant of `schemas/domain/` beside the frozen Stage
+#: 3 entries there.
+_STAGE9_TASK2_PATHS: Final = (
+    "audit/audit-event-v1.schema.json",
+    "audit/log-record-v1.schema.json",
+    "domain/metric-value-v1.schema.json",
+)
+#: The running Stage 9 slice (Tasks 3 and 7 extend it).
+_STAGE9_PATHS: Final = _STAGE9_TASK1_PATHS + _STAGE9_TASK2_PATHS
 _ALL_PATHS: Final = (
     _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS + _STAGE6_PATHS + _STAGE9_PATHS
 )
 
 # Two entries register a module-level adapter singleton rather than a fresh
 # `TypeAdapter`, so identity is the exact assertion for them and the adapted
-# type is the exact assertion for the other forty-one. Stage 5, Stage 6 and Stage 9
+# type is the exact assertion for the other forty-four. Stage 5, Stage 6 and Stage 9
 # add no singleton.
 _EXPECTED_ADAPTER_SINGLETONS: Final = {
     "artifacts/artifact-owner-ref-v1.schema.json": ARTIFACT_OWNER_ADAPTER,
@@ -1057,6 +1078,9 @@ _EXPECTED_ADAPTED_TYPES: Final = {
     ),
     "artifacts/finalization-result-v1.schema.json": FinalizationResult,
     "artifacts/finalization-journal-entry-v1.schema.json": FinalizationJournalEntry,
+    "audit/audit-event-v1.schema.json": AuditEvent,
+    "audit/log-record-v1.schema.json": LogRecord,
+    "domain/metric-value-v1.schema.json": MetricValue,
 }
 
 _EXPRESSION_OPERATORS: Final = (
@@ -1222,25 +1246,39 @@ def test_the_eight_stage_six_entries_are_appended_in_the_approved_order() -> Non
 
 
 def test_stage_nine_entries_rendered_and_registered() -> None:
-    """Stage 9 plan section 3.2 and 2.6: Task 1's eight entries at positions 35-42,
-    in the plan's order, each rendered and each equal to its committed file; the
-    thirty-five earlier entries keep their positions and bytes (the four digest
-    blocks below are unedited)."""
-    assert _ordered_paths()[35:43] == _STAGE9_PATHS
+    """Stage 9 plan section 3.2 and 2.6: Task 1's eight entries at positions 35-42
+    and Task 2's three at positions 43-45, in the plan's order, each rendered and
+    each equal to its committed file; the thirty-five earlier entries keep their
+    positions and bytes (the four digest blocks below are unedited)."""
+    assert _STAGE9_PATHS == _STAGE9_TASK1_PATHS + _STAGE9_TASK2_PATHS
+    assert _ordered_paths()[35:43] == _STAGE9_TASK1_PATHS
+    assert _ordered_paths()[43:46] == _STAGE9_TASK2_PATHS
     assert _ordered_paths()[35:] == _STAGE9_PATHS
-    assert len(_STAGE9_PATHS) == 8
-    assert len(SCHEMA_DEFINITIONS) == 43
+    assert len(_STAGE9_TASK1_PATHS) == 8
+    assert len(_STAGE9_TASK2_PATHS) == 3
+    assert len(SCHEMA_DEFINITIONS) == 46
     assert tuple(
-        definition.schema_id for definition in SCHEMA_DEFINITIONS[35:43]
+        definition.schema_id for definition in SCHEMA_DEFINITIONS[35:46]
     ) == tuple(_EXPECTED[PurePosixPath(name)] for name in _STAGE9_PATHS)
-    assert all(name.startswith("artifacts/") for name in _STAGE9_PATHS)
+    assert all(name.startswith("artifacts/") for name in _STAGE9_TASK1_PATHS)
     assert all(
         _EXPECTED[PurePosixPath(name)].startswith("urn:crypto-lab:schema:artifacts:")
-        for name in _STAGE9_PATHS
+        for name in _STAGE9_TASK1_PATHS
     )
-    assert not set(_STAGE9_PATHS) & set(_STAGE3_PATHS)
+    assert tuple(name.partition("/")[0] for name in _STAGE9_TASK2_PATHS) == (
+        "audit",
+        "audit",
+        "domain",
+    )
+    assert tuple(_EXPECTED[PurePosixPath(name)] for name in _STAGE9_TASK2_PATHS) == (
+        "urn:crypto-lab:schema:audit:audit-event:1.0.0",
+        "urn:crypto-lab:schema:audit:log-record:1.0.0",
+        "urn:crypto-lab:schema:domain:metric-value:1.0.0",
+    )
+    earlier = _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS + _STAGE6_PATHS
+    assert not set(_STAGE9_PATHS) & set(earlier)
     assert not {_EXPECTED[PurePosixPath(name)] for name in _STAGE9_PATHS} & {
-        _EXPECTED[PurePosixPath(name)] for name in _STAGE3_PATHS
+        _EXPECTED[PurePosixPath(name)] for name in earlier
     }
     rendered = render_schema_files()
     root = _REPOSITORY_ROOT / "schemas"
@@ -1256,6 +1294,30 @@ def test_stage_nine_entries_rendered_and_registered() -> None:
     purpose = json.loads(rendered[purpose_path])
     assert purpose["enum"] == ["RESULT", "EVIDENCE"]
     assert purpose["type"] == "string"
+    audit_event = json.loads(rendered[PurePosixPath(_STAGE9_TASK2_PATHS[0])])
+    assert len(audit_event["$defs"]["AuditAction"]["enum"]) == 25
+    assert audit_event["$defs"]["AuditOutcome"]["enum"] == [
+        "SUCCEEDED",
+        "REFUSED",
+        "FAILED",
+    ]
+    assert "CalendarValidUtcDateTime" in audit_event["$defs"]
+    assert "UtcDateTime" not in audit_event["$defs"]
+    log_record = json.loads(rendered[PurePosixPath(_STAGE9_TASK2_PATHS[1])])
+    assert log_record["$defs"]["LogSeverity"]["enum"] == [
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+    ]
+    metric = json.loads(rendered[PurePosixPath(_STAGE9_TASK2_PATHS[2])])
+    assert metric["$defs"]["MetricStatus"]["enum"] == [
+        "DEFINED",
+        "UNDEFINED",
+        "NOT_COMPUTED",
+    ]
+    assert "value" not in metric["required"]
 
 
 def test_the_ordered_path_and_identifier_tuples_are_exact_and_unique() -> None:
@@ -1263,21 +1325,21 @@ def test_the_ordered_path_and_identifier_tuples_are_exact_and_unique() -> None:
     identifiers = tuple(definition.schema_id for definition in SCHEMA_DEFINITIONS)
     assert paths == _ALL_PATHS
     assert identifiers == tuple(_EXPECTED[PurePosixPath(name)] for name in _ALL_PATHS)
-    assert len(paths) == 43
-    assert len(set(paths)) == 43
-    assert len(set(identifiers)) == 43
-    assert len({path.rsplit("/", 1)[-1] for path in paths}) == 43
+    assert len(paths) == 46
+    assert len(set(paths)) == 46
+    assert len(set(identifiers)) == 46
+    assert len({path.rsplit("/", 1)[-1] for path in paths}) == 46
 
 
 def test_every_registry_entry_carries_its_exact_adapter() -> None:
-    assert len(_EXPECTED_ADAPTER_SINGLETONS) + len(_EXPECTED_ADAPTED_TYPES) == 43
+    assert len(_EXPECTED_ADAPTER_SINGLETONS) + len(_EXPECTED_ADAPTED_TYPES) == 46
     assert not any(name in _EXPECTED_ADAPTER_SINGLETONS for name in _STAGE5_PATHS)
     assert not any(name in _EXPECTED_ADAPTER_SINGLETONS for name in _STAGE6_PATHS)
     assert not any(name in _EXPECTED_ADAPTER_SINGLETONS for name in _STAGE9_PATHS)
     # Stage 6 plan 12.1: every Stage 6 entry is a fresh `TypeAdapter`, and no two
-    # entries share one adapter object; Stage 9 Task 1 keeps both properties.
+    # entries share one adapter object; Stage 9 Tasks 1 and 2 keep both properties.
     adapters = [definition.adapter for definition in SCHEMA_DEFINITIONS]
-    assert len({id(adapter) for adapter in adapters}) == 43
+    assert len({id(adapter) for adapter in adapters}) == 46
     for definition in SCHEMA_DEFINITIONS:
         name = definition.relative_path.as_posix()
         singleton = _EXPECTED_ADAPTER_SINGLETONS.get(name)
@@ -1292,14 +1354,14 @@ def test_every_rendered_schema_equals_its_committed_generated_file() -> None:
     """Generated bytes are reviewed source, so the file is the contract."""
     rendered = render_schema_files()
     root = _REPOSITORY_ROOT / "schemas"
-    assert len(rendered) == 43
+    assert len(rendered) == 46
     for path, contents in rendered.items():
         target = root.joinpath(*path.parts)
         assert target.is_file(), path
         assert target.read_bytes() == contents, path
 
 
-def test_the_schemas_directory_holds_exactly_the_forty_three_registered_files() -> None:
+def test_the_schemas_directory_holds_exactly_the_forty_six_registered_files() -> None:
     """Two directions: every registered file exists, and no unregistered file does."""
     root = _REPOSITORY_ROOT / "schemas"
     found = tuple(
@@ -1310,7 +1372,7 @@ def test_the_schemas_directory_holds_exactly_the_forty_three_registered_files() 
         )
     )
     assert found == tuple(sorted(_ALL_PATHS))
-    assert len(found) == 43
+    assert len(found) == 46
 
 
 def test_every_committed_schema_file_is_valid_draft_2020_12_json() -> None:

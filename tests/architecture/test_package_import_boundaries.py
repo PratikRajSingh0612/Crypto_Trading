@@ -184,6 +184,29 @@ _PROHIBITED_FOR_ARTIFACTS: tuple[str, ...] = (
 #: itself (specification 27.1: the record package depends on canonical domain
 #: types alone).
 _ALLOWED_FOR_ARTIFACTS: tuple[str, ...] = ("crypto_lab.domain", "crypto_lab.artifacts")
+_AUDIT = "audit"
+#: Stage 9 plan section 2.6 (architecture closure), Task 2: every central package
+#: ``audit`` may never reach. ``artifacts`` is first -- the two Stage 9 packages
+#: import ``domain`` and themselves only (plan "Dependency direction"), so the
+#: audit contracts carry artifact identities as ``domain`` identifier types and
+#: never the artifact records -- and ``schema_registry`` is repeated so the
+#: scanner's self-test names it explicitly for this package too.
+_PROHIBITED_FOR_AUDIT: tuple[str, ...] = (
+    "crypto_lab.artifacts",
+    "crypto_lab.adapters",
+    "crypto_lab.experiments",
+    "crypto_lab.strategy",
+    "crypto_lab.capabilities",
+    "crypto_lab.datasets",
+    "crypto_lab.persistence",
+    "crypto_lab.process_supervision",
+    "crypto_lab.configuration",
+    "crypto_lab.cli",
+    _COMPOSITION_MODULE,
+)
+#: Stage 9 plan section 2.6: the scope closure of ``audit`` -- ``domain`` and itself
+#: (specification 27.1: the audit package depends on canonical domain types alone).
+_ALLOWED_FOR_AUDIT: tuple[str, ...] = ("crypto_lab.domain", "crypto_lab.audit")
 
 
 @dataclass(frozen=True, order=True, slots=True)
@@ -552,6 +575,45 @@ def test_artifacts_reaches_only_domain_and_itself(repository_root: Path) -> None
     assert "crypto_lab.artifacts.ownership" in reached
 
 
+def test_audit_imports_nothing_from_any_prohibited_package(
+    repository_root: Path,
+) -> None:
+    """Stage 9 plan section 2.6: the audit package never imports ``artifacts``
+    (the two Stage 9 packages are siblings over ``domain``), any other central
+    package, or the composition module."""
+    assert _PROHIBITED_FOR_AUDIT[-1] == _COMPOSITION_MODULE
+    assert (
+        find_package_import_violations(
+            _package_root(repository_root, _AUDIT),
+            _AUDIT,
+            _PROHIBITED_FOR_AUDIT,
+        )
+        == ()
+    )
+
+
+def test_audit_reaches_only_domain_and_itself(repository_root: Path) -> None:
+    """The Stage 9 scope closure of ``audit`` (module constant).
+
+    Anchored positively on the cross-package edges Task 2 actually takes -- the
+    detail bounds and denylist of ``domain.diagnostics``, the named profile of
+    ``domain.hashing`` and the ``Result`` values of ``domain.results`` -- and on the
+    in-package edge the models take to ``audit.redaction``, so the assertion
+    cannot pass on an empty scan.
+    """
+    reached = _allowed_project_imports(_package_root(repository_root, _AUDIT), _AUDIT)
+    unexpected = tuple(
+        name
+        for name in reached
+        if not any(_is_within(name, allowed) for allowed in _ALLOWED_FOR_AUDIT)
+    )
+    assert unexpected == ()
+    assert "crypto_lab.domain.diagnostics" in reached
+    assert "crypto_lab.domain.hashing" in reached
+    assert "crypto_lab.domain.results" in reached
+    assert "crypto_lab.audit.redaction" in reached
+
+
 # --------------------------------------------------------------------------
 # Scanner self-tests -- a guard that cannot fail is not a guard
 # --------------------------------------------------------------------------
@@ -723,6 +785,41 @@ def test_the_artifacts_allowlist_rejects_the_adapter_grammar_edge(
     assert not any(
         _is_within(reached[0], allowed) for allowed in _ALLOWED_FOR_ARTIFACTS
     )
+
+
+@pytest.mark.parametrize("prohibited_package", _PROHIBITED_FOR_AUDIT)
+def test_the_scanner_rejects_every_package_prohibited_for_audit(
+    tmp_path: Path,
+    prohibited_package: str,
+) -> None:
+    """Stage 9 Task 2: the same self-test over the ``audit`` prohibited set."""
+    package_root = _write_package(tmp_path, _AUDIT, f"import {prohibited_package}\n")
+
+    violations = find_package_import_violations(
+        package_root, _AUDIT, _PROHIBITED_FOR_AUDIT
+    )
+
+    assert tuple(item.imported_name for item in violations) == (prohibited_package,)
+
+
+def test_the_audit_allowlist_rejects_the_sibling_artifacts_edge(
+    tmp_path: Path,
+) -> None:
+    """The allowlist is a scope closure: the sibling Stage 9 record package is
+    outside it, so a planted edge -- function-local just the same -- must surface
+    as unexpected."""
+    package_root = _write_package(
+        tmp_path,
+        _AUDIT,
+        "def owner() -> None:\n"
+        "    from crypto_lab.artifacts.models import ArtifactRef\n"
+        "    del ArtifactRef\n",
+    )
+
+    reached = _allowed_project_imports(package_root, _AUDIT)
+
+    assert reached == ("crypto_lab.artifacts.models",)
+    assert not any(_is_within(reached[0], allowed) for allowed in _ALLOWED_FOR_AUDIT)
 
 
 @pytest.mark.parametrize(
