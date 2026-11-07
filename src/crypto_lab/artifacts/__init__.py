@@ -4,8 +4,11 @@ Stage 3 placed the owner variants here; Stage 9 Task 1 adds the canonical
 contracts of the finalization flow -- the candidate and reference records, the
 two typed finalization requests, the journal entry with its move records, the
 artifact manifest and the artifact diagnostic table -- all importing ``domain``
-alone (specification 27.1). The finalizer, store and recovery arrive in later
-Stage 9 tasks.
+alone (specification 27.1). Stage 9 Task 4 adds the filesystem discipline of plan
+section 6: path confinement with its identity recheck, the streaming hasher and
+exact-byte token scan, the phase-1 candidate validation and the content-addressed
+store with its preflight, atomic move, quarantine and core-staging writer. The
+finalizer and recovery arrive in later Stage 9 tasks.
 """
 
 from crypto_lab.artifacts.diagnostics import (
@@ -21,6 +24,13 @@ from crypto_lab.artifacts.diagnostics import (
     ArtifactDiagnosticPosture,
     artifact_diagnostic,
     artifact_failure,
+)
+from crypto_lab.artifacts.hashing import (
+    DEFAULT_CHUNK_BYTES,
+    TOKEN_SHAPE_PATTERN,
+    ContentHasher,
+    HashScan,
+    StreamingContentHasher,
 )
 from crypto_lab.artifacts.journal import (
     FINALIZATION_JOURNAL_TRANSITIONS,
@@ -73,6 +83,17 @@ from crypto_lab.artifacts.ownership import (
     artifact_owner_hash,
     owner_presentation,
 )
+from crypto_lab.artifacts.paths import (
+    CHANGED_WHILE_FINALIZING,
+    ConfinedPath,
+    FileIdentity,
+    StatLike,
+    confine_candidate_path,
+    file_identity_of,
+    is_within_root,
+    lexical_candidate_path,
+    recheck_confined_path,
+)
 from crypto_lab.artifacts.requests import (
     PERMITTED_CORRELATION_KINDS,
     EvidenceCorrelation,
@@ -80,8 +101,39 @@ from crypto_lab.artifacts.requests import (
     ResultFinalizationRequest,
     validate_evidence_correlation_kind,
 )
+from crypto_lab.artifacts.store import (
+    CORE_INVARIANT_VIOLATION,
+    MANIFESTS_SEGMENT,
+    OBJECTS_SEGMENT,
+    PROCESS_PATH_PREFLIGHT_REJECTED,
+    QUARANTINE_METADATA_NAME,
+    STORE_DIAGNOSTIC_POSTURES,
+    ArtifactStore,
+    MoveOutcome,
+    QuarantineEntry,
+    QuarantineMetadata,
+    QuarantineOutcome,
+    RemovalReport,
+    same_volume,
+    scan_confined,
+)
+from crypto_lab.artifacts.validation import (
+    ADMITTED_MEDIA_TYPES,
+    DEFAULT_CEILINGS,
+    JSON_MEDIA_TYPES,
+    MAX_CANDIDATE_BYTES,
+    MAX_JSON_PARSE_BYTES,
+    MAX_MANIFEST_BYTES,
+    MAX_STDERR_EVIDENCE_BYTES,
+    TEXT_MEDIA_TYPES,
+    CandidateValidation,
+    ValidatedCandidate,
+    ValidationCeilings,
+    validate_candidate,
+)
 
 __all__ = (
+    "ADMITTED_MEDIA_TYPES",
     "ARTIFACT_DIAGNOSTIC_CODES",
     "ARTIFACT_FINALIZATION_TIMED_OUT",
     "ARTIFACT_MOVE_FAILED",
@@ -93,12 +145,28 @@ __all__ = (
     "ARTIFACT_VALIDATION_FAILED",
     "ARTIFACT_VALIDATION_PROFILE",
     "CANDIDATE_ARTIFACT_TRANSITIONS",
+    "CHANGED_WHILE_FINALIZING",
+    "CORE_INVARIANT_VIOLATION",
+    "DEFAULT_CEILINGS",
+    "DEFAULT_CHUNK_BYTES",
     "EVIDENCE_ROLES",
     "FINALIZATION_JOURNAL_TRANSITIONS",
+    "JSON_MEDIA_TYPES",
+    "MANIFESTS_SEGMENT",
+    "MAX_CANDIDATE_BYTES",
+    "MAX_JSON_PARSE_BYTES",
+    "MAX_MANIFEST_BYTES",
+    "MAX_STDERR_EVIDENCE_BYTES",
+    "OBJECTS_SEGMENT",
     "PERMITTED_CORRELATION_KINDS",
     "PERMITTED_ROLE_TUPLES",
+    "PROCESS_PATH_PREFLIGHT_REJECTED",
+    "QUARANTINE_METADATA_NAME",
     "RESULT_ROLES",
     "SECURITY_SENSITIVE_MATERIAL_LEAKAGE",
+    "STORE_DIAGNOSTIC_POSTURES",
+    "TEXT_MEDIA_TYPES",
+    "TOKEN_SHAPE_PATTERN",
     "AdapterArtifactOwner",
     "ArtifactDiagnosticPosture",
     "ArtifactFinalizationPurpose",
@@ -108,28 +176,43 @@ __all__ = (
     "ArtifactOwnerRef",
     "ArtifactRef",
     "ArtifactSourceRole",
+    "ArtifactStore",
     "CandidateArtifact",
     "CandidateArtifactProducerKind",
     "CandidateArtifactRuleViolation",
     "CandidateArtifactState",
     "CandidateFinalization",
+    "CandidateValidation",
+    "ConfinedPath",
+    "ContentHasher",
     "DatasetArtifactOwner",
     "EvidenceCorrelation",
     "EvidenceFinalizationRequest",
     "ExperimentArtifactOwner",
+    "FileIdentity",
     "FinalizationJournalEntry",
     "FinalizationJournalRuleViolation",
     "FinalizationJournalState",
     "FinalizationResult",
     "FinalizedRelativePath",
+    "HashScan",
     "MediaType",
+    "MoveOutcome",
     "ObservedMove",
     "PlannedMove",
+    "QuarantineEntry",
+    "QuarantineMetadata",
+    "QuarantineOutcome",
     "RelativeStagingPath",
+    "RemovalReport",
     "ResultFinalizationRequest",
     "RunArtifactOwner",
+    "StatLike",
     "StrategyArtifactOwner",
+    "StreamingContentHasher",
     "SystemArtifactOwner",
+    "ValidatedCandidate",
+    "ValidationCeilings",
     "ValidationObservation",
     "artifact_diagnostic",
     "artifact_failure",
@@ -137,9 +220,17 @@ __all__ = (
     "artifact_owner_hash",
     "assert_candidate_transition",
     "assert_journal_transition",
+    "confine_candidate_path",
+    "file_identity_of",
     "finalized_relative_path_for",
+    "is_within_root",
+    "lexical_candidate_path",
     "owner_kind_of",
     "owner_presentation",
+    "recheck_confined_path",
+    "same_volume",
+    "scan_confined",
+    "validate_candidate",
     "validate_evidence_correlation_kind",
     "validate_role_combination",
 )

@@ -125,6 +125,7 @@ _ARCHITECTURE_GUARD = (
     _REPOSITORY / "tests/architecture/test_package_import_boundaries.py"
 )
 _PACKAGE_LAYOUT = _REPOSITORY / "tests/unit/test_package_layout.py"
+_STAGE8_GUARD = _REPOSITORY / "tests/safety/test_stage8_boundaries.py"
 _PREFLIGHT_TESTS = (
     _REPOSITORY / "tests/unit/process_supervision/test_supervisor_preflight.py"
 )
@@ -1805,30 +1806,58 @@ def test_a_non_dbapi_error_at_commit_releases_the_connection_before_it_escapes(
 def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert {"persistence/database.py", "persistence/diagnostics.py"} <= allowed
-    assert len(allowed) == 121  # Stage 9 Task 2 appended the audit and metric modules
+    assert len(allowed) == 125  # Stage 9 Task 4 appended the four store modules
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "sqlalchemy" in roots
     assert "alembic" in roots  # Task 2 added it
-    assert roots.isdisjoint({"sqlite3", "os", "sys", "time", "logging"})
-    assert len(roots) == 29
+    # Stage 9 plan section 2.6 (Task 4): the tree-wide allowlist now carries `os`,
+    # confined to `artifacts/store.py` by
+    # `tests/unit/artifacts/test_artifact_store.py`, so the five-root
+    # disjointness is restated over the persistence modules alone -- the scope of
+    # the Stage 8 denylist `_PERSISTENCE_FORBIDDEN_ROOTS`, which proves the same.
+    persistence_modules = {
+        path
+        for path in _literal(_STAGE8_GUARD, "STAGE8_SOURCE_FILES")
+        if path.startswith("persistence/")
+    } | {"persistence/__init__.py"}
+    assert len(persistence_modules) == 14
+    for relative in sorted(persistence_modules):
+        tree = ast.parse(
+            (_REPOSITORY / "src/crypto_lab" / relative).read_text(encoding="utf-8")
+        )
+        imported = {
+            alias.name.partition(".")[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {
+            node.module.partition(".")[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.module is not None
+        }
+        assert imported.isdisjoint({"sqlite3", "os", "sys", "time", "logging"}), (
+            relative
+        )
+    assert "os" in roots  # Stage 9 Task 4 added it
+    assert len(roots) == 30
     modules = _literal(_PACKAGE_LAYOUT, "PACKAGE_MODULES")
     anchor = modules.index("crypto_lab.persistence")
     assert modules[anchor + 1 : anchor + 3] == (
         "crypto_lab.persistence.database",
         "crypto_lab.persistence.diagnostics",
     )
-    assert len(modules) == 121
+    assert len(modules) == 125
 
 
 def test_the_two_cross_pins_moved_to_the_running_sizes() -> None:
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     reconciliation = _RECONCILIATION_TESTS.read_text(encoding="utf-8")
     for source in (preflight, reconciliation):
-        assert "len(allowed) == 121" in source
-        assert "len(modules) == 121" in source
+        assert "len(allowed) == 125" in source
+        assert "len(modules) == 125" in source
         assert "len(allowed) == 95" not in source
         assert "len(modules) == 95" not in source
-    assert "len(roots) == 29" in preflight
+    assert "len(roots) == 30" in preflight
     assert "len(roots) == 27" not in preflight
 
 

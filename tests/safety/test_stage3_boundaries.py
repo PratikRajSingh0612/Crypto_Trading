@@ -36,11 +36,15 @@ _ALLOWED_SOURCE_FILES = {
     "adapters/vocabulary.py",
     "artifacts/__init__.py",
     "artifacts/diagnostics.py",
+    "artifacts/hashing.py",
     "artifacts/journal.py",
     "artifacts/manifest.py",
     "artifacts/models.py",
     "artifacts/ownership.py",
+    "artifacts/paths.py",
     "artifacts/requests.py",
+    "artifacts/store.py",
+    "artifacts/validation.py",
     "audit/__init__.py",
     "audit/correlation.py",
     "audit/jsonl.py",
@@ -156,6 +160,7 @@ _ALLOWED_IMPORT_ROOTS = {
     "hashlib",
     "importlib",
     "json",
+    "os",
     "pathlib",
     "pydantic",
     "queue",
@@ -196,7 +201,6 @@ _DEFERRED_DEFINITIONS = {
     "CanonicalFill",
     "CanonicalOrder",
     "ComparisonEligibilityService",
-    "ContentHasher",
     "EquityPoint",
     "Fee",
     "OrderSide",
@@ -470,9 +474,16 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
     twenty-seven plus the roots added so far: Task 1 added `sqlalchemy`
     (`persistence/database.py`), giving 28; Task 2 added `alembic`
     (`persistence/migration_runner.py`, `persistence/migrations/env.py` and the
-    baseline revision), giving 29. The test name is historical and is kept.
+    baseline revision), giving 29.
+
+    The Stage 9 plan's section 2.6 adds exactly one root, `os`, in Task 4 -- the
+    task that first imports it -- confined to `artifacts/store.py` and to the two
+    attributes `fstat` and `fsync` by the tree-wide
+    `tests/unit/artifacts/test_artifact_store.py::test_os_is_imported_only_by_the_artifact_store`
+    and `::test_os_usage_is_fstat_and_fsync_only`, giving 30. The test name is
+    historical and is kept.
     """
-    assert len(_ALLOWED_IMPORT_ROOTS) == 29
+    assert len(_ALLOWED_IMPORT_ROOTS) == 30
     assert _ALLOWED_IMPORT_ROOTS == {
         "__future__",
         "alembic",
@@ -491,6 +502,7 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
         "hashlib",
         "importlib",
         "json",
+        "os",
         "pathlib",
         "pydantic",
         "queue",
@@ -718,9 +730,13 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     of the representative-mutation list for still-deferred names so seven live
     cases remain; Task 2 released `AuditEvent` (`audit/models.py`), `AuditSink`
     (`audit/sink.py`) and `MetricValue` (`domain/metrics.py`), giving 19, and
-    swapped its two released members of the mutation list the same way.
+    swapped its two released members of the mutation list the same way; Task 4
+    released `ContentHasher` (`artifacts/hashing.py`), giving 18 on the
+    Task-3-excluded branch of the plan's branch table (Task 3 is not implemented
+    and not accepted), and swapped it for `ingest_dataset`, the first function
+    name on the list, so the plant shape below generalizes to `def`.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 19
+    assert len(_DEFERRED_DEFINITIONS) == 18
     assert _DEFERRED_DEFINITIONS == {
         "ArtifactFinalizer",
         "ArtifactRepository",
@@ -728,7 +744,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "CanonicalFill",
         "CanonicalOrder",
         "ComparisonEligibilityService",
-        "ContentHasher",
         "EquityPoint",
         "Fee",
         "OrderSide",
@@ -778,9 +793,11 @@ def test_each_normative_deferred_symbol_is_detected_by_the_stage3_guard(
         "RunManifest",
         "PortfolioSnapshot",
         # Stage 9 plan section 2.6: Task 1 released `ArtifactRef` (the name Stage 6
-        # Task 4 had swapped in for `RunEvent`) and swapped in a still-deferred
-        # name so seven live cases remain.
-        "ContentHasher",
+        # Task 4 had swapped in for `RunEvent`) and swapped in `ContentHasher`;
+        # Task 4 released that and swapped in a still-deferred name -- the first
+        # function name on the list, so the plant shape generalizes to `def` --
+        # so seven live cases remain.
+        "ingest_dataset",
         # Stage 7 plan section 2.6: Task 2 released `ProcessSupervisor` (the name
         # Stage 6 Task 1 had swapped in for `ValidationOutcome`) and swapped in a
         # still-deferred name so seven live cases remain.
@@ -788,7 +805,12 @@ def test_each_normative_deferred_symbol_is_detected_by_the_stage3_guard(
     ],
 )
 def test_representative_later_stage_type_mutations_are_blocked(name: str) -> None:
-    tree = ast.parse(f"class {name}:\n    pass\n")
+    keyword = "class" if name[0].isupper() else "def"
+    tree = ast.parse(
+        f"class {name}:\n    pass\n"
+        if keyword == "class"
+        else f"def {name}():\n    pass\n"
+    )
     later = {
         node.name
         for node in ast.walk(tree)
@@ -891,6 +913,46 @@ def test_each_stage_nine_task_two_name_is_defined_exactly_once_in_its_module(
         name: [module] for name, module in _STAGE9_TASK2_RELEASED_DEFINITIONS.items()
     }
     assert {*_STAGE9_TASK2_RELEASED_DEFINITIONS.values()} <= _ALLOWED_SOURCE_FILES
+
+
+#: Stage 9 plan section 2.6 (released-names table), Task 4: the one name the
+#: streaming hasher defines, in exactly its module. Task 3 is not implemented, so
+#: its nine normalized names stay deferred (the Task-3-excluded branch).
+_STAGE9_TASK4_RELEASED_DEFINITIONS = {
+    "ContentHasher": "artifacts/hashing.py",
+}
+
+
+def test_each_stage_nine_task_four_name_is_defined_exactly_once_in_its_module(
+    repository_root: Path,
+) -> None:
+    """Task 4's positive, the same shape as Task 1's and Task 2's (plan 2.6)."""
+    assert len(_STAGE9_TASK4_RELEASED_DEFINITIONS) == 1
+    assert set(_STAGE9_TASK4_RELEASED_DEFINITIONS).isdisjoint(_DEFERRED_DEFINITIONS)
+    assert set(_STAGE9_TASK4_RELEASED_DEFINITIONS).isdisjoint(
+        _STAGE9_TASK1_RELEASED_DEFINITIONS
+    )
+    assert set(_STAGE9_TASK4_RELEASED_DEFINITIONS).isdisjoint(
+        _STAGE9_TASK2_RELEASED_DEFINITIONS
+    )
+    assert set(_STAGE9_STILL_DEFERRED_FINALIZATION_NAMES) <= _DEFERRED_DEFINITIONS
+    source_root = repository_root / "src/crypto_lab"
+    definers: dict[str, list[str]] = {
+        name: [] for name in _STAGE9_TASK4_RELEASED_DEFINITIONS
+    }
+    for path in _source_files(repository_root):
+        relative = path.relative_to(source_root).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+                and node.name in definers
+            ):
+                definers[node.name].append(relative)
+    assert definers == {
+        name: [module] for name, module in _STAGE9_TASK4_RELEASED_DEFINITIONS.items()
+    }
+    assert {*_STAGE9_TASK4_RELEASED_DEFINITIONS.values()} <= _ALLOWED_SOURCE_FILES
 
 
 def test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctly() -> (

@@ -769,10 +769,12 @@ def test_the_stage_eight_source_files_are_exactly_the_fifteen_plan_paths(
     assert _PERSISTENCE_PACKAGE_INIT in _ALLOWED_SOURCE_FILES
     assert _PERSISTENCE_PACKAGE_INIT not in STAGE8_SOURCE_FILES
     # The whole inventory: 95 at the planning base plus the fifteen, plus the five
-    # artifact contract modules of Stage 9 Task 1 and the five audit modules and
-    # the metric module of Stage 9 Task 2 (Stage 9 plan section 2.6).
-    assert len(_ALLOWED_SOURCE_FILES) == 121
-    assert len(_source_files(repository_root)) == 121
+    # artifact contract modules of Stage 9 Task 1, the five audit modules and
+    # the metric module of Stage 9 Task 2, and the four path, hashing, validation
+    # and store modules of Stage 9 Task 4 (Stage 9 plan section 2.6, the
+    # Task-3-excluded branch).
+    assert len(_ALLOWED_SOURCE_FILES) == 125
+    assert len(_source_files(repository_root)) == 125
     on_disk = {
         _label(repository_root, path)
         for path in _source_files(repository_root)
@@ -883,8 +885,9 @@ def test_persistence_names_no_raw_token_bare_identifier_or_deferred_name(
     assert definers == ["datasets/ports.py"]
     # Stage 9 plan section 2.6 (Task 1): 33 -> 22; the `<=` pin over the retired
     # Stage 7 literal is replaced by the Stage 3 guard's released-names positive.
-    # Task 2: 22 -> 19 (`AuditEvent`, `AuditSink`, `MetricValue`).
-    assert len(_DEFERRED_DEFINITIONS) == 19
+    # Task 2: 22 -> 19 (`AuditEvent`, `AuditSink`, `MetricValue`). Task 4: 19 -> 18
+    # (`ContentHasher`) on the Task-3-excluded branch.
+    assert len(_DEFERRED_DEFINITIONS) == 18
 
 
 def test_diagnostic_ids_are_written_only_through_the_whole_row_encode(
@@ -944,11 +947,12 @@ def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
     ``tests/unit/test_schema_registry.py``)."""
     # Stage 9 plan section 2.6, Task 1: paths 110 -> 115, deferred names 33 -> 22,
     # registry and files 35 -> 43, hashing profiles 12 -> 17; Task 2: paths -> 121,
-    # deferred names -> 19, registry and files -> 46, profiles -> 18; the rest is
-    # unchanged.
-    assert len(_ALLOWED_SOURCE_FILES) == 121
-    assert len(_ALLOWED_IMPORT_ROOTS) == 29
-    assert len(_DEFERRED_DEFINITIONS) == 19
+    # deferred names -> 19, registry and files -> 46, profiles -> 18; Task 4
+    # (Task-3-excluded branch): paths -> 125, import roots 29 -> 30 (`os`),
+    # deferred names -> 18; the rest is unchanged.
+    assert len(_ALLOWED_SOURCE_FILES) == 125
+    assert len(_ALLOWED_IMPORT_ROOTS) == 30
+    assert len(_DEFERRED_DEFINITIONS) == 18
     assert len(_INFRASTRUCTURE_EXEMPTIONS) == 13
     assert len(_EXPECTED_READER_IMPLEMENTATIONS) == 5
     assert len(_SUBPROCESS_IMPORTERS) == 12
