@@ -63,9 +63,11 @@ statement that could contain row values (plan 6.5).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Final
 
-from pydantic import ValidationError
+from pydantic import InstanceOf, ValidationError
 from pydantic.experimental.missing_sentinel import MISSING
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
@@ -76,8 +78,18 @@ from crypto_lab.adapters.events import RunEvent
 from crypto_lab.configuration.models import ApplicationConfig
 from crypto_lab.configuration.retry_policy import retry_policy_from_config
 from crypto_lab.domain.command_invocation import CommandInvocationRecord
-from crypto_lab.domain.diagnostics import DiagnosticDetailValue
-from crypto_lab.domain.engine_run import EngineRunRecord
+from crypto_lab.domain.diagnostics import (
+    Diagnostic,
+    DiagnosticCategory,
+    DiagnosticDetailValue,
+)
+from crypto_lab.domain.engine_run import (
+    DEADLINE_SNAPSHOT_STATES,
+    EngineRunRecord,
+    EngineRunRuleViolation,
+    assert_deadline_snapshot,
+    assert_run_transition,
+)
 from crypto_lab.domain.experiment import (
     ExperimentRecord,
     experiment_configuration_hash,
@@ -87,8 +99,15 @@ from crypto_lab.domain.identifiers import (
     InvocationId,
     LogicalSlotId,
     RunId,
+    Sha256,
 )
-from crypto_lab.domain.lifecycle import CommandKind, ExperimentState
+from crypto_lab.domain.lifecycle import (
+    CommandInvocationState,
+    CommandKind,
+    EngineRunState,
+    ExperimentState,
+    ProcessExitCategory,
+)
 from crypto_lab.domain.ports import Clock
 from crypto_lab.domain.results import Failure, Result, Success
 from crypto_lab.domain.retry import RetryDecisionRecord
@@ -124,12 +143,35 @@ from crypto_lab.persistence.schema import (
 )
 
 __all__ = [
+    "ResultLeaseFacts",
     "SqliteCommandInvocationRepository",
     "SqliteEngineRunRepository",
     "SqliteExperimentRepository",
     "SqliteRetryDecisionRepository",
     "TransactionScope",
 ]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ResultLeaseFacts:
+    """Stage 9 plan 4.1: the facts ``active_attempt_facts`` answers for one run and
+    its run-command invocation -- revisions, states, categories and the latest
+    attempt predicate (reading 4); a value object, never a verdict."""
+
+    run_id: RunId
+    run_invocation_id: InvocationId
+    experiment_id: ExperimentId
+    run_state: EngineRunState
+    run_revision: int
+    attempt_token_hash: Sha256
+    deadline_snapshotted: bool
+    invocation_state: CommandInvocationState
+    invocation_revision: int
+    command_kind: CommandKind
+    process_exit_category: ProcessExitCategory | MISSING  # type: ignore[valid-type]
+    experiment_state: ExperimentState | MISSING  # type: ignore[valid-type]
+    is_latest_attempt: bool
+
 
 #: Reading 3: the I/O class alone closes the transaction, because SQLite may
 #: have ended it already. Every other refusal -- conflict, invariant, and the
@@ -892,7 +934,7 @@ class SqliteEngineRunRepository:
     def _encoded_run(
         self, record: EngineRunRecord, *, operation: str
     ) -> RowValues | Failure:
-        """Rule N4, decided at this boundary and nowhere else.
+        """Rule N4, the Stage 9 state-governed pair, decided at this boundary.
 
         The condition is tested directly rather than caught, because
         ``encode_engine_run`` can raise ``ValueError`` for reasons that are not
@@ -901,17 +943,192 @@ class SqliteEngineRunRepository:
         codec's contract is untouched; the message names the rule, never the
         exception text, a bound parameter or a record value; and no validated
         record reaches this branch, because the committed ``EngineRunRecord``
-        validator forces the field absent.
+        validator admits the deadline only in ``DEADLINE_SNAPSHOT_STATES``.
         """
-        if "finalization_deadline_utc" in record.model_dump(mode="json"):
+        if (
+            "finalization_deadline_utc" in record.model_dump(mode="json")
+            and record.state not in DEADLINE_SNAPSHOT_STATES
+        ):
             return self._scope.invariant(
-                f"engine run {record.run_id} carries a finalization deadline, "
-                "which rule N4 gives no column",
+                f"engine run {record.run_id} carries a finalization deadline in "
+                f"{record.state.value}, which rule N4 admits only in a deadline "
+                "snapshot state",
                 table="engine_runs",
                 operation=operation,
                 identity=record.run_id,
             )
         return encode_engine_run(record)
+
+    # -- Stage 9 plan 4.1: the ``ResultLeaseRepository`` members (Task 5) --------
+
+    def snapshot_deadline(
+        self, expected_run_revision: int, run_id: RunId, deadline_utc: datetime
+    ) -> Result[EngineRunRecord]:
+        """The RESULT lease's one ``RUNNING -> RUNNING`` write (plan 4.3 phase 2):
+        add ``finalization_deadline_utc`` under ``assert_deadline_snapshot`` and
+        swap at ``expected_run_revision``; the stored row is read first so a stale
+        revision is the conflict and a non-``RUNNING`` or already-snapshotted run
+        is the invariant before anything is written."""
+        stored = self.get(run_id)
+        if isinstance(stored, Failure):
+            return stored
+        current = stored.value
+        if current.revision != expected_run_revision:
+            return self._scope.conflict(
+                f"run {run_id} is at revision {current.revision}, "
+                f"not {expected_run_revision}",
+                table="engine_runs",
+                operation="snapshot_deadline",
+                identity=run_id,
+            )
+        payload = current.model_dump(mode="python")
+        payload["finalization_deadline_utc"] = deadline_utc
+        payload["revision"] = current.revision + 1
+        payload["updated_at_utc"] = max(
+            current.updated_at_utc, self._scope.clock.now_utc()
+        )
+        try:
+            replacement = EngineRunRecord.model_validate(payload)
+            assert_deadline_snapshot(current, replacement)
+        except (ValidationError, EngineRunRuleViolation) as violation:
+            return self._scope.invariant(
+                f"run {run_id} admits no deadline snapshot: {violation}",
+                table="engine_runs",
+                operation="snapshot_deadline",
+                identity=run_id,
+            )
+        return self.compare_and_swap(expected_run_revision, replacement)
+
+    def record_timeout(
+        self, expected_run_revision: int, run_id: RunId, diagnostic: Diagnostic
+    ) -> Result[EngineRunRecord]:
+        """Plan 4.5: ``RUNNING -> TIMED_OUT`` with the finalization-timeout
+        diagnostic as primary, under ``assert_run_transition`` (owner ``GENERIC``);
+        the diagnostic must be a ``TIMEOUT`` naming its invocation."""
+        if diagnostic.category is not DiagnosticCategory.TIMEOUT or not isinstance(
+            diagnostic.invocation_id, str
+        ):
+            return self._scope.invariant(
+                f"run {run_id} timeout requires a TIMEOUT diagnostic naming its "
+                "invocation",
+                table="engine_runs",
+                operation="record_timeout",
+                identity=run_id,
+            )
+        stored = self.get(run_id)
+        if isinstance(stored, Failure):
+            return stored
+        current = stored.value
+        if current.revision != expected_run_revision:
+            return self._scope.conflict(
+                f"run {run_id} is at revision {current.revision}, "
+                f"not {expected_run_revision}",
+                table="engine_runs",
+                operation="record_timeout",
+                identity=run_id,
+            )
+        payload = current.model_dump(mode="python")
+        payload["state"] = EngineRunState.TIMED_OUT
+        payload["primary_terminal_diagnostic_id"] = diagnostic.diagnostic_id
+        payload["revision"] = current.revision + 1
+        payload["updated_at_utc"] = max(
+            current.updated_at_utc, self._scope.clock.now_utc()
+        )
+        try:
+            replacement = EngineRunRecord.model_validate(payload)
+            assert_run_transition(current, replacement)
+        except (ValidationError, EngineRunRuleViolation) as violation:
+            return self._scope.invariant(
+                f"run {run_id} admits no finalization timeout: {violation}",
+                table="engine_runs",
+                operation="record_timeout",
+                identity=run_id,
+            )
+        return self.compare_and_swap(expected_run_revision, replacement)
+
+    def active_attempt_facts(
+        self, run_id: RunId, run_invocation_id: InvocationId
+    ) -> Result[ResultLeaseFacts]:
+        """Plan 4.1: the revisions, states and categories the RESULT lease checks
+        before ``PREPARED`` -- a value object, never a decision."""
+        opened = self._scope.open_statement()
+        if isinstance(opened, Failure):
+            return opened
+        run = self.get(run_id)
+        if isinstance(run, Failure):
+            return run
+        current = run.value
+        try:
+            invocation = (
+                opened.execute(
+                    select(CommandInvocationRow).where(
+                        CommandInvocationRow.invocation_id == run_invocation_id
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            experiment_state = opened.execute(
+                select(ExperimentRow.state).where(
+                    ExperimentRow.experiment_id == current.experiment_id
+                )
+            ).scalar_one_or_none()
+        except DBAPIError as error:
+            return self._scope.refused(
+                error,
+                table="engine_runs",
+                operation="active_attempt_facts",
+                identity=run_id,
+            )
+        if invocation is None:
+            return self._scope.missing(
+                "invocation",
+                run_invocation_id,
+                table="command_invocations",
+                operation="active_attempt_facts",
+            )
+        if invocation["run_id"] != run_id:
+            return self._scope.invariant(
+                f"invocation {run_invocation_id} is not linked to run {run_id}",
+                table="command_invocations",
+                operation="active_attempt_facts",
+                identity=run_invocation_id,
+            )
+        latest = self.latest_attempt(current.experiment_id, current.logical_slot_id)
+        if isinstance(latest, Failure):
+            return latest
+        latest_run_id = (
+            latest.value.run_id if isinstance(latest.value, EngineRunRecord) else None
+        )
+        category = invocation["process_exit_category"]
+        return Success[InstanceOf[ResultLeaseFacts]](
+            outcome="SUCCESS",
+            value=ResultLeaseFacts(
+                run_id=run_id,
+                run_invocation_id=run_invocation_id,
+                experiment_id=current.experiment_id,
+                run_state=current.state,
+                run_revision=current.revision,
+                attempt_token_hash=current.attempt_token_hash,
+                deadline_snapshotted=isinstance(
+                    current.finalization_deadline_utc, datetime
+                ),
+                invocation_state=CommandInvocationState(str(invocation["state"])),
+                invocation_revision=int(str(invocation["revision"])),
+                command_kind=CommandKind(str(invocation["command_kind"])),
+                process_exit_category=(
+                    ProcessExitCategory(str(category))
+                    if isinstance(category, str)
+                    else MISSING
+                ),
+                experiment_state=(
+                    ExperimentState(str(experiment_state))
+                    if isinstance(experiment_state, str)
+                    else MISSING
+                ),
+                is_latest_attempt=latest_run_id == run_id,
+            ),
+        )
 
 
 class SqliteCommandInvocationRepository:

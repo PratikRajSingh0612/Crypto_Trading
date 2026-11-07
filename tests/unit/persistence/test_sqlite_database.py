@@ -1806,7 +1806,7 @@ def test_a_non_dbapi_error_at_commit_releases_the_connection_before_it_escapes(
 def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert {"persistence/database.py", "persistence/diagnostics.py"} <= allowed
-    assert len(allowed) == 125  # Stage 9 Task 4 appended the four store modules
+    assert len(allowed) == 129  # Stage 9 Task 5 appended the four persistence modules
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "sqlalchemy" in roots
     assert "alembic" in roots  # Task 2 added it
@@ -1815,12 +1815,16 @@ def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> No
     # `tests/unit/artifacts/test_artifact_store.py`, so the five-root
     # disjointness is restated over the persistence modules alone -- the scope of
     # the Stage 8 denylist `_PERSISTENCE_FORBIDDEN_ROOTS`, which proves the same.
-    persistence_modules = {
-        path
-        for path in _literal(_STAGE8_GUARD, "STAGE8_SOURCE_FILES")
-        if path.startswith("persistence/")
-    } | {"persistence/__init__.py"}
-    assert len(persistence_modules) == 14
+    persistence_modules = (
+        {
+            path
+            for path in _literal(_STAGE8_GUARD, "STAGE8_SOURCE_FILES")
+            if path.startswith("persistence/")
+        }
+        | {"persistence/__init__.py"}
+        | set(_literal(_STAGE8_GUARD, "_STAGE9_PERSISTENCE_FILES"))
+    )
+    assert len(persistence_modules) == 18  # Stage 9 Task 5: 14 + 4
     for relative in sorted(persistence_modules):
         tree = ast.parse(
             (_REPOSITORY / "src/crypto_lab" / relative).read_text(encoding="utf-8")
@@ -1846,15 +1850,15 @@ def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> No
         "crypto_lab.persistence.database",
         "crypto_lab.persistence.diagnostics",
     )
-    assert len(modules) == 125
+    assert len(modules) == 129  # Stage 9 Task 5
 
 
 def test_the_two_cross_pins_moved_to_the_running_sizes() -> None:
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     reconciliation = _RECONCILIATION_TESTS.read_text(encoding="utf-8")
     for source in (preflight, reconciliation):
-        assert "len(allowed) == 125" in source
-        assert "len(modules) == 125" in source
+        assert "len(allowed) == 129" in source  # Stage 9 Task 5
+        assert "len(modules) == 129" in source
         assert "len(allowed) == 95" not in source
         assert "len(modules) == 95" not in source
     assert "len(roots) == 30" in preflight
@@ -1944,6 +1948,7 @@ def test_the_architecture_closure_names_persistence() -> None:
         "crypto_lab.strategy",
         "crypto_lab.configuration",
         "crypto_lab.persistence",
+        "crypto_lab.audit",  # Stage 9 Task 5: the SQLite audit sink
     )
     assert _literal(_ARCHITECTURE_GUARD, "_PROHIBITED_FOR_PERSISTENCE") == (
         "crypto_lab.capabilities",

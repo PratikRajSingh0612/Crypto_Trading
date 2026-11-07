@@ -58,6 +58,12 @@ references, registry projection mismatches and ``PRAGMA foreign_key_check`` rows
 -- each computed by its own SQL statement inside one read-only session. The
 module still imports no new root: the queries are ``text()`` statements and the
 report is a frozen dataclass.
+
+Stage 9 Task 5 appends four artifact counts to the same report and the same
+session -- unmapped ``FINALIZING`` candidates, references whose stored manifest
+does not describe them, success states without a run manifest and open journal
+entries -- as fields defaulting to zero after the eight Stage 8 fields, so every
+eight-argument construction of the report stays valid.
 """
 
 from __future__ import annotations
@@ -318,15 +324,47 @@ _REGISTRY_PROJECTION_SQL: Final[tuple[str, ...]] = (
     ),
 )
 _FOREIGN_KEY_CHECK_SQL: Final = "PRAGMA foreign_key_check"
+#: Stage 9 plan Task 5: a FINALIZING candidate with neither a reference nor an
+#: open journal naming it (RV-11); a reference whose stored manifest does not
+#: describe it; a success state without its run manifest (reading 11); and the
+#: open (PREPARED or MOVED) journal entries recovery must resume.
+_UNMAPPED_FINALIZING_SQL: Final = (
+    "SELECT count(*) FROM candidate_artifacts c WHERE c.state = 'FINALIZING' "
+    "AND NOT EXISTS (SELECT 1 FROM artifact_refs r "
+    "WHERE r.source_candidate_artifact_id = c.candidate_artifact_id) "
+    "AND NOT EXISTS (SELECT 1 FROM finalization_journal j, "
+    "json_each(j.candidate_ids_json) e WHERE j.state IN ('PREPARED', 'MOVED') "
+    "AND e.value = c.candidate_artifact_id)"
+)
+_REFS_WITHOUT_MANIFEST_FILE_SQL: Final = (
+    "SELECT count(*) FROM artifact_refs WHERE "
+    "json_extract(manifest_json, '$.artifact_id') IS NOT artifact_id OR "
+    "json_extract(manifest_json, '$.artifact_manifest_hash') IS NOT "
+    "artifact_manifest_hash OR "
+    "json_extract(manifest_json, '$.content_hash') IS NOT content_hash"
+)
+_SUCCESS_WITHOUT_MANIFEST_SQL: Final = (
+    "SELECT count(*) FROM engine_runs e WHERE e.state IN "
+    "('SUCCEEDED', 'SUCCEEDED_WITH_WARNINGS') AND NOT EXISTS "
+    "(SELECT 1 FROM run_manifests m WHERE m.run_id = e.run_id)"
+)
+_JOURNAL_OPEN_SQL: Final = (
+    "SELECT count(*) FROM finalization_journal WHERE state IN ('PREPARED', 'MOVED')"
+)
 
 
 @dataclass(frozen=True, slots=True)
 class ConsistencyReport:
-    """Plan 4.6: the eight read-only counts, every one computed by its own query.
+    """Plan 4.6: the eight read-only counts, every one computed by its own query,
+    followed by the four Stage 9 artifact counts (Stage 9 plan Task 5).
 
     The tests and the Stage 10 startup verification assert them zero;
     ``queued_without_snapshot`` alone is non-zero for rows test scaffolding
-    inserts directly at or after ``QUEUED`` (reading 22).
+    inserts directly at or after ``QUEUED`` (reading 22). The field names are
+    pinned in order: the eight Stage 8 counts first, then the four appended
+    Stage 9 counts, which default to zero so that an eight-argument construction
+    of the report remains valid; ``consistency_report()`` itself supplies every
+    one of the twelve explicitly.
     """
 
     dangling_diagnostic_references: int
@@ -337,6 +375,10 @@ class ConsistencyReport:
     unresolved_causal_references: int
     registry_projection_mismatches: int
     foreign_key_violations: int
+    unmapped_finalizing: int = 0
+    refs_without_manifest_file: int = 0
+    success_without_manifest: int = 0
+    journal_open: int = 0
 
 
 class _ConnectionPolicyMismatch(Exception):
@@ -613,12 +655,15 @@ class SqliteDatabase:
         )
 
     def consistency_report(self) -> ConsistencyReport:
-        """Plan 4.6: the eight counts over one read-only session, none defaulted.
+        """Plan 4.6 and Stage 9 Task 5: the twelve counts over one read-only
+        session, none defaulted.
 
         Every member is read-only SQL over the Task 2 schema (``json_each`` over
         the E7/E8 columns, the composite slot key, the N6 projections rendered
-        back to canonical text, ``PRAGMA foreign_key_check``); a query that fails
-        raises rather than reporting a clean count.
+        back to canonical text, ``PRAGMA foreign_key_check``) or the Stage 9
+        artifact tables (``json_each`` over the journal's candidate ids,
+        ``json_extract`` over the stored manifest); a query that fails raises
+        rather than reporting a clean count.
         """
         with self.read_only() as connection:
             return ConsistencyReport(
@@ -647,6 +692,14 @@ class SqliteDatabase:
                 foreign_key_violations=len(
                     connection.execute(text(_FOREIGN_KEY_CHECK_SQL)).all()
                 ),
+                unmapped_finalizing=_scalar_int(connection, _UNMAPPED_FINALIZING_SQL),
+                refs_without_manifest_file=_scalar_int(
+                    connection, _REFS_WITHOUT_MANIFEST_FILE_SQL
+                ),
+                success_without_manifest=_scalar_int(
+                    connection, _SUCCESS_WITHOUT_MANIFEST_SQL
+                ),
+                journal_open=_scalar_int(connection, _JOURNAL_OPEN_SQL),
             )
 
     def close(self) -> None:

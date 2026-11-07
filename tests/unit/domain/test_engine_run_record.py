@@ -48,6 +48,7 @@ from crypto_lab.domain.engine_run import (
     EngineRunRecord,
     EngineRunRuleViolation,
     RunEdgeOwner,
+    assert_deadline_snapshot,
     assert_run_transition,
     assert_terminal_run_immutability,
     coupled_run_terminal_state,
@@ -743,13 +744,148 @@ def test_the_primary_terminal_diagnostic_is_rejected_outside_those_five(
     assert _missing(_record(state).primary_terminal_diagnostic_id)
 
 
+#: Stage 9 plan reading 9: the six states reachable once a RESULT lease has
+#: snapshotted the finalization deadline, and the six that precede it or that
+#: ``reconcile_run`` decided before any deadline could exist.
+_SNAPSHOT_STATES = (
+    _R.RUNNING,
+    _R.SUCCEEDED,
+    _R.SUCCEEDED_WITH_WARNINGS,
+    _R.TIMED_OUT,
+    _R.CANCELLED,
+    _R.FAILED,
+)
+_PRE_SNAPSHOT_STATES = tuple(
+    state for state in _ALL_STATES if state not in _SNAPSHOT_STATES
+)
+
+
+def test_the_snapshot_state_partition_is_total() -> None:
+    assert len(_SNAPSHOT_STATES) == 6
+    assert set(_PRE_SNAPSHOT_STATES) == {
+        _R.PENDING,
+        _R.VALIDATING,
+        _R.READY,
+        _R.STARTING,
+        _R.NOT_APPLICABLE,
+        _R.UNAVAILABLE,
+    }
+    assert set(_SNAPSHOT_STATES) | set(_PRE_SNAPSHOT_STATES) == set(_ALL_STATES)
+
+
 @pytest.mark.parametrize("state", _ALL_STATES)
-def test_the_finalization_deadline_is_rejected_throughout_stage_five(
-    state: EngineRunState,
-) -> None:
+def test_deadline_present_only_in_snapshot_states(state: EngineRunState) -> None:
+    """Stage 9 reading 9: ``finalization_deadline_utc`` is admitted exactly in the
+    six states reachable after a RESULT lease snapshotted it and refused in the
+    six that precede a snapshot; it is never required."""
+    assert _missing(_record(state).finalization_deadline_utc)
+    if state in _SNAPSHOT_STATES:
+        record = _record(state, finalization_deadline_utc=_LATER)
+        assert record.finalization_deadline_utc == _LATER
+        assert record.model_dump(mode="json")["finalization_deadline_utc"] == (
+            "2026-09-07T12:05:00Z"
+        )
+    else:
+        with pytest.raises(ValidationError, match="finalization_deadline_utc"):
+            _record(state, finalization_deadline_utc=_LATER)
+
+
+@pytest.mark.parametrize("state", [_R.NOT_APPLICABLE, _R.UNAVAILABLE])
+def test_post_snapshot_generic_targets_unrepresentable(state: EngineRunState) -> None:
+    """Stage 9 reading 9: both verdicts were decided before a deadline could exist,
+    so a snapshotted ``RUNNING`` run has no lawful successor in either state --
+    the deadline the generic transition would carry forward is refused at the
+    record -- while the four terminals a lease can reach keep it."""
     with pytest.raises(ValidationError, match="finalization_deadline_utc"):
         _record(state, finalization_deadline_utc=_LATER)
-    assert _missing(_record(state).finalization_deadline_utc)
+    snapshotted = _record(_R.RUNNING, finalization_deadline_utc=_LATER)
+    with pytest.raises(ValidationError, match="finalization_deadline_utc"):
+        _advance(snapshotted, state)
+    for terminal in (_R.SUCCEEDED, _R.FAILED, _R.CANCELLED, _R.TIMED_OUT):
+        advanced = _advance(snapshotted, terminal)
+        assert advanced.finalization_deadline_utc == _LATER
+        assert_run_transition(snapshotted, advanced)
+
+
+def _snapshot(stored: EngineRunRecord, **overrides: object) -> EngineRunRecord:
+    """The replacement a correct lease acquisition builds for ``stored``: the same
+    ``RUNNING`` record with the deadline added and ``revision`` plus one."""
+    payload: dict[str, object] = {
+        "finalization_deadline_utc": _LATER,
+        "revision": stored.revision + 1,
+        "updated_at_utc": stored.updated_at_utc + timedelta(seconds=1),
+    }
+    payload.update(overrides)
+    return _rebuild(stored, **payload)
+
+
+def test_deadline_snapshot_predicate() -> None:
+    """Stage 9 plan 2.4: the ``RUNNING -> RUNNING`` deadline snapshot is lawful
+    exactly when the records share one run, both are ``RUNNING``, the deadline
+    moves ``MISSING -> present``, ``revision`` advances by one and nothing else
+    changes; ``updated_at_utc`` may stand still but never moves backwards."""
+    stored = _record(_R.RUNNING)
+    assert_deadline_snapshot(stored, _snapshot(stored))
+    assert_deadline_snapshot(
+        stored, _snapshot(stored, updated_at_utc=stored.updated_at_utc)
+    )
+    with pytest.raises(TypeError):
+        assert_deadline_snapshot(stored, object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        assert_deadline_snapshot(object(), _snapshot(stored))  # type: ignore[arg-type]
+    refusals: dict[str, tuple[EngineRunRecord, EngineRunRecord, EngineRunCheck]] = {
+        "another run": (
+            stored,
+            _snapshot(stored, run_id=_OTHER_RUN_ID),
+            _CHECK.IDENTITY,
+        ),
+        "stored not RUNNING": (
+            _record(_R.READY),
+            _snapshot(_record(_R.READY), state=_R.RUNNING),
+            _CHECK.DEADLINE_SNAPSHOT,
+        ),
+        "replacement not RUNNING": (
+            stored,
+            _snapshot(stored, state=_R.SUCCEEDED),
+            _CHECK.DEADLINE_SNAPSHOT,
+        ),
+        "stored already snapshotted": (
+            _snapshot(stored),
+            _snapshot(_snapshot(stored)),
+            _CHECK.DEADLINE_SNAPSHOT,
+        ),
+        "replacement without a deadline": (
+            stored,
+            _snapshot(stored, finalization_deadline_utc=_ABSENT),
+            _CHECK.DEADLINE_SNAPSHOT,
+        ),
+        "observation changed": (
+            stored,
+            _snapshot(stored, availability_observation_id=_FRESH_OBSERVATION_ID),
+            _CHECK.DEADLINE_SNAPSHOT,
+        ),
+        "request hash changed": (
+            stored,
+            _snapshot(stored, request_hash=_OTHER_REQUEST_HASH),
+            _CHECK.DEADLINE_SNAPSHOT,
+        ),
+        "revision not plus one": (
+            stored,
+            _snapshot(stored, revision=stored.revision + 2),
+            _CHECK.REVISION,
+        ),
+        "updated_at moved backwards": (
+            stored,
+            _snapshot(
+                stored, updated_at_utc=stored.updated_at_utc - timedelta(seconds=1)
+            ),
+            _CHECK.UPDATED_AT,
+        ),
+    }
+    for label, (before, after, expected) in refusals.items():
+        with pytest.raises(EngineRunRuleViolation) as info:
+            assert_deadline_snapshot(before, after)
+        assert _check_of(info) is expected, label
 
 
 def test_updated_at_may_not_precede_created_at() -> None:
@@ -1364,6 +1500,7 @@ def test_the_check_vocabulary_is_closed_and_every_member_is_reachable() -> None:
         "TRANSITION_EDGE_OWNERSHIP",
         "TRANSITION_IMMUTABLE_FIELD",
         "TRANSITION_AVAILABILITY_OBSERVATION",
+        "DEADLINE_SNAPSHOT",
     ]
     source = _module_source(engine_run_module)
     for member in EngineRunCheck:

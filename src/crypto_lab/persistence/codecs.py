@@ -33,9 +33,12 @@ row whose persistence-owned ``content_sha256`` differs from the fingerprint
 recomputed over the decoded record, and ``decode_artifact_owner`` refuses a row
 whose ``owner_hash`` differs from ``artifact_owner_hash`` of the rebuilt
 variant -- both columns are identities of the row and derived from the record
-alone, so a disagreement is an inconsistent stored representation. Rule N4:
-``encode_engine_run`` raises ``ValueError`` when the record carries
-``finalization_deadline_utc`` (no column exists; a validated record never does).
+alone, so a disagreement is an inconsistent stored representation. Rule N4 is the
+state-governed pair of the Stage 9 plan (reading 9): ``encode_engine_run`` writes
+``finalization_deadline_utc`` exactly in the six deadline-snapshot states and
+raises ``ValueError`` for a present deadline in any other state (a validated record
+never carries one there), and egress reads the nullable column back as the optional
+field.
 The typed projection columns of the registry tables (rule N6) are written from
 the same record and never read to rebuild it; ``consistency_report()`` measures
 their agreement.
@@ -66,7 +69,7 @@ from crypto_lab.domain.canonical_json import canonical_json_bytes, canonical_jso
 from crypto_lab.domain.command_invocation import CommandInvocationRecord
 from crypto_lab.domain.descriptors import RuntimeAvailabilityObservation
 from crypto_lab.domain.diagnostics import Diagnostic, DiagnosticDetailValue
-from crypto_lab.domain.engine_run import EngineRunRecord
+from crypto_lab.domain.engine_run import DEADLINE_SNAPSHOT_STATES, EngineRunRecord
 from crypto_lab.domain.experiment import ExperimentRecord
 from crypto_lab.domain.hashing import sha256_bytes
 from crypto_lab.domain.ports import Clock
@@ -443,14 +446,25 @@ def decode_experiment(
 
 
 def encode_engine_run(record: EngineRunRecord) -> RowValues:
-    """The ``engine_runs`` row; rule N4 refuses a present finalization deadline."""
+    """The ``engine_runs`` row; rule N4 is the state-governed pair (Stage 9).
+
+    ``finalization_deadline_utc`` is written exactly when the record's state is one
+    of the six snapshot states of ``DEADLINE_SNAPSHOT_STATES``; a present deadline in
+    any other state is unrepresentable and raises ``ValueError``, as the domain
+    validator already refuses it (a ``model_construct``-ed record is the only way
+    to reach this branch).
+    """
     dumped = _dump(record)
-    if "finalization_deadline_utc" in dumped:
+    deadline = record.finalization_deadline_utc
+    if "finalization_deadline_utc" in dumped and (
+        record.state not in DEADLINE_SNAPSHOT_STATES
+        or not isinstance(deadline, datetime)
+    ):
         raise ValueError(
-            "finalization_deadline_utc has no column (rule N4): the record must "
-            "carry it MISSING"
+            "finalization_deadline_utc is admitted only in a deadline snapshot "
+            f"state (rule N4): {record.state.value} must carry it MISSING"
         )
-    return {
+    values: RowValues = {
         "run_id": dumped["run_id"],
         "schema_version": dumped["schema_version"],
         "experiment_id": dumped["experiment_id"],
@@ -471,6 +485,12 @@ def encode_engine_run(record: EngineRunRecord) -> RowValues:
         "updated_at_utc": utc_to_micros(record.updated_at_utc),
         "revision": dumped["revision"],
     }
+    # The Stage 9 column is written only when the field is present, so the Stage 8
+    # row shape (and the pinned null-column census) is unchanged for every record
+    # without a deadline; the column defaults to NULL.
+    if isinstance(deadline, datetime):
+        values["finalization_deadline_utc"] = utc_to_micros(deadline)
+    return values
 
 
 def egress_payload_engine_run(row: Mapping[str, object]) -> Payload:
@@ -503,6 +523,13 @@ def egress_payload_engine_run(row: Mapping[str, object]) -> Payload:
         "availability_observation_id",
     ):
         _put(payload, column, columns.optional_text(column))
+    # A pre-Stage-9 row shape (the column absent from the mapping) reads as MISSING.
+    if "finalization_deadline_utc" in row:
+        _put(
+            payload,
+            "finalization_deadline_utc",
+            columns.optional_instant("finalization_deadline_utc"),
+        )
     return payload
 
 

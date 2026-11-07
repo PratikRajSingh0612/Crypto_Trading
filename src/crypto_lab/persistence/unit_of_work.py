@@ -92,6 +92,16 @@ from crypto_lab.experiments.ports import (
     RetryDecisionRepository,
     RuntimeAvailabilityObservationReader,
 )
+from crypto_lab.persistence.artifact_repositories import (
+    SqliteArtifactRepository,
+    SqliteCandidateArtifactRepository,
+    SqliteFinalizationJournalRepository,
+    SqliteRunArtifactRepository,
+    SqliteRunManifestRepository,
+    SqliteSanitizedManifestRepository,
+    SqliteValidationResultRepository,
+)
+from crypto_lab.persistence.audit_sink import SqliteAuditSink, SqliteDiagnosticWriter
 from crypto_lab.persistence.database import SqliteDatabase
 from crypto_lab.persistence.diagnostics import (
     CONCURRENCY_CONFLICT,
@@ -301,19 +311,28 @@ class SqliteTransaction:
 
     __slots__ = (
         "_artifact_owners",
+        "_artifact_refs",
+        "_audit",
+        "_candidate_artifacts",
         "_command_invocations",
         "_configuration_snapshots",
         "_connection",
         "_datasets",
+        "_diagnostics_writer",
         "_engine_runs",
         "_experiments",
+        "_finalization_journal",
         "_observation_reader",
         "_observation_writer",
         "_retry_decisions",
         "_root",
+        "_run_artifacts",
+        "_run_manifests",
+        "_sanitized_manifests",
         "_scope",
         "_stack",
         "_strategy_versions",
+        "_validation_results",
     )
 
     def __init__(
@@ -341,6 +360,17 @@ class SqliteTransaction:
         self._artifact_owners = _GuardedArtifactOwners(self._scope)
         self._strategy_versions = _GuardedStrategyVersions(self._scope)
         self._datasets = _GuardedDatasets(self._scope)
+        # Stage 9 plan 4.1 (Task 5): the FinalizationUnitOfWork and
+        # RegistrationUnitOfWork members, every one gated by the same scope.
+        self._candidate_artifacts = SqliteCandidateArtifactRepository(self._scope)
+        self._artifact_refs = SqliteArtifactRepository(self._scope)
+        self._finalization_journal = SqliteFinalizationJournalRepository(self._scope)
+        self._run_manifests = SqliteRunManifestRepository(self._scope)
+        self._sanitized_manifests = SqliteSanitizedManifestRepository(self._scope)
+        self._validation_results = SqliteValidationResultRepository(self._scope)
+        self._run_artifacts = SqliteRunArtifactRepository(self._scope)
+        self._diagnostics_writer = SqliteDiagnosticWriter(self._scope)
+        self._audit = SqliteAuditSink(self._scope)
 
     # -- Lifecycle ---------------------------------------------------------
 
@@ -503,6 +533,68 @@ class SqliteTransaction:
         """The dataset registry port (reading 12)."""
         self._require_live()
         return self._datasets
+
+    # -- Stage 9 plan 4.1: the finalization and registration members (Task 5) --
+
+    @property
+    def candidate_artifacts(self) -> SqliteCandidateArtifactRepository:
+        """The candidate lifecycle repository."""
+        self._require_live()
+        return self._candidate_artifacts
+
+    @property
+    def artifact_refs(self) -> SqliteArtifactRepository:
+        """The finalized-reference repository, the only writer of ``artifact_refs``."""
+        self._require_live()
+        return self._artifact_refs
+
+    @property
+    def finalization_journal(self) -> SqliteFinalizationJournalRepository:
+        """The purpose-discriminated journal repository."""
+        self._require_live()
+        return self._finalization_journal
+
+    @property
+    def run_manifests(self) -> SqliteRunManifestRepository:
+        """The ``run_manifests`` facts repository (insert-only)."""
+        self._require_live()
+        return self._run_manifests
+
+    @property
+    def sanitized_manifests(self) -> SqliteSanitizedManifestRepository:
+        """The sanitized adapter result manifest facts repository."""
+        self._require_live()
+        return self._sanitized_manifests
+
+    @property
+    def validation_results(self) -> SqliteValidationResultRepository:
+        """The sanitized validation result facts repository (reading 8)."""
+        self._require_live()
+        return self._validation_results
+
+    @property
+    def run_artifacts(self) -> SqliteRunArtifactRepository:
+        """The ``RUN``-owner-only artifact link repository."""
+        self._require_live()
+        return self._run_artifacts
+
+    @property
+    def result_leases(self) -> SqliteEngineRunRepository:
+        """The ``ResultLeaseRepository`` members live on the run repository."""
+        self._require_live()
+        return self._engine_runs
+
+    @property
+    def diagnostics_writer(self) -> SqliteDiagnosticWriter:
+        """The in-transaction, idempotent diagnostic writer."""
+        self._require_live()
+        return self._diagnostics_writer
+
+    @property
+    def audit(self) -> SqliteAuditSink:
+        """The audit sink joining this transaction (specification 23.3.1:1714)."""
+        self._require_live()
+        return self._audit
 
 
 class SqliteUnitOfWork:

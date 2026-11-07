@@ -42,9 +42,15 @@ from crypto_lab.persistence.migration_runner import metadata_drift, schema_objec
 from crypto_lab.persistence.schema import (
     EXPECTED_SCHEMA_OBJECTS,
     PARTIAL_INDEX_SQL,
+    STAGE9_PARTIAL_INDEX_SQL,
+    STAGE9_TRIGGER_SQL,
     TABLES_IN_DEPENDENCY_ORDER,
     TRIGGER_SQL,
+    AdapterValidationResultRow,
     ArtifactOwnerRow,
+    ArtifactRefRow,
+    AuditEventRow,
+    CandidateArtifactRow,
     CommandInvocationRow,
     DatasetPartitionRow,
     DatasetRow,
@@ -53,20 +59,26 @@ from crypto_lab.persistence.schema import (
     EngineRunRow,
     EngineSlotRow,
     ExperimentRow,
+    FinalizationJournalRow,
     RetryDecisionRow,
+    RunArtifactRow,
     RunEventRow,
+    RunManifestRow,
     RuntimeAvailabilityObservationRow,
+    SanitizedAdapterResultManifestRow,
     StrategyVersionRow,
     normalized_sql,
 )
 from persistence_support.harness import raw_connection
 
 #: The SHA-256 of ``repr(EXPECTED_SCHEMA_OBJECTS)``; re-pinned consciously when
-#: the reviewed schema changes.
+#: the reviewed schema changes (Stage 9 Task 5: the eight increments, the
+#: deadline column and the Stage 9 triggers and indexes).
 _EXPECTED_OBJECTS_DIGEST: Final = (
-    "814d5a92983ae31a8497666b40386695c6819908edd7d85419e255f3c0b8bc44"
+    "fe0617bd48e2c9a5c85b6a9ea8f4c6a38eb0a056391fca3bb96766f0a83148b2"
 )
-#: Plan 6.4: the thirteen tables in dependency order.
+#: Plan 6.4: the thirteen Stage 8 tables, then the eight Stage 9 increments
+#: (Stage 9 plan 3.3, 6.6), in dependency order.
 _TABLES: Final = (
     "experiments",
     "engine_slots",
@@ -81,6 +93,14 @@ _TABLES: Final = (
     "run_events",
     "retry_decisions",
     "artifact_owners",
+    "candidate_artifacts",
+    "artifact_refs",
+    "sanitized_adapter_result_manifests",
+    "run_manifests",
+    "run_artifacts",
+    "finalization_journal",
+    "audit_events",
+    "adapter_validation_results",
 )
 _ROW_CLASSES: Final = (
     ExperimentRow,
@@ -96,6 +116,14 @@ _ROW_CLASSES: Final = (
     RunEventRow,
     RetryDecisionRow,
     ArtifactOwnerRow,
+    CandidateArtifactRow,
+    ArtifactRefRow,
+    SanitizedAdapterResultManifestRow,
+    RunManifestRow,
+    RunArtifactRow,
+    FinalizationJournalRow,
+    AuditEventRow,
+    AdapterValidationResultRow,
 )
 #: Plan 3.3: every plain and partial index by name (literal pin).
 _INDEXES: Final = frozenset(
@@ -142,6 +170,62 @@ _INDEXES: Final = frozenset(
         "ix_artifact_owners_dataset_id",
         "ix_artifact_owners_strategy_version_hash",
         "ix_artifact_owners_adapter_name_adapter_version",
+        # Stage 9 Task 5 (Stage 9 plan 3.3): 27 indexes, four of them partial.
+        "ix_engine_runs_finalization_deadline_utc",
+        "ix_candidate_artifacts_state",
+        "ix_candidate_artifacts_owner_purpose",
+        "ix_candidate_artifacts_source_role",
+        "ix_candidate_artifacts_run_id",
+        "ix_artifact_refs_content_hash",
+        "ix_artifact_refs_owner_purpose_role",
+        "ix_sanitized_adapter_result_manifests_semantic_status",
+        "ix_run_manifests_experiment_id",
+        "ix_run_manifests_run_invocation_id",
+        "ix_run_artifacts_artifact_id",
+        "ix_run_artifacts_link_role",
+        "ix_run_artifacts_run_manifest_id",
+        "uq_finalization_journal_result_identity",
+        "uq_finalization_journal_active_result_lease",
+        "uq_finalization_journal_evidence_identity",
+        "ix_finalization_journal_state_lease",
+        "ix_finalization_journal_deadline",
+        "ix_finalization_journal_owner_hash",
+        "ix_finalization_journal_source_role",
+        "ix_audit_events_correlation_id",
+        "ix_audit_events_experiment_id",
+        "ix_audit_events_run_id",
+        "ix_audit_events_invocation_id",
+        "ix_audit_events_action",
+        "ix_audit_events_timestamp_utc",
+        "ix_adapter_validation_results_run_outcome",
+    }
+)
+#: Stage 9 plan 3.4: the sixteen trigger rules as trigger names; the three
+#: insert-only/append-only rules and the two evidence-link rules are two
+#: statements each because SQLite admits one event per trigger (21 objects).
+_STAGE9_TRIGGERS: Final = frozenset(
+    {
+        "trg_candidate_artifacts_owner_role_combination",
+        "trg_candidate_artifacts_immutable_fields",
+        "trg_candidate_artifacts_terminal_frozen",
+        "trg_artifact_refs_match_candidate",
+        "trg_artifact_refs_insert_only_update",
+        "trg_artifact_refs_insert_only_delete",
+        "trg_run_artifacts_target_run_owner",
+        "trg_run_artifacts_member_requires_manifest",
+        "trg_run_manifests_require_running_run",
+        "trg_run_manifests_insert_only_update",
+        "trg_run_manifests_insert_only_delete",
+        "trg_engine_runs_success_requires_manifest",
+        "trg_engine_runs_deadline_immutable",
+        "trg_finalization_journal_monotonic",
+        "trg_audit_events_append_only_update",
+        "trg_audit_events_append_only_delete",
+        "trg_sanitized_manifest_evidence_is_run_evidence_insert",
+        "trg_sanitized_manifest_evidence_is_run_evidence_update",
+        "trg_validation_result_invocation_is_validate_insert",
+        "trg_validation_result_invocation_is_validate_update",
+        "trg_command_invocations_stderr_targets_core_evidence",
     }
 )
 _APPEND_ONLY_TABLES: Final = (
@@ -169,6 +253,7 @@ _TRIGGERS: Final = frozenset(
         *(f"trg_{table}_append_only_update" for table in _APPEND_ONLY_TABLES),
         *(f"trg_{table}_append_only_delete" for table in _APPEND_ONLY_TABLES),
         *(f"trg_{table}_no_delete" for table in _NO_DELETE_TABLES),
+        *_STAGE9_TRIGGERS,
     }
 )
 #: Plan 3.3: the foreign-key count per table (every one ``RESTRICT``).
@@ -186,7 +271,18 @@ _FOREIGN_KEY_COUNTS: Final = {
     "run_events": 2,
     "retry_decisions": 4,
     "artifact_owners": 6,
+    "candidate_artifacts": 2,
+    "artifact_refs": 2,
+    "sanitized_adapter_result_manifests": 3,
+    "run_manifests": 3,
+    "run_artifacts": 3,
+    "finalization_journal": 2,
+    "audit_events": 0,
+    "adapter_validation_results": 3,
 }
+#: Every trigger statement the two revisions execute, in the metadata's order.
+_ALL_TRIGGER_SQL: Final = (*TRIGGER_SQL, *STAGE9_TRIGGER_SQL)
+_ALL_PARTIAL_INDEX_SQL: Final = (*PARTIAL_INDEX_SQL, *STAGE9_PARTIAL_INDEX_SQL)
 
 
 def _names(connection: Connection, kind: str) -> set[str]:
@@ -238,7 +334,7 @@ def test_the_pinned_objects_digest_is_the_reviewed_value() -> None:
 
 
 def test_the_pinned_objects_name_every_plan_object_and_nothing_else() -> None:
-    """The derived expectation and the literal plan pins agree: thirteen tables
+    """The derived expectation and the literal plan pins agree: twenty-one tables
     plus ``alembic_version``, every index and trigger name, nothing more."""
     tables = {row.name for row in EXPECTED_SCHEMA_OBJECTS if row.type == "table"}
     indexes = {row.name for row in EXPECTED_SCHEMA_OBJECTS if row.type == "index"}
@@ -246,7 +342,9 @@ def test_the_pinned_objects_name_every_plan_object_and_nothing_else() -> None:
     assert tables == {*_TABLES, "alembic_version"}
     assert indexes == _INDEXES
     assert triggers == _TRIGGERS
-    assert len(EXPECTED_SCHEMA_OBJECTS) == 14 + len(_INDEXES) + len(_TRIGGERS)
+    assert len(_TABLES) == 21
+    assert len(_STAGE9_TRIGGERS) == 21
+    assert len(EXPECTED_SCHEMA_OBJECTS) == 22 + len(_INDEXES) + len(_TRIGGERS)
     assert list(EXPECTED_SCHEMA_OBJECTS) == sorted(
         EXPECTED_SCHEMA_OBJECTS, key=lambda row: (row.type, row.table, row.name)
     )
@@ -261,15 +359,22 @@ def test_every_table_index_and_trigger_of_the_plan_is_present(
     sqlite_database: SqliteDatabase,
 ) -> None:
     with sqlite_database.read_only() as connection:
-        assert _names(connection, "table") == {*_TABLES, "alembic_version"}
+        # ``sqlite_sequence`` is SQLite's own AUTOINCREMENT bookkeeping table.
+        tables = {
+            name
+            for name in _names(connection, "table")
+            if not name.startswith("sqlite_")
+        }
+        assert tables == {*_TABLES, "alembic_version"}
         indexes = _names(connection, "index")
         assert {name for name in indexes if not name.startswith("sqlite_")} == _INDEXES
         assert _names(connection, "trigger") == _TRIGGERS
         assert _names(connection, "view") == set()
 
 
-def test_the_row_classes_map_exactly_the_thirteen_tables() -> None:
+def test_the_row_classes_map_exactly_the_twenty_one_tables() -> None:
     assert TABLES_IN_DEPENDENCY_ORDER == _TABLES
+    assert schema.STAGE8_TABLE_COUNT == 13
     assert set(schema.metadata.tables) == set(_TABLES)
     assert tuple(row.__tablename__ for row in _ROW_CLASSES) == _TABLES
     for row in _ROW_CLASSES:
@@ -279,15 +384,17 @@ def test_the_row_classes_map_exactly_the_thirteen_tables() -> None:
 def test_partial_indexes_and_triggers_are_created_from_the_exported_constants(
     sqlite_database: SqliteDatabase,
 ) -> None:
-    """Plan 6.4: the revision executes the constants ``schema.py`` exports, so the
-    stored SQL is their normalized text."""
+    """Plan 6.4: the two revisions execute the constants ``schema.py`` exports --
+    the frozen Stage 8 pair for ``r0001`` and the Stage 9 pair for ``r0002`` -- so
+    the stored SQL is their normalized text."""
     with sqlite_database.read_only() as connection:
         stored = {row.sql for row in schema_objects(connection)}
     assert len(PARTIAL_INDEX_SQL) == 3
-    assert len(TRIGGER_SQL) == len(_TRIGGERS)
-    for statement in (*PARTIAL_INDEX_SQL, *TRIGGER_SQL):
+    assert len(STAGE9_PARTIAL_INDEX_SQL) == 4
+    assert len(_ALL_TRIGGER_SQL) == len(_TRIGGERS)
+    for statement in (*_ALL_PARTIAL_INDEX_SQL, *_ALL_TRIGGER_SQL):
         assert normalized_sql(statement) in stored
-    assert all(" WHERE " in statement for statement in PARTIAL_INDEX_SQL)
+    assert all(" WHERE " in statement for statement in _ALL_PARTIAL_INDEX_SQL)
 
 
 # --------------------------------------------------------------------------
@@ -405,6 +512,33 @@ def test_the_terminal_experiment_trigger_names_exactly_the_terminal_states() -> 
                 ExperimentState.CANCELLED,
             }
         )
+
+
+def test_a_trigger_message_is_one_sql_literal_without_an_apostrophe() -> None:
+    """Every trigger statement embeds its message as one single-quoted SQL
+    literal, so the composer refuses a message carrying an apostrophe (it would
+    end the literal early) and every exported Stage 8 and Stage 9 statement
+    carries exactly one ``RAISE(ABORT, '<message>')`` of apostrophe-free text."""
+    with pytest.raises(ValueError, match="apostrophe"):
+        schema._trigger(
+            "trg_probe", "diagnostics", "BEFORE DELETE", None, "isn't admitted"
+        )
+    assert schema._trigger(
+        "trg_probe", "diagnostics", "BEFORE DELETE", "OLD.severity = 'ERROR'", "probe"
+    ) == (
+        "CREATE TRIGGER trg_probe BEFORE DELETE ON diagnostics "
+        "WHEN OLD.severity = 'ERROR' BEGIN SELECT RAISE(ABORT, 'probe'); END"
+    )
+    assert schema._trigger("trg_probe", "diagnostics", "BEFORE DELETE", None, "p") == (
+        "CREATE TRIGGER trg_probe BEFORE DELETE ON diagnostics "
+        "BEGIN SELECT RAISE(ABORT, 'p'); END"
+    )
+    for statement in (*TRIGGER_SQL, *STAGE9_TRIGGER_SQL):
+        prefix, raised = statement.split(" BEGIN SELECT RAISE(ABORT, '")
+        message, terminator = raised.split("'", 1)
+        assert terminator == "); END", statement
+        assert "'" not in message
+        assert prefix.startswith("CREATE TRIGGER trg_")
 
 
 # --------------------------------------------------------------------------

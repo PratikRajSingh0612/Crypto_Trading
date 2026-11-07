@@ -1,4 +1,25 @@
-"""Declarative metadata of the thirteen Stage 8 tables (plan sections 3.3-3.5, 6.4).
+"""Declarative metadata of the thirteen Stage 8 tables (plan sections 3.3-3.5, 6.4)
+and the eight Stage 9 artifact, manifest, journal, provenance and audit increments
+(Stage 9 plan sections 3.3, 3.4 and 6.6).
+
+Stage 9 adds, after the thirteen Stage 8 tables, ``candidate_artifacts``,
+``artifact_refs``, ``sanitized_adapter_result_manifests``, ``run_manifests``,
+``run_artifacts``, ``finalization_journal``, ``audit_events`` and
+``adapter_validation_results`` (dependency order), the nullable
+``engine_runs.finalization_deadline_utc`` column with its partial index, and the
+sixteen Stage 9 trigger rules of plan section 3.4. The baseline revision
+``r0001_stage8_baseline`` executes ``PARTIAL_INDEX_SQL`` and ``TRIGGER_SQL`` by
+reference and is frozen, so those two constants keep their Stage 8 content and the
+Stage 9 statements are exported separately as ``STAGE9_PARTIAL_INDEX_SQL`` and
+``STAGE9_TRIGGER_SQL`` for ``r0002_stage9_artifacts`` alone; ``EXPECTED_SCHEMA_OBJECTS``
+derives from the union, so metadata and the two revisions share one authority.
+The added column is declared last on ``EngineRunRow`` and carries no table-level
+CHECK, because SQLite's ``ALTER TABLE ... ADD COLUMN`` appends the column
+definition after the last existing column and cannot add a named table
+constraint; its state governance is the domain validator, the codec and the
+``engine_runs_deadline_immutable`` trigger. Three insert-only or append-only rules
+and the two evidence-link rules are two statements each (one event per trigger),
+exactly as the Stage 8 append-only rule below.
 
 One ``*Row`` declarative class per table of plan section 3.3, with every CHECK,
 UNIQUE, primary-key and ``RESTRICT`` foreign-key constraint inline and every plain
@@ -55,6 +76,22 @@ from sqlalchemy.schema import CreateIndex, CreateTable
 
 from crypto_lab.adapters.limits import MAX_SEQUENCE
 from crypto_lab.adapters.vocabulary import ProtocolEventType
+from crypto_lab.artifacts.journal import FinalizationJournalState
+from crypto_lab.artifacts.models import (
+    ARTIFACT_VALIDATION_PROFILE,
+    EVIDENCE_ROLES,
+    MAX_CANDIDATE_ARTIFACTS,
+    MAX_MEDIA_TYPE_CHARACTERS,
+    MAX_RELATIVE_PATH_CHARACTERS,
+    MAX_SIZE_BYTES,
+    MAX_VALIDATION_OBSERVATIONS,
+    PERMITTED_ROLE_TUPLES,
+    RESULT_ROLES,
+    ArtifactFinalizationPurpose,
+    ArtifactSourceRole,
+    CandidateArtifactProducerKind,
+    CandidateArtifactState,
+)
 from crypto_lab.artifacts.ownership import (
     AdapterArtifactOwner,
     DatasetArtifactOwner,
@@ -62,6 +99,12 @@ from crypto_lab.artifacts.ownership import (
     RunArtifactOwner,
     StrategyArtifactOwner,
     SystemArtifactOwner,
+)
+from crypto_lab.audit.models import (
+    INVOCATION_REQUIRED_ACTIONS,
+    AuditAction,
+    AuditActorKind,
+    AuditOutcome,
 )
 from crypto_lab.configuration.models import MAX_CONFIGURATION_BYTES
 from crypto_lab.datasets import DatasetDataType, DatasetValidationStatus
@@ -107,11 +150,21 @@ from crypto_lab.domain.retry import (
 from crypto_lab.strategy.versioning import STRATEGY_VERSION_PROFILE_VERSION
 
 __all__ = [
+    "EVIDENCE_CORRELATION_KINDS",
     "EXPECTED_SCHEMA_OBJECTS",
     "PARTIAL_INDEX_SQL",
+    "RUN_ARTIFACT_LINK_ROLES",
+    "STAGE8_TABLE_COUNT",
+    "STAGE9_PARTIAL_INDEX_SQL",
+    "STAGE9_TRIGGER_RULES",
+    "STAGE9_TRIGGER_SQL",
     "TABLES_IN_DEPENDENCY_ORDER",
     "TRIGGER_SQL",
+    "AdapterValidationResultRow",
     "ArtifactOwnerRow",
+    "ArtifactRefRow",
+    "AuditEventRow",
+    "CandidateArtifactRow",
     "CommandInvocationRow",
     "DatasetPartitionRow",
     "DatasetRow",
@@ -120,10 +173,14 @@ __all__ = [
     "EngineRunRow",
     "EngineSlotRow",
     "ExperimentRow",
+    "FinalizationJournalRow",
     "RetryDecisionRow",
     "RowBase",
+    "RunArtifactRow",
     "RunEventRow",
+    "RunManifestRow",
     "RuntimeAvailabilityObservationRow",
+    "SanitizedAdapterResultManifestRow",
     "SchemaObject",
     "StrategyVersionRow",
     "metadata",
@@ -248,6 +305,9 @@ _ALEMBIC_VERSION_SQL: Final = (
 )
 _DIALECT: Final = sqlite.dialect()
 
+#: The thirteen Stage 8 tables come first; the eight Stage 9 increments follow in
+#: their own dependency order (Stage 9 plan 3.3, 6.6).
+STAGE8_TABLE_COUNT: Final = 13
 TABLES_IN_DEPENDENCY_ORDER: Final[tuple[str, ...]] = (
     "experiments",
     "engine_slots",
@@ -262,7 +322,41 @@ TABLES_IN_DEPENDENCY_ORDER: Final[tuple[str, ...]] = (
     "run_events",
     "retry_decisions",
     "artifact_owners",
+    "candidate_artifacts",
+    "artifact_refs",
+    "sanitized_adapter_result_manifests",
+    "run_manifests",
+    "run_artifacts",
+    "finalization_journal",
+    "audit_events",
+    "adapter_validation_results",
 )
+_STAGE8_TABLES: Final = frozenset(TABLES_IN_DEPENDENCY_ORDER[:STAGE8_TABLE_COUNT])
+#: Stage 9 plan 3.3: the two ``run_artifacts`` link roles and the three evidence
+#: correlation kinds (byte-equal to ``artifacts.requests.EvidenceCorrelationKind``,
+#: which ``persistence`` does not import; pinned by test).
+RUN_ARTIFACT_LINK_ROLES: Final[tuple[str, ...]] = (
+    "RESULT_MANIFEST_MEMBER",
+    "RUN_EVIDENCE",
+)
+EVIDENCE_CORRELATION_KINDS: Final[tuple[str, ...]] = (
+    "INVOCATION",
+    "DIAGNOSTIC",
+    "AUDIT",
+)
+_DEADLINE_INDEX: Final = "ix_engine_runs_finalization_deadline_utc"
+_SUCCESS_RUN_STATES: Final = frozenset(
+    {EngineRunState.SUCCEEDED, EngineRunState.SUCCEEDED_WITH_WARNINGS}
+)
+_TERMINAL_CANDIDATE_STATES: Final = frozenset(
+    {CandidateArtifactState.QUARANTINED, CandidateArtifactState.CORRUPT}
+)
+_ACTIVE_JOURNAL_STATES: Final = frozenset(
+    {FinalizationJournalState.PREPARED, FinalizationJournalState.MOVED}
+)
+#: ``objects/<hh>/<64 hex>``: 8 + 2 + 1 + 64 characters; the hash starts at 12.
+_FINALIZED_PATH_LENGTH: Final = 75
+_FINALIZED_HASH_OFFSET: Final = 12
 
 
 # --------------------------------------------------------------------------
@@ -1023,6 +1117,9 @@ class EngineRunRow(RowBase):
     created_at_utc: Mapped[int] = _integer_column()
     updated_at_utc: Mapped[int] = _integer_column()
     revision: Mapped[int] = _integer_column()
+    #: Stage 9 plan 3.3 (reading 9): added by ``r0002`` through ``ADD COLUMN``, so
+    #: it is the last column and carries no table-level CHECK (module docstring).
+    finalization_deadline_utc: Mapped[int | None] = _optional_integer_column()
 
     __table_args__ = (
         PrimaryKeyConstraint("run_id", name="pk_engine_runs"),
@@ -1161,6 +1258,11 @@ class EngineRunRow(RowBase):
             "logical_slot_id",
             unique=True,
             sqlite_where=text(_in("state", EngineRunState, _ACTIVE_RUN_STATES)),
+        ),
+        Index(
+            _DEADLINE_INDEX,
+            "finalization_deadline_utc",
+            sqlite_where=text(_present("finalization_deadline_utc")),
         ),
     )
 
@@ -1873,11 +1975,1015 @@ class ArtifactOwnerRow(RowBase):
 
 
 # --------------------------------------------------------------------------
+# Stage 9 plan 3.3: the eight relational increments of revision r0002
+# --------------------------------------------------------------------------
+
+
+def _json_object(column: str) -> str:
+    return f"json_valid({column}) AND json_type({column}) = 'object'"
+
+
+def _all_present(columns: Iterable[str]) -> str:
+    return " AND ".join(_present(column) for column in columns)
+
+
+def _all_absent(columns: Iterable[str]) -> str:
+    return " AND ".join(_absent(column) for column in columns)
+
+
+#: Plan 3.1.1 as SQL (rule E2): the seven distinct ``(purpose, producer, role)``
+#: rows of the nine permitted tuples, and the nine tuples joined to the owner kind.
+_PURPOSE_PRODUCER_ROLE_CHECK: Final = " OR ".join(
+    f"(finalization_purpose = '{purpose}' AND producer_kind = '{producer}' "
+    f"AND source_role = '{role}')"
+    for purpose, producer, role in sorted(
+        {
+            (purpose.value, producer.value, role.value)
+            for purpose, producer, role, _ in PERMITTED_ROLE_TUPLES
+        }
+    )
+)
+_OWNER_ROLE_TUPLES_SQL: Final = " OR ".join(
+    f"(NEW.finalization_purpose = '{purpose}' AND NEW.producer_kind = '{producer}' "
+    f"AND NEW.source_role = '{role}' AND o.owner_kind = '{kind}')"
+    for purpose, producer, role, kind in sorted(
+        (purpose.value, producer.value, role.value, kind.value)
+        for purpose, producer, role, kind in PERMITTED_ROLE_TUPLES
+    )
+)
+_CANDIDATE_DECLARED_COLUMNS: Final = (
+    "adapter_declared_size",
+    "adapter_declared_hash",
+    "adapter_declared_media_type",
+)
+_CANDIDATE_IMMUTABLE_COLUMNS: Final = (
+    "candidate_artifact_id",
+    "owner_hash",
+    "finalization_purpose",
+    "source_role",
+    "producer_kind",
+    "artifact_kind",
+    "staging_relative_path",
+    *_CANDIDATE_DECLARED_COLUMNS,
+    "run_id",
+    "invocation_id",
+    "created_at_utc",
+)
+_JOURNAL_RESULT_COLUMNS: Final = (
+    "finalization_deadline_utc",
+    "expected_run_revision",
+    "expected_invocation_revision",
+    "run_id",
+    "run_invocation_id",
+    "attempt_token_hash",
+    "source_adapter_result_manifest_hash",
+    "sanitized_adapter_result_manifest_hash",
+)
+_JOURNAL_EVIDENCE_COLUMNS: Final = ("correlation_kind", "correlation_id")
+_RESULT_PURPOSE: Final = ArtifactFinalizationPurpose.RESULT.value
+_EVIDENCE_PURPOSE: Final = ArtifactFinalizationPurpose.EVIDENCE.value
+_ADAPTER_PRODUCER: Final = CandidateArtifactProducerKind.ADAPTER.value
+_CORE_PRODUCER: Final = CandidateArtifactProducerKind.CORE.value
+_RESULT_ROLE_LIST: Final = _subset(ArtifactSourceRole, RESULT_ROLES)
+_EVIDENCE_ROLE_LIST: Final = _subset(ArtifactSourceRole, EVIDENCE_ROLES)
+_MEMBER_LINK: Final = RUN_ARTIFACT_LINK_ROLES[0]
+
+
+class CandidateArtifactRow(RowBase):
+    """Stage 9 plan 3.3: ``CandidateArtifact`` with the owner hash, the denormalized
+    run and invocation of a ``RUN`` owner, and the observation snapshot."""
+
+    __tablename__ = "candidate_artifacts"
+
+    candidate_artifact_id: Mapped[str] = _text_column()
+    schema_version: Mapped[str] = _text_column()
+    owner_hash: Mapped[str] = _text_column()
+    finalization_purpose: Mapped[str] = _text_column()
+    source_role: Mapped[str] = _text_column()
+    producer_kind: Mapped[str] = _text_column()
+    artifact_kind: Mapped[str] = _text_column()
+    staging_relative_path: Mapped[str] = _text_column()
+    state: Mapped[str] = _text_column()
+    adapter_declared_size: Mapped[int | None] = _optional_integer_column()
+    adapter_declared_hash: Mapped[str | None] = _optional_text_column()
+    adapter_declared_media_type: Mapped[str | None] = _optional_text_column()
+    observations_json: Mapped[str] = _text_column()
+    observations_hash: Mapped[str] = _text_column()
+    source_event_id: Mapped[str | None] = _optional_text_column()
+    source_adapter_manifest_id: Mapped[str | None] = _optional_text_column()
+    run_id: Mapped[str | None] = _optional_text_column()
+    invocation_id: Mapped[str | None] = _optional_text_column()
+    created_at_utc: Mapped[int] = _integer_column()
+    updated_at_utc: Mapped[int] = _integer_column()
+    revision: Mapped[int] = _integer_column()
+
+    __table_args__ = (
+        PrimaryKeyConstraint("candidate_artifact_id", name="pk_candidate_artifacts"),
+        UniqueConstraint(
+            "owner_hash",
+            "finalization_purpose",
+            "staging_relative_path",
+            name="uq_candidate_artifacts_owner_purpose_path",
+        ),
+        _restrict(
+            "candidate_artifacts",
+            "owner",
+            ["owner_hash"],
+            ["artifact_owners.owner_hash"],
+        ),
+        _restrict(
+            "candidate_artifacts",
+            "invocation",
+            ["run_id", "invocation_id"],
+            ["command_invocations.run_id", "command_invocations.invocation_id"],
+        ),
+        _check(
+            "candidate_artifacts",
+            "candidate_artifact_id",
+            _identifier("candidate_artifact_id", "cand_"),
+        ),
+        _check(
+            "candidate_artifacts",
+            "schema_version",
+            _literal("schema_version", _SCHEMA_VERSION),
+        ),
+        _check("candidate_artifacts", "owner_hash", _hash("owner_hash")),
+        _check(
+            "candidate_artifacts",
+            "finalization_purpose",
+            _enum("finalization_purpose", ArtifactFinalizationPurpose),
+        ),
+        _check(
+            "candidate_artifacts",
+            "source_role",
+            _enum("source_role", ArtifactSourceRole),
+        ),
+        _check(
+            "candidate_artifacts",
+            "producer_kind",
+            _enum("producer_kind", CandidateArtifactProducerKind),
+        ),
+        _check(
+            "candidate_artifacts",
+            "artifact_kind",
+            _bounded_text("artifact_kind", 1, _MAX_IDENTIFIER_TEXT),
+        ),
+        _check(
+            "candidate_artifacts",
+            "staging_relative_path",
+            _bounded_text("staging_relative_path", 1, MAX_RELATIVE_PATH_CHARACTERS),
+        ),
+        _check("candidate_artifacts", "state", _enum("state", CandidateArtifactState)),
+        _check(
+            "candidate_artifacts",
+            "adapter_declared_size",
+            _bounded_integer("adapter_declared_size", 0, MAX_SIZE_BYTES),
+        ),
+        _check(
+            "candidate_artifacts",
+            "adapter_declared_hash",
+            _hash("adapter_declared_hash"),
+        ),
+        _check(
+            "candidate_artifacts",
+            "adapter_declared_media_type",
+            _bounded_text("adapter_declared_media_type", 3, MAX_MEDIA_TYPE_CHARACTERS),
+        ),
+        _check(
+            "candidate_artifacts",
+            "observations_json",
+            _json_array("observations_json", MAX_VALIDATION_OBSERVATIONS),
+        ),
+        _check("candidate_artifacts", "observations_hash", _hash("observations_hash")),
+        _check(
+            "candidate_artifacts",
+            "source_event_id",
+            _identifier("source_event_id", "evt_"),
+        ),
+        _check(
+            "candidate_artifacts",
+            "source_adapter_manifest_id",
+            _identifier("source_adapter_manifest_id", "amf_"),
+        ),
+        _check("candidate_artifacts", "run_id", _identifier("run_id", "run_")),
+        _check(
+            "candidate_artifacts", "invocation_id", _identifier("invocation_id", "inv_")
+        ),
+        _check("candidate_artifacts", "created_at_utc", _instant("created_at_utc")),
+        _check("candidate_artifacts", "updated_at_utc", _instant("updated_at_utc")),
+        _check("candidate_artifacts", "revision", "revision >= 1"),
+        _check(
+            "candidate_artifacts",
+            "updated_after_created",
+            "updated_at_utc >= created_at_utc",
+        ),
+        _check("candidate_artifacts", "role_table", _PURPOSE_PRODUCER_ROLE_CHECK),
+        _check(
+            "candidate_artifacts",
+            "adapter_declared_shape",
+            f"producer_kind <> '{_ADAPTER_PRODUCER}' OR "
+            f"({_all_present(_CANDIDATE_DECLARED_COLUMNS)} AND {_present('run_id')} "
+            f"AND {_present('invocation_id')})",
+        ),
+        _check(
+            "candidate_artifacts",
+            "core_declared_shape",
+            f"producer_kind <> '{_CORE_PRODUCER}' OR "
+            f"({_all_absent(_CANDIDATE_DECLARED_COLUMNS)} AND "
+            f"{_absent('source_event_id')} AND "
+            f"{_absent('source_adapter_manifest_id')})",
+        ),
+        _check(
+            "candidate_artifacts",
+            "invocation_requires_run",
+            f"{_absent('invocation_id')} OR {_present('run_id')}",
+        ),
+        Index("ix_candidate_artifacts_state", "state"),
+        Index(
+            "ix_candidate_artifacts_owner_purpose", "owner_hash", "finalization_purpose"
+        ),
+        Index("ix_candidate_artifacts_source_role", "source_role"),
+        Index("ix_candidate_artifacts_run_id", "run_id"),
+    )
+
+
+class ArtifactRefRow(RowBase):
+    """Stage 9 plan 3.3: ``ArtifactRef`` beside its canonical ``ArtifactManifest``."""
+
+    __tablename__ = "artifact_refs"
+
+    artifact_id: Mapped[str] = _text_column()
+    schema_version: Mapped[str] = _text_column()
+    owner_hash: Mapped[str] = _text_column()
+    finalization_purpose: Mapped[str] = _text_column()
+    source_role: Mapped[str] = _text_column()
+    producer_kind: Mapped[str] = _text_column()
+    artifact_kind: Mapped[str] = _text_column()
+    finalized_relative_path: Mapped[str] = _text_column()
+    content_hash: Mapped[str] = _text_column()
+    size_bytes: Mapped[int] = _integer_column()
+    media_type: Mapped[str] = _text_column()
+    source_candidate_artifact_id: Mapped[str] = _text_column()
+    validation_profile: Mapped[str] = _text_column()
+    manifest_json: Mapped[str] = _text_column()
+    artifact_manifest_hash: Mapped[str] = _text_column()
+    created_at_utc: Mapped[int] = _integer_column()
+    finalized_at_utc: Mapped[int] = _integer_column()
+    state: Mapped[str] = _text_column()
+
+    __table_args__ = (
+        PrimaryKeyConstraint("artifact_id", name="pk_artifact_refs"),
+        UniqueConstraint(
+            "source_candidate_artifact_id", name="uq_artifact_refs_source_candidate"
+        ),
+        UniqueConstraint(
+            "artifact_manifest_hash", name="uq_artifact_refs_manifest_hash"
+        ),
+        UniqueConstraint(
+            "finalized_relative_path",
+            "source_candidate_artifact_id",
+            name="uq_artifact_refs_path_candidate",
+        ),
+        _restrict(
+            "artifact_refs", "owner", ["owner_hash"], ["artifact_owners.owner_hash"]
+        ),
+        _restrict(
+            "artifact_refs",
+            "candidate",
+            ["source_candidate_artifact_id"],
+            ["candidate_artifacts.candidate_artifact_id"],
+        ),
+        _check("artifact_refs", "artifact_id", _identifier("artifact_id", "art_")),
+        _check(
+            "artifact_refs",
+            "schema_version",
+            _literal("schema_version", _SCHEMA_VERSION),
+        ),
+        _check("artifact_refs", "owner_hash", _hash("owner_hash")),
+        _check(
+            "artifact_refs",
+            "finalization_purpose",
+            _enum("finalization_purpose", ArtifactFinalizationPurpose),
+        ),
+        _check(
+            "artifact_refs", "source_role", _enum("source_role", ArtifactSourceRole)
+        ),
+        _check(
+            "artifact_refs",
+            "producer_kind",
+            _enum("producer_kind", CandidateArtifactProducerKind),
+        ),
+        _check(
+            "artifact_refs",
+            "artifact_kind",
+            _bounded_text("artifact_kind", 1, _MAX_IDENTIFIER_TEXT),
+        ),
+        _check(
+            "artifact_refs",
+            "finalized_relative_path",
+            f"length(finalized_relative_path) = {_FINALIZED_PATH_LENGTH} AND "
+            "substr(finalized_relative_path, 1, 8) = 'objects/' AND "
+            "substr(finalized_relative_path, 11, 1) = '/'",
+        ),
+        _check("artifact_refs", "content_hash", _hash("content_hash")),
+        _check(
+            "artifact_refs",
+            "size_bytes",
+            _bounded_integer("size_bytes", 0, MAX_SIZE_BYTES),
+        ),
+        _check(
+            "artifact_refs",
+            "media_type",
+            _bounded_text("media_type", 3, MAX_MEDIA_TYPE_CHARACTERS),
+        ),
+        _check(
+            "artifact_refs",
+            "source_candidate_artifact_id",
+            _identifier("source_candidate_artifact_id", "cand_"),
+        ),
+        _check(
+            "artifact_refs",
+            "validation_profile",
+            _literal("validation_profile", ARTIFACT_VALIDATION_PROFILE),
+        ),
+        _check("artifact_refs", "manifest_json", _json_object("manifest_json")),
+        _check(
+            "artifact_refs", "artifact_manifest_hash", _hash("artifact_manifest_hash")
+        ),
+        _check("artifact_refs", "created_at_utc", _instant("created_at_utc")),
+        _check("artifact_refs", "finalized_at_utc", _instant("finalized_at_utc")),
+        _check("artifact_refs", "state", _literal("state", "FINALIZED")),
+        _check(
+            "artifact_refs",
+            "finalized_after_created",
+            "finalized_at_utc >= created_at_utc",
+        ),
+        _check(
+            "artifact_refs",
+            "path_addresses_hash",
+            f"substr(finalized_relative_path, {_FINALIZED_HASH_OFFSET}) = content_hash "
+            "AND substr(finalized_relative_path, 9, 2) = substr(content_hash, 1, 2)",
+        ),
+        _check(
+            "artifact_refs",
+            "evidence_shape",
+            f"finalization_purpose <> '{_EVIDENCE_PURPOSE}' OR "
+            f"(producer_kind = '{_CORE_PRODUCER}' AND source_role IN "
+            f"({_EVIDENCE_ROLE_LIST}))",
+        ),
+        _check(
+            "artifact_refs",
+            "result_shape",
+            f"finalization_purpose <> '{_RESULT_PURPOSE}' OR "
+            f"source_role IN ({_RESULT_ROLE_LIST})",
+        ),
+        Index("ix_artifact_refs_content_hash", "content_hash"),
+        Index(
+            "ix_artifact_refs_owner_purpose_role",
+            "owner_hash",
+            "finalization_purpose",
+            "source_role",
+        ),
+    )
+
+
+class SanitizedAdapterResultManifestRow(RowBase):
+    """Stage 9 plan 3.3: the sanitized adapter result manifest of one run-command
+    invocation, keyed by its hash; never a raw token or a staging path."""
+
+    __tablename__ = "sanitized_adapter_result_manifests"
+
+    sanitized_adapter_result_manifest_hash: Mapped[str] = _text_column()
+    run_id: Mapped[str] = _text_column()
+    run_invocation_id: Mapped[str] = _text_column()
+    experiment_id: Mapped[str] = _text_column()
+    attempt_token_hash: Mapped[str] = _text_column()
+    source_adapter_result_manifest_hash: Mapped[str] = _text_column()
+    semantic_status: Mapped[str] = _text_column()
+    manifest_json: Mapped[str] = _text_column()
+    evidence_artifact_id: Mapped[str | None] = _optional_text_column()
+    recorded_at_utc: Mapped[int] = _integer_column()
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "sanitized_adapter_result_manifest_hash",
+            name="pk_sanitized_adapter_result_manifests",
+        ),
+        UniqueConstraint(
+            "run_id",
+            "run_invocation_id",
+            "source_adapter_result_manifest_hash",
+            name="uq_sanitized_adapter_result_manifests_source",
+        ),
+        _restrict(
+            "sanitized_adapter_result_manifests",
+            "run",
+            ["experiment_id", "run_id"],
+            ["engine_runs.experiment_id", "engine_runs.run_id"],
+        ),
+        _restrict(
+            "sanitized_adapter_result_manifests",
+            "invocation",
+            ["run_id", "run_invocation_id"],
+            ["command_invocations.run_id", "command_invocations.invocation_id"],
+        ),
+        _restrict(
+            "sanitized_adapter_result_manifests",
+            "evidence",
+            ["evidence_artifact_id"],
+            ["artifact_refs.artifact_id"],
+        ),
+        _check(
+            "sanitized_adapter_result_manifests",
+            "sanitized_adapter_result_manifest_hash",
+            _hash("sanitized_adapter_result_manifest_hash"),
+        ),
+        _check(
+            "sanitized_adapter_result_manifests",
+            "run_id",
+            _identifier("run_id", "run_"),
+        ),
+        _check(
+            "sanitized_adapter_result_manifests",
+            "run_invocation_id",
+            _identifier("run_invocation_id", "inv_"),
+        ),
+        _check(
+            "sanitized_adapter_result_manifests",
+            "experiment_id",
+            _identifier("experiment_id", "exp_"),
+        ),
+        _check(
+            "sanitized_adapter_result_manifests",
+            "attempt_token_hash",
+            _hash("attempt_token_hash"),
+        ),
+        _check(
+            "sanitized_adapter_result_manifests",
+            "source_adapter_result_manifest_hash",
+            _hash("source_adapter_result_manifest_hash"),
+        ),
+        _check(
+            "sanitized_adapter_result_manifests",
+            "semantic_status",
+            _bounded_text("semantic_status", 1, _MAX_IDENTIFIER_TEXT),
+        ),
+        _check(
+            "sanitized_adapter_result_manifests",
+            "manifest_json",
+            f"{_json_object('manifest_json')} AND "
+            "instr(manifest_json, '\"attempt_token\":') = 0 AND "
+            "instr(manifest_json, '\"relative_path\":') = 0",
+        ),
+        _check(
+            "sanitized_adapter_result_manifests",
+            "evidence_artifact_id",
+            _identifier("evidence_artifact_id", "art_"),
+        ),
+        _check(
+            "sanitized_adapter_result_manifests",
+            "recorded_at_utc",
+            _instant("recorded_at_utc"),
+        ),
+        Index(
+            "ix_sanitized_adapter_result_manifests_semantic_status", "semantic_status"
+        ),
+    )
+
+
+class RunManifestRow(RowBase):
+    """Stage 9 plan 3.3: the core ``RunManifest`` of one successful run (reading 11)."""
+
+    __tablename__ = "run_manifests"
+
+    manifest_id: Mapped[str] = _text_column()
+    schema_version: Mapped[str] = _text_column()
+    run_id: Mapped[str] = _text_column()
+    experiment_id: Mapped[str] = _text_column()
+    run_invocation_id: Mapped[str] = _text_column()
+    attempt_token_hash: Mapped[str] = _text_column()
+    sanitized_adapter_result_manifest_hash: Mapped[str] = _text_column()
+    semantic_status: Mapped[str] = _text_column()
+    process_exit_category: Mapped[str] = _text_column()
+    manifest_json: Mapped[str] = _text_column()
+    run_manifest_hash: Mapped[str] = _text_column()
+    registered_at_utc: Mapped[int] = _integer_column()
+
+    __table_args__ = (
+        PrimaryKeyConstraint("manifest_id", name="pk_run_manifests"),
+        UniqueConstraint("run_id", name="uq_run_manifests_run_id"),
+        UniqueConstraint(
+            "run_manifest_hash", name="uq_run_manifests_run_manifest_hash"
+        ),
+        _restrict(
+            "run_manifests",
+            "run",
+            ["experiment_id", "run_id"],
+            ["engine_runs.experiment_id", "engine_runs.run_id"],
+        ),
+        _restrict(
+            "run_manifests",
+            "invocation",
+            ["run_id", "run_invocation_id"],
+            ["command_invocations.run_id", "command_invocations.invocation_id"],
+        ),
+        _restrict(
+            "run_manifests",
+            "sanitized_manifest",
+            ["sanitized_adapter_result_manifest_hash"],
+            [
+                "sanitized_adapter_result_manifests."
+                "sanitized_adapter_result_manifest_hash"
+            ],
+        ),
+        _check("run_manifests", "manifest_id", _identifier("manifest_id", "rmf_")),
+        _check(
+            "run_manifests",
+            "schema_version",
+            _literal("schema_version", _SCHEMA_VERSION),
+        ),
+        _check("run_manifests", "run_id", _identifier("run_id", "run_")),
+        _check("run_manifests", "experiment_id", _identifier("experiment_id", "exp_")),
+        _check(
+            "run_manifests",
+            "run_invocation_id",
+            _identifier("run_invocation_id", "inv_"),
+        ),
+        _check("run_manifests", "attempt_token_hash", _hash("attempt_token_hash")),
+        _check(
+            "run_manifests",
+            "sanitized_adapter_result_manifest_hash",
+            _hash("sanitized_adapter_result_manifest_hash"),
+        ),
+        _check(
+            "run_manifests",
+            "semantic_status",
+            _in("semantic_status", EngineRunState, _SUCCESS_RUN_STATES),
+        ),
+        _check(
+            "run_manifests",
+            "process_exit_category",
+            _enum("process_exit_category", ProcessExitCategory),
+        ),
+        _check("run_manifests", "manifest_json", _json_object("manifest_json")),
+        _check("run_manifests", "run_manifest_hash", _hash("run_manifest_hash")),
+        _check("run_manifests", "registered_at_utc", _instant("registered_at_utc")),
+        Index("ix_run_manifests_experiment_id", "experiment_id"),
+        Index("ix_run_manifests_run_invocation_id", "run_invocation_id"),
+    )
+
+
+class RunArtifactRow(RowBase):
+    """Stage 9 plan 3.3: the ``RUN``-owner-only link between a run and a reference."""
+
+    __tablename__ = "run_artifacts"
+
+    run_id: Mapped[str] = _text_column()
+    artifact_id: Mapped[str] = _text_column()
+    link_role: Mapped[str] = _text_column()
+    experiment_id: Mapped[str] = _text_column()
+    run_manifest_id: Mapped[str | None] = _optional_text_column()
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "run_id", "artifact_id", "link_role", name="pk_run_artifacts"
+        ),
+        _restrict(
+            "run_artifacts",
+            "run",
+            ["experiment_id", "run_id"],
+            ["engine_runs.experiment_id", "engine_runs.run_id"],
+        ),
+        _restrict(
+            "run_artifacts", "artifact", ["artifact_id"], ["artifact_refs.artifact_id"]
+        ),
+        _restrict(
+            "run_artifacts",
+            "manifest",
+            ["run_manifest_id"],
+            ["run_manifests.manifest_id"],
+        ),
+        _check("run_artifacts", "run_id", _identifier("run_id", "run_")),
+        _check("run_artifacts", "artifact_id", _identifier("artifact_id", "art_")),
+        _check(
+            "run_artifacts",
+            "link_role",
+            f"link_role IN ({_quoted(RUN_ARTIFACT_LINK_ROLES)})",
+        ),
+        _check("run_artifacts", "experiment_id", _identifier("experiment_id", "exp_")),
+        _check(
+            "run_artifacts", "run_manifest_id", _identifier("run_manifest_id", "rmf_")
+        ),
+        _check(
+            "run_artifacts",
+            "manifest_shape",
+            f"(link_role = '{_MEMBER_LINK}') = ({_present('run_manifest_id')})",
+        ),
+        Index("ix_run_artifacts_artifact_id", "artifact_id"),
+        Index("ix_run_artifacts_link_role", "link_role"),
+        Index("ix_run_artifacts_run_manifest_id", "run_manifest_id"),
+    )
+
+
+class FinalizationJournalRow(RowBase):
+    """Stage 9 plan 3.3: ``FinalizationJournalEntry``, the purpose-discriminated
+    bridge; the RESULT and EVIDENCE column groups are present exactly by purpose."""
+
+    __tablename__ = "finalization_journal"
+
+    finalization_id: Mapped[str] = _text_column()
+    schema_version: Mapped[str] = _text_column()
+    finalization_purpose: Mapped[str] = _text_column()
+    owner_hash: Mapped[str] = _text_column()
+    source_role: Mapped[str] = _text_column()
+    candidate_ids_json: Mapped[str] = _text_column()
+    candidate_set_hash: Mapped[str] = _text_column()
+    state: Mapped[str] = _text_column()
+    abandon_reason: Mapped[str | None] = _optional_text_column()
+    prepared_at_utc: Mapped[int] = _integer_column()
+    finalization_deadline_utc: Mapped[int | None] = _optional_integer_column()
+    lease_expires_at_utc: Mapped[int] = _integer_column()
+    expected_run_revision: Mapped[int | None] = _optional_integer_column()
+    expected_invocation_revision: Mapped[int | None] = _optional_integer_column()
+    run_id: Mapped[str | None] = _optional_text_column()
+    run_invocation_id: Mapped[str | None] = _optional_text_column()
+    attempt_token_hash: Mapped[str | None] = _optional_text_column()
+    source_adapter_result_manifest_hash: Mapped[str | None] = _optional_text_column()
+    sanitized_adapter_result_manifest_hash: Mapped[str | None] = _optional_text_column()
+    correlation_kind: Mapped[str | None] = _optional_text_column()
+    correlation_id: Mapped[str | None] = _optional_text_column()
+    planned_json: Mapped[str] = _text_column()
+    observed_json: Mapped[str] = _text_column()
+    updated_at_utc: Mapped[int] = _integer_column()
+    revision: Mapped[int] = _integer_column()
+
+    __table_args__ = (
+        PrimaryKeyConstraint("finalization_id", name="pk_finalization_journal"),
+        _restrict(
+            "finalization_journal",
+            "owner",
+            ["owner_hash"],
+            ["artifact_owners.owner_hash"],
+        ),
+        _restrict(
+            "finalization_journal",
+            "invocation",
+            ["run_id", "run_invocation_id"],
+            ["command_invocations.run_id", "command_invocations.invocation_id"],
+        ),
+        _check(
+            "finalization_journal",
+            "finalization_id",
+            _identifier("finalization_id", "fin_"),
+        ),
+        _check(
+            "finalization_journal",
+            "schema_version",
+            _literal("schema_version", _SCHEMA_VERSION),
+        ),
+        _check(
+            "finalization_journal",
+            "finalization_purpose",
+            _enum("finalization_purpose", ArtifactFinalizationPurpose),
+        ),
+        _check("finalization_journal", "owner_hash", _hash("owner_hash")),
+        _check(
+            "finalization_journal",
+            "source_role",
+            _enum("source_role", ArtifactSourceRole),
+        ),
+        _check(
+            "finalization_journal",
+            "candidate_ids_json",
+            f"{_json_array('candidate_ids_json', MAX_CANDIDATE_ARTIFACTS)} AND "
+            "json_array_length(candidate_ids_json) >= 1",
+        ),
+        _check(
+            "finalization_journal", "candidate_set_hash", _hash("candidate_set_hash")
+        ),
+        _check(
+            "finalization_journal", "state", _enum("state", FinalizationJournalState)
+        ),
+        _check(
+            "finalization_journal",
+            "abandon_reason",
+            _bounded_text("abandon_reason", _MIN_ERROR_CODE_TEXT, _MAX_ERROR_CODE_TEXT),
+        ),
+        _check("finalization_journal", "prepared_at_utc", _instant("prepared_at_utc")),
+        _check(
+            "finalization_journal",
+            "finalization_deadline_utc",
+            _instant("finalization_deadline_utc"),
+        ),
+        _check(
+            "finalization_journal",
+            "lease_expires_at_utc",
+            _instant("lease_expires_at_utc"),
+        ),
+        _check(
+            "finalization_journal",
+            "expected_run_revision",
+            "expected_run_revision >= 1",
+        ),
+        _check(
+            "finalization_journal",
+            "expected_invocation_revision",
+            "expected_invocation_revision >= 1",
+        ),
+        _check("finalization_journal", "run_id", _identifier("run_id", "run_")),
+        _check(
+            "finalization_journal",
+            "run_invocation_id",
+            _identifier("run_invocation_id", "inv_"),
+        ),
+        _check(
+            "finalization_journal", "attempt_token_hash", _hash("attempt_token_hash")
+        ),
+        _check(
+            "finalization_journal",
+            "source_adapter_result_manifest_hash",
+            _hash("source_adapter_result_manifest_hash"),
+        ),
+        _check(
+            "finalization_journal",
+            "sanitized_adapter_result_manifest_hash",
+            _hash("sanitized_adapter_result_manifest_hash"),
+        ),
+        _check(
+            "finalization_journal",
+            "correlation_kind",
+            f"correlation_kind IN ({_quoted(EVIDENCE_CORRELATION_KINDS)})",
+        ),
+        _check(
+            "finalization_journal",
+            "correlation_id",
+            _bounded_text("correlation_id", 1, _MAX_IDENTIFIER_TEXT),
+        ),
+        _check(
+            "finalization_journal",
+            "planned_json",
+            f"{_json_array('planned_json', MAX_CANDIDATE_ARTIFACTS)} AND "
+            "json_array_length(planned_json) >= 1",
+        ),
+        _check(
+            "finalization_journal",
+            "observed_json",
+            _json_array("observed_json", MAX_CANDIDATE_ARTIFACTS),
+        ),
+        _check("finalization_journal", "updated_at_utc", _instant("updated_at_utc")),
+        _check("finalization_journal", "revision", "revision >= 1"),
+        _check(
+            "finalization_journal",
+            "result_shape",
+            f"finalization_purpose <> '{_RESULT_PURPOSE}' OR "
+            f"({_all_present(_JOURNAL_RESULT_COLUMNS)} AND "
+            f"{_all_absent(_JOURNAL_EVIDENCE_COLUMNS)} AND "
+            f"source_role IN ({_RESULT_ROLE_LIST}))",
+        ),
+        _check(
+            "finalization_journal",
+            "evidence_shape",
+            f"finalization_purpose <> '{_EVIDENCE_PURPOSE}' OR "
+            f"({_all_absent(_JOURNAL_RESULT_COLUMNS)} AND "
+            f"{_all_present(_JOURNAL_EVIDENCE_COLUMNS)} AND "
+            f"source_role IN ({_EVIDENCE_ROLE_LIST}))",
+        ),
+        _check(
+            "finalization_journal",
+            "abandon_shape",
+            f"(state = '{FinalizationJournalState.ABANDONED.value}') = "
+            f"({_present('abandon_reason')})",
+        ),
+        _check(
+            "finalization_journal",
+            "deadline_after_prepared",
+            f"{_absent('finalization_deadline_utc')} OR "
+            "finalization_deadline_utc >= prepared_at_utc",
+        ),
+        _check(
+            "finalization_journal",
+            "lease_within_deadline",
+            f"{_absent('finalization_deadline_utc')} OR "
+            "lease_expires_at_utc <= finalization_deadline_utc",
+        ),
+        _check(
+            "finalization_journal",
+            "updated_after_prepared",
+            "updated_at_utc >= prepared_at_utc",
+        ),
+        Index(
+            "uq_finalization_journal_result_identity",
+            "run_invocation_id",
+            "source_adapter_result_manifest_hash",
+            unique=True,
+            sqlite_where=text(f"finalization_purpose = '{_RESULT_PURPOSE}'"),
+        ),
+        Index(
+            "uq_finalization_journal_active_result_lease",
+            "run_id",
+            unique=True,
+            sqlite_where=text(
+                f"finalization_purpose = '{_RESULT_PURPOSE}' AND "
+                f"{_in('state', FinalizationJournalState, _ACTIVE_JOURNAL_STATES)}"
+            ),
+        ),
+        Index(
+            "uq_finalization_journal_evidence_identity",
+            "owner_hash",
+            "correlation_kind",
+            "correlation_id",
+            "candidate_set_hash",
+            unique=True,
+            sqlite_where=text(f"finalization_purpose = '{_EVIDENCE_PURPOSE}'"),
+        ),
+        Index(
+            "ix_finalization_journal_state_lease",
+            "state",
+            "lease_expires_at_utc",
+        ),
+        Index("ix_finalization_journal_deadline", "finalization_deadline_utc"),
+        Index("ix_finalization_journal_owner_hash", "owner_hash"),
+        Index("ix_finalization_journal_source_role", "source_role"),
+    )
+
+
+class AuditEventRow(RowBase):
+    """Stage 9 plan 3.3 (reading 9): ``AuditEvent`` ordered by the durable
+    ``audit_sequence`` SQLite assigns; the primary key is inline because SQLite
+    admits ``AUTOINCREMENT`` on the column alone."""
+
+    __tablename__ = "audit_events"
+
+    audit_sequence: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=True
+    )
+    audit_event_id: Mapped[str] = _text_column()
+    schema_version: Mapped[str] = _text_column()
+    action: Mapped[str] = _text_column()
+    actor_kind: Mapped[str] = _text_column()
+    actor_adapter_name: Mapped[str | None] = _optional_text_column()
+    actor_adapter_version: Mapped[str | None] = _optional_text_column()
+    outcome: Mapped[str] = _text_column()
+    experiment_id: Mapped[str | None] = _optional_text_column()
+    run_id: Mapped[str | None] = _optional_text_column()
+    invocation_id: Mapped[str | None] = _optional_text_column()
+    artifact_id: Mapped[str | None] = _optional_text_column()
+    timestamp_utc: Mapped[int] = _integer_column()
+    correlation_id: Mapped[str] = _text_column()
+    details_json: Mapped[str] = _text_column()
+    details_hash: Mapped[str] = _text_column()
+
+    __table_args__ = (
+        UniqueConstraint("audit_event_id", name="uq_audit_events_audit_event_id"),
+        _check(
+            "audit_events", "audit_event_id", _identifier("audit_event_id", "audit_")
+        ),
+        _check(
+            "audit_events",
+            "schema_version",
+            _literal("schema_version", _SCHEMA_VERSION),
+        ),
+        _check("audit_events", "action", _enum("action", AuditAction)),
+        _check(
+            "audit_events",
+            "actor_kind",
+            f"actor_kind IN ({_quoted(get_args(AuditActorKind.__value__))})",
+        ),
+        _check(
+            "audit_events",
+            "actor_adapter_name",
+            _bounded_text("actor_adapter_name", 1, _MAX_IDENTIFIER_TEXT),
+        ),
+        _check(
+            "audit_events",
+            "actor_adapter_version",
+            _bounded_text("actor_adapter_version", _MIN_SEMVER_TEXT, _MAX_SEMVER_TEXT),
+        ),
+        _check("audit_events", "outcome", _enum("outcome", AuditOutcome)),
+        _check("audit_events", "experiment_id", _identifier("experiment_id", "exp_")),
+        _check("audit_events", "run_id", _identifier("run_id", "run_")),
+        _check("audit_events", "invocation_id", _identifier("invocation_id", "inv_")),
+        _check("audit_events", "artifact_id", _identifier("artifact_id", "art_")),
+        _check("audit_events", "timestamp_utc", _instant("timestamp_utc")),
+        _check(
+            "audit_events",
+            "correlation_id",
+            _bounded_text("correlation_id", 1, _MAX_IDENTIFIER_TEXT),
+        ),
+        _check(
+            "audit_events",
+            "details_json",
+            f"{_json_object('details_json')} AND "
+            f"length(CAST(details_json AS BLOB)) <= {MAX_DETAIL_BYTES}",
+        ),
+        _check("audit_events", "details_hash", _hash("details_hash")),
+        _check(
+            "audit_events",
+            "actor_shape",
+            f"(actor_kind = 'ADAPTER') = ({_present('actor_adapter_name')}) AND "
+            f"({_absent('actor_adapter_name')}) = ({_absent('actor_adapter_version')})",
+        ),
+        _check(
+            "audit_events",
+            "invocation_required",
+            f"action NOT IN ({_subset(AuditAction, INVOCATION_REQUIRED_ACTIONS)}) "
+            f"OR {_present('invocation_id')}",
+        ),
+        Index("ix_audit_events_correlation_id", "correlation_id"),
+        Index("ix_audit_events_experiment_id", "experiment_id"),
+        Index("ix_audit_events_run_id", "run_id"),
+        Index("ix_audit_events_invocation_id", "invocation_id"),
+        Index("ix_audit_events_action", "action"),
+        Index("ix_audit_events_timestamp_utc", "timestamp_utc"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class AdapterValidationResultRow(RowBase):
+    """Stage 9 plan 3.3 (reading 8): the immutable sanitized validation output of
+    one ``VALIDATE`` invocation."""
+
+    __tablename__ = "adapter_validation_results"
+
+    invocation_id: Mapped[str] = _text_column()
+    run_id: Mapped[str] = _text_column()
+    experiment_id: Mapped[str] = _text_column()
+    validation_result_hash: Mapped[str] = _text_column()
+    outcome: Mapped[str] = _text_column()
+    result_json: Mapped[str] = _text_column()
+    evidence_artifact_id: Mapped[str | None] = _optional_text_column()
+    recorded_at_utc: Mapped[int] = _integer_column()
+
+    __table_args__ = (
+        PrimaryKeyConstraint("invocation_id", name="pk_adapter_validation_results"),
+        UniqueConstraint(
+            "validation_result_hash",
+            name="uq_adapter_validation_results_validation_result_hash",
+        ),
+        _restrict(
+            "adapter_validation_results",
+            "invocation",
+            ["run_id", "invocation_id"],
+            ["command_invocations.run_id", "command_invocations.invocation_id"],
+        ),
+        _restrict(
+            "adapter_validation_results",
+            "run",
+            ["experiment_id", "run_id"],
+            ["engine_runs.experiment_id", "engine_runs.run_id"],
+        ),
+        _restrict(
+            "adapter_validation_results",
+            "evidence",
+            ["evidence_artifact_id"],
+            ["artifact_refs.artifact_id"],
+        ),
+        _check(
+            "adapter_validation_results",
+            "invocation_id",
+            _identifier("invocation_id", "inv_"),
+        ),
+        _check("adapter_validation_results", "run_id", _identifier("run_id", "run_")),
+        _check(
+            "adapter_validation_results",
+            "experiment_id",
+            _identifier("experiment_id", "exp_"),
+        ),
+        _check(
+            "adapter_validation_results",
+            "validation_result_hash",
+            _hash("validation_result_hash"),
+        ),
+        _check(
+            "adapter_validation_results",
+            "outcome",
+            _bounded_text("outcome", 1, _MAX_IDENTIFIER_TEXT),
+        ),
+        _check(
+            "adapter_validation_results", "result_json", _json_object("result_json")
+        ),
+        _check(
+            "adapter_validation_results",
+            "evidence_artifact_id",
+            _identifier("evidence_artifact_id", "art_"),
+        ),
+        _check(
+            "adapter_validation_results",
+            "recorded_at_utc",
+            _instant("recorded_at_utc"),
+        ),
+        Index("ix_adapter_validation_results_run_outcome", "run_id", "outcome"),
+    )
+
+
+# --------------------------------------------------------------------------
 # 3.4 triggers and the exported SQL constants
 # --------------------------------------------------------------------------
 
 
 def _trigger(name: str, table: str, event: str, when: str | None, message: str) -> str:
+    if "'" in message:
+        raise ValueError("a trigger message must not contain an apostrophe")
     condition = f" WHEN {when}" if when is not None else ""
     return (
         f"CREATE TRIGGER {name} {event} ON {table}{condition} "
@@ -2008,10 +3114,326 @@ def _triggers() -> tuple[tuple[str, str, str], ...]:
     return tuple(rows)
 
 
-_TRIGGERS: Final = _triggers()
+_STAGE8_TRIGGERS: Final = _triggers()
 
-#: Plan 3.4: the trigger statements the baseline revision executes verbatim.
-TRIGGER_SQL: Final[tuple[str, ...]] = tuple(statement for _, _, statement in _TRIGGERS)
+#: Plan 3.4: the trigger statements the baseline revision executes verbatim; the
+#: Stage 8 content is frozen with ``r0001`` (module docstring).
+TRIGGER_SQL: Final[tuple[str, ...]] = tuple(
+    statement for _, _, statement in _STAGE8_TRIGGERS
+)
+
+
+def _owner_join(target: str) -> str:
+    """``artifact_refs`` joined to its owner, filtered to one artifact identity."""
+    return (
+        "SELECT 1 FROM artifact_refs AS r JOIN artifact_owners AS o "  # noqa: S608
+        f"ON o.owner_hash = r.owner_hash WHERE r.artifact_id = {target}"
+    )
+
+
+def _run_evidence_link_missing() -> str:
+    """The evidence-link rule of the two manifest tables: the referenced artifact
+    is a core ``EVIDENCE`` reference owned by the same ``RUN``."""
+    return (
+        f"NOT EXISTS ({_owner_join('NEW.evidence_artifact_id')} AND "
+        f"r.finalization_purpose = '{_EVIDENCE_PURPOSE}' AND "
+        f"r.producer_kind = '{_CORE_PRODUCER}' AND o.owner_kind = 'RUN' AND "
+        "o.run_id = NEW.run_id)"
+    )
+
+
+def _insert_only(
+    rule: str, table: str, message: str
+) -> list[tuple[str, str, str, str]]:
+    """One rule, two statements: SQLite admits one event per trigger."""
+    return [
+        (
+            rule,
+            f"trg_{rule}_{event.lower()}",
+            table,
+            _trigger(
+                f"trg_{rule}_{event.lower()}", table, f"BEFORE {event}", None, message
+            ),
+        )
+        for event in ("UPDATE", "DELETE")
+    ]
+
+
+def _stage9_triggers() -> tuple[tuple[str, str, str, str], ...]:
+    """``(rule, name, table, statement)`` for the sixteen Stage 9 plan 3.4 rules."""
+    journal_edges = " OR ".join(
+        (
+            f"(NEW.state = OLD.state AND OLD.state IN "
+            f"({_subset(FinalizationJournalState, _ACTIVE_JOURNAL_STATES)}))",
+            "(OLD.state = 'PREPARED' AND NEW.state IN ('MOVED', 'ABANDONED'))",
+            "(OLD.state = 'MOVED' AND NEW.state IN ('REGISTERED', 'ABANDONED'))",
+        )
+    )
+    rows: list[tuple[str, str, str, str]] = [
+        (
+            "candidate_artifacts_owner_role_combination",
+            "trg_candidate_artifacts_owner_role_combination",
+            "candidate_artifacts",
+            _trigger(
+                "trg_candidate_artifacts_owner_role_combination",
+                "candidate_artifacts",
+                "BEFORE INSERT",
+                "NOT EXISTS (SELECT 1 FROM artifact_owners AS o WHERE "  # noqa: S608
+                "o.owner_hash = NEW.owner_hash AND (NEW.run_id IS NULL OR "
+                "o.run_id = NEW.run_id) AND (NEW.invocation_id IS NULL OR "
+                f"o.invocation_id = NEW.invocation_id) AND ({_OWNER_ROLE_TUPLES_SQL}))",
+                "candidate owner kind does not admit the purpose, producer and role",
+            ),
+        ),
+        (
+            "candidate_artifacts_immutable_fields",
+            "trg_candidate_artifacts_immutable_fields",
+            "candidate_artifacts",
+            _trigger(
+                "trg_candidate_artifacts_immutable_fields",
+                "candidate_artifacts",
+                f"BEFORE UPDATE OF {', '.join(_CANDIDATE_IMMUTABLE_COLUMNS)}",
+                _differs(_CANDIDATE_IMMUTABLE_COLUMNS),
+                "candidate identity, owner, purpose, role, producer, kind, path and "
+                "declared facts are immutable",
+            ),
+        ),
+        (
+            "candidate_artifacts_terminal_frozen",
+            "trg_candidate_artifacts_terminal_frozen",
+            "candidate_artifacts",
+            _trigger(
+                "trg_candidate_artifacts_terminal_frozen",
+                "candidate_artifacts",
+                "BEFORE UPDATE",
+                "OLD.state IN "
+                f"({_subset(CandidateArtifactState, _TERMINAL_CANDIDATE_STATES)})",
+                "quarantined or corrupt candidate is frozen",
+            ),
+        ),
+        (
+            "artifact_refs_match_candidate",
+            "trg_artifact_refs_match_candidate",
+            "artifact_refs",
+            _trigger(
+                "trg_artifact_refs_match_candidate",
+                "artifact_refs",
+                "BEFORE INSERT",
+                "NOT EXISTS (SELECT 1 FROM candidate_artifacts AS c WHERE "  # noqa: S608
+                "c.candidate_artifact_id = NEW.source_candidate_artifact_id AND "
+                "c.owner_hash = NEW.owner_hash AND "
+                "c.finalization_purpose = NEW.finalization_purpose AND "
+                "c.source_role = NEW.source_role AND "
+                "c.producer_kind = NEW.producer_kind AND "
+                "c.artifact_kind = NEW.artifact_kind AND "
+                f"c.state = '{CandidateArtifactState.FINALIZING.value}')",
+                "artifact reference must restate the owner, purpose, role, producer "
+                "and kind of a FINALIZING candidate",
+            ),
+        ),
+        *_insert_only(
+            "artifact_refs_insert_only", "artifact_refs", "artifact_refs is insert-only"
+        ),
+        (
+            "run_artifacts_target_run_owner",
+            "trg_run_artifacts_target_run_owner",
+            "run_artifacts",
+            _trigger(
+                "trg_run_artifacts_target_run_owner",
+                "run_artifacts",
+                "BEFORE INSERT",
+                f"NOT EXISTS ({_owner_join('NEW.artifact_id')} AND "
+                "o.owner_kind = 'RUN' AND o.run_id = NEW.run_id AND "
+                "o.experiment_id = NEW.experiment_id AND r.finalization_purpose = "
+                f"CASE NEW.link_role WHEN '{_MEMBER_LINK}' THEN '{_RESULT_PURPOSE}' "
+                f"ELSE '{_EVIDENCE_PURPOSE}' END)",
+                "run artifact link targets a RUN-owned reference of the same run "
+                "with the purpose its role names",
+            ),
+        ),
+        (
+            "run_artifacts_member_requires_manifest",
+            "trg_run_artifacts_member_requires_manifest",
+            "run_artifacts",
+            _trigger(
+                "trg_run_artifacts_member_requires_manifest",
+                "run_artifacts",
+                "BEFORE INSERT",
+                f"NEW.link_role = '{_MEMBER_LINK}' AND NOT EXISTS (SELECT 1 FROM "  # noqa: S608
+                "run_manifests AS m WHERE m.manifest_id = NEW.run_manifest_id AND "
+                "m.run_id = NEW.run_id)",
+                "manifest member link requires the registered manifest of the run",
+            ),
+        ),
+        (
+            "run_manifests_require_running_run",
+            "trg_run_manifests_require_running_run",
+            "run_manifests",
+            _trigger(
+                "trg_run_manifests_require_running_run",
+                "run_manifests",
+                "BEFORE INSERT",
+                "NOT EXISTS (SELECT 1 FROM engine_runs AS e WHERE "  # noqa: S608
+                "e.run_id = NEW.run_id AND e.experiment_id = NEW.experiment_id AND "
+                f"e.state = '{EngineRunState.RUNNING.value}' AND "
+                "e.finalization_deadline_utc IS NOT NULL AND "
+                "e.attempt_token_hash = NEW.attempt_token_hash) OR NOT EXISTS ("
+                "SELECT 1 FROM command_invocations AS i WHERE "
+                "i.invocation_id = NEW.run_invocation_id AND i.run_id = NEW.run_id AND "
+                f"i.command_kind = '{CommandKind.RUN.value}' AND "
+                f"i.state = '{CommandInvocationState.EXITED.value}')",
+                "run manifest requires a RUNNING run with a snapshotted deadline and "
+                "its EXITED run-command invocation",
+            ),
+        ),
+        *_insert_only(
+            "run_manifests_insert_only", "run_manifests", "run_manifests is insert-only"
+        ),
+        (
+            "engine_runs_success_requires_manifest",
+            "trg_engine_runs_success_requires_manifest",
+            "engine_runs",
+            _trigger(
+                "trg_engine_runs_success_requires_manifest",
+                "engine_runs",
+                "BEFORE UPDATE OF state",
+                f"NEW.{_in('state', EngineRunState, _SUCCESS_RUN_STATES)} AND "  # noqa: S608
+                "NEW.state <> OLD.state AND NOT EXISTS (SELECT 1 FROM run_manifests AS "
+                "m WHERE m.run_id = NEW.run_id)",
+                "run success requires a registered run manifest",
+            ),
+        ),
+        (
+            "engine_runs_deadline_immutable",
+            "trg_engine_runs_deadline_immutable",
+            "engine_runs",
+            _trigger(
+                "trg_engine_runs_deadline_immutable",
+                "engine_runs",
+                "BEFORE UPDATE OF finalization_deadline_utc",
+                "OLD.finalization_deadline_utc IS NOT NULL AND "
+                "NEW.finalization_deadline_utc IS NOT OLD.finalization_deadline_utc",
+                "finalization deadline is immutable once snapshotted",
+            ),
+        ),
+        (
+            "finalization_journal_monotonic",
+            "trg_finalization_journal_monotonic",
+            "finalization_journal",
+            _trigger(
+                "trg_finalization_journal_monotonic",
+                "finalization_journal",
+                "BEFORE UPDATE",
+                f"NOT ({journal_edges}) OR "
+                "NEW.finalization_deadline_utc IS NOT OLD.finalization_deadline_utc",
+                "finalization journal states advance PREPARED, MOVED, REGISTERED or "
+                "ABANDONED only and the deadline is immutable",
+            ),
+        ),
+        *_insert_only(
+            "audit_events_append_only", "audit_events", "audit_events is append-only"
+        ),
+        (
+            "sanitized_manifest_evidence_is_run_evidence",
+            "trg_sanitized_manifest_evidence_is_run_evidence_insert",
+            "sanitized_adapter_result_manifests",
+            _trigger(
+                "trg_sanitized_manifest_evidence_is_run_evidence_insert",
+                "sanitized_adapter_result_manifests",
+                "BEFORE INSERT",
+                "NEW.evidence_artifact_id IS NOT NULL AND "
+                f"{_run_evidence_link_missing()}",
+                "sanitized manifest evidence must be a core EVIDENCE reference of "
+                "the same run",
+            ),
+        ),
+        (
+            "sanitized_manifest_evidence_is_run_evidence",
+            "trg_sanitized_manifest_evidence_is_run_evidence_update",
+            "sanitized_adapter_result_manifests",
+            _trigger(
+                "trg_sanitized_manifest_evidence_is_run_evidence_update",
+                "sanitized_adapter_result_manifests",
+                "BEFORE UPDATE OF evidence_artifact_id",
+                "OLD.evidence_artifact_id IS NOT NULL OR "
+                "(NEW.evidence_artifact_id IS NOT NULL AND "
+                f"{_run_evidence_link_missing()})",
+                "sanitized manifest evidence is linked once to a core EVIDENCE "
+                "reference of the same run",
+            ),
+        ),
+        (
+            "validation_result_invocation_is_validate",
+            "trg_validation_result_invocation_is_validate_insert",
+            "adapter_validation_results",
+            _trigger(
+                "trg_validation_result_invocation_is_validate_insert",
+                "adapter_validation_results",
+                "BEFORE INSERT",
+                "NOT EXISTS (SELECT 1 FROM command_invocations AS i WHERE "  # noqa: S608
+                "i.invocation_id = NEW.invocation_id AND i.run_id = NEW.run_id AND "
+                f"i.command_kind = '{CommandKind.VALIDATE.value}') OR "
+                "(NEW.evidence_artifact_id IS NOT NULL AND "
+                f"{_run_evidence_link_missing()})",
+                "validation result requires a VALIDATE invocation of the same run and "
+                "core EVIDENCE of that run",
+            ),
+        ),
+        (
+            "validation_result_invocation_is_validate",
+            "trg_validation_result_invocation_is_validate_update",
+            "adapter_validation_results",
+            _trigger(
+                "trg_validation_result_invocation_is_validate_update",
+                "adapter_validation_results",
+                "BEFORE UPDATE OF evidence_artifact_id",
+                "OLD.evidence_artifact_id IS NOT NULL OR "
+                "(NEW.evidence_artifact_id IS NOT NULL AND "
+                f"{_run_evidence_link_missing()})",
+                "validation result evidence is linked once to a core EVIDENCE "
+                "reference of the same run",
+            ),
+        ),
+        (
+            "command_invocations_stderr_targets_core_evidence",
+            "trg_command_invocations_stderr_targets_core_evidence",
+            "command_invocations",
+            _trigger(
+                "trg_command_invocations_stderr_targets_core_evidence",
+                "command_invocations",
+                "BEFORE UPDATE OF stderr_artifact_id",
+                "NEW.stderr_artifact_id IS NOT NULL AND "
+                "NEW.stderr_artifact_id IS NOT OLD.stderr_artifact_id AND NOT EXISTS ("
+                f"{_owner_join('NEW.stderr_artifact_id')} AND "
+                f"r.finalization_purpose = '{_EVIDENCE_PURPOSE}' AND "
+                f"r.producer_kind = '{_CORE_PRODUCER}' AND "
+                f"r.source_role = '{ArtifactSourceRole.CORE_EVIDENCE.value}' AND "
+                f"((NEW.command_kind = '{CommandKind.DESCRIBE.value}' AND "
+                "o.owner_kind = 'ADAPTER' AND o.adapter_name = NEW.adapter_name AND "
+                "o.adapter_version = NEW.adapter_version) OR "
+                f"(NEW.command_kind <> '{CommandKind.DESCRIBE.value}' AND "
+                "o.owner_kind = 'RUN' AND o.run_id = NEW.run_id)))",
+                "stderr_artifact_id targets core EVIDENCE owned by the describe "
+                "adapter or the same run",
+            ),
+        ),
+    ]
+    return tuple(rows)
+
+
+_STAGE9_TRIGGERS: Final = _stage9_triggers()
+#: Stage 9 plan 3.4: the sixteen trigger rules by name.
+STAGE9_TRIGGER_RULES: Final[tuple[str, ...]] = tuple(
+    dict.fromkeys(rule for rule, _, _, _ in _STAGE9_TRIGGERS)
+)
+#: The statements ``r0002`` executes verbatim (five rules are two statements).
+STAGE9_TRIGGER_SQL: Final[tuple[str, ...]] = tuple(
+    statement for _, _, _, statement in _STAGE9_TRIGGERS
+)
+_TRIGGERS: Final = (
+    *_STAGE8_TRIGGERS,
+    *((name, table, statement) for _, name, table, statement in _STAGE9_TRIGGERS),
+)
 
 
 def normalized_sql(statement: str) -> str:
@@ -2019,10 +3441,10 @@ def normalized_sql(statement: str) -> str:
     return " ".join(statement.split())
 
 
-def _partial_indexes() -> tuple[Index, ...]:
+def _partial_indexes(tables: Iterable[str]) -> tuple[Index, ...]:
     return tuple(
         index
-        for name in TABLES_IN_DEPENDENCY_ORDER
+        for name in tables
         for index in sorted(
             metadata.tables[name].indexes, key=lambda item: str(item.name)
         )
@@ -2034,10 +3456,25 @@ def _compile_index(index: Index) -> str:
     return str(CreateIndex(index).compile(dialect=_DIALECT))
 
 
-#: Plan 3.3: the three partial indexes, compiled from the ``Index`` objects above
-#: so the metadata module and the baseline revision share one definition.
+#: Plan 3.3: the three Stage 8 partial indexes, compiled from the ``Index`` objects
+#: above so the metadata module and the baseline revision share one definition;
+#: the deadline index on ``engine_runs`` belongs to Stage 9 (module docstring).
 PARTIAL_INDEX_SQL: Final[tuple[str, ...]] = tuple(
-    _compile_index(index) for index in _partial_indexes()
+    _compile_index(index)
+    for index in _partial_indexes(TABLES_IN_DEPENDENCY_ORDER[:STAGE8_TABLE_COUNT])
+    if index.name != _DEADLINE_INDEX
+)
+#: Stage 9 plan 3.3: the deadline index and the three journal identity indexes.
+STAGE9_PARTIAL_INDEX_SQL: Final[tuple[str, ...]] = (
+    *(
+        _compile_index(index)
+        for index in _partial_indexes(("engine_runs",))
+        if index.name == _DEADLINE_INDEX
+    ),
+    *(
+        _compile_index(index)
+        for index in _partial_indexes(TABLES_IN_DEPENDENCY_ORDER[STAGE8_TABLE_COUNT:])
+    ),
 )
 
 

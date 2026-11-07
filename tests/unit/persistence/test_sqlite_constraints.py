@@ -1841,9 +1841,12 @@ TERMINAL_STATE_CHANGE_STATEMENTS: Final[
 PERMITTED_STATEMENTS: Final[tuple[tuple[str, str, tuple[object, ...]], ...]] = (
     (
         "same-state enrichment of a terminal invocation passes T-INV-TERMINAL",
-        "UPDATE command_invocations SET stderr_artifact_id = ?, revision = revision + 1"
-        " WHERE invocation_id = ?",
-        (f"art_{UUID_A}", INVOCATION_ID),
+        # Stage 9 Task 5: the enrichment is the cleanup pair; a bare
+        # ``stderr_artifact_id`` is now refused by the Stage 9 trigger
+        # ``command_invocations_stderr_targets_core_evidence`` (reading 10).
+        "UPDATE command_invocations SET cleanup_complete = 1, "
+        "cleanup_completed_at_utc = ?, revision = revision + 1 WHERE invocation_id = ?",
+        (T0 + HOUR, INVOCATION_ID),
     ),
     (
         "a same-state SET of state on a terminal invocation passes",

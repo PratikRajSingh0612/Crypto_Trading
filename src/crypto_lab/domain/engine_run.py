@@ -21,7 +21,7 @@ frozen mapping, and the coupled terminal mapping below returns nothing for an
 Nothing here launches, supervises or inspects a process, reads a clock, draws an
 identifier, or touches a repository.
 
-Six kinds of rule live here.
+Seven kinds of rule live here.
 
 1. **Record shape** -- ``EngineRunRecord``'s validator: plan section 3.8's
    optionality column and section 5's "fields that become present" column.
@@ -30,7 +30,8 @@ Six kinds of rule live here.
    the five non-success terminal states; ``availability_observation_id`` is absent
    before ``READY``, required from ``READY`` onward and in ``UNAVAILABLE``, and
    predecessor-dependent in the four terminals ``VALIDATING`` reaches directly;
-   ``finalization_deadline_utc`` is absent throughout Stage 5.
+   ``finalization_deadline_utc`` is admitted, never required, exactly in the six
+   states a RESULT finalization lease can leave behind (Stage 9 reading 9).
 2. **Edge ownership** -- ``RunEdgeOwner`` and ``run_edge_owner``: plan section 5
    gives ``READY -> STARTING`` and ``STARTING -> RUNNING`` exclusively to the linked
    launch operations and every other table edge to ``transition_run`` and the
@@ -53,6 +54,13 @@ Six kinds of rule live here.
 6. **Mixed running pair** -- ``is_mixed_running_pair``: the launch-handoff
    invariant of plan section 6 and specification 15.6 for a live ``RUN``
    invocation and its run.
+7. **Deadline snapshot** -- ``assert_deadline_snapshot``: the Stage 9 plan 2.4
+   predicate over the one lawful ``RUNNING -> RUNNING`` write, the RESULT lease's
+   deadline snapshot. ``run_edge_owner`` has no reflexive edge and a same-state
+   ``transition_run`` is a no-write replay, so this is the
+   ``assert_write_once_enrichment`` shape for the run: same run, both ``RUNNING``,
+   ``finalization_deadline_utc`` ``MISSING -> present``, ``revision`` plus one,
+   every other field equal.
 
 Where the plan is silent, these task-local readings are applied and declared here
 rather than inferred silently:
@@ -72,9 +80,17 @@ rather than inferred silently:
   is unrepresentable.
 - ``schema_version`` joins plan section 5's eleven immutable fields; its
   ``Literal`` admits one value, so the entry is inert and mirrors Task 3.
-- ``finalization_deadline_utc`` keeps its Stage 9 type so that Task 9 publishes it
-  as an optional property, while the validator rejects every present value
-  (plan 3.8 row 15, Task 9).
+- ``finalization_deadline_utc`` is published as an optional property (plan 3.8 row
+  15) and is governed by state alone (Stage 9 plan reading 9, 1.6 item 2): a
+  value is admitted when the state is ``RUNNING``, ``SUCCEEDED``,
+  ``SUCCEEDED_WITH_WARNINGS``, ``TIMED_OUT``, ``CANCELLED`` or ``FAILED`` -- the
+  states reachable after a RESULT lease snapshotted it -- and refused in
+  ``PENDING``, ``VALIDATING``, ``READY``, ``STARTING``, ``UNAVAILABLE`` and
+  ``NOT_APPLICABLE``. The last two are the generic verdicts ``reconcile_run``
+  decided before any deadline existed, so a snapshotted run has no lawful
+  successor in either; the relational trigger of the Stage 9 plan keeps a present
+  value immutable. The admission is behavior-only: the published schema bytes
+  are unchanged.
 - ``AttemptTokenMaterial`` is a nested value object without an envelope, following
   the ``ProcessStartFacts`` and ``RetryDecisionInsertOutcome`` precedents; its
   ``repr`` hides the raw token, its dumps carry it because the create-attempt
@@ -178,6 +194,18 @@ _OBSERVATION_REQUIRED_STATES: Final[frozenset[EngineRunState]] = frozenset(
 #: Plan section 3.8 row 14: "R at the transition into READY or UNAVAILABLE".
 _OBSERVATION_GOVERNING_TARGETS: Final[frozenset[EngineRunState]] = frozenset(
     {_R.READY, _R.UNAVAILABLE}
+)
+#: Stage 9 plan reading 9: the states a RESULT lease's deadline snapshot can
+#: leave behind -- ``RUNNING`` itself and the five terminals a leased run reaches.
+DEADLINE_SNAPSHOT_STATES: Final[frozenset[EngineRunState]] = frozenset(
+    {
+        _R.RUNNING,
+        _R.SUCCEEDED,
+        _R.SUCCEEDED_WITH_WARNINGS,
+        _R.TIMED_OUT,
+        _R.CANCELLED,
+        _R.FAILED,
+    }
 )
 #: Plan section 6 "Coupled terminal transitions", the rows whose condition is "any".
 #: ``FAILED_TO_START`` reads the primary diagnostic category and ``EXITED`` couples
@@ -301,10 +329,14 @@ class EngineRunRecord(CanonicalModel):
     # -- Plan section 3.8 row 15 ------------------------------------------------------
 
     def _validate_finalization_deadline(self) -> None:
-        if not _is_missing(self.finalization_deadline_utc):
+        if (
+            not _is_missing(self.finalization_deadline_utc)
+            and self.state not in DEADLINE_SNAPSHOT_STATES
+        ):
             raise ValueError(
-                "finalization_deadline_utc is absent throughout Stage 5; Stage 9 "
-                "snapshots it"
+                "finalization_deadline_utc is present only in RUNNING or a terminal "
+                "state a RESULT finalization lease can reach; "
+                f"{self.state.value} precedes a snapshot or was decided before one"
             )
 
     # -- Instants -----------------------------------------------------------------
@@ -331,6 +363,7 @@ class EngineRunCheck(StrEnum):
     TRANSITION_EDGE_OWNERSHIP = "TRANSITION_EDGE_OWNERSHIP"
     TRANSITION_IMMUTABLE_FIELD = "TRANSITION_IMMUTABLE_FIELD"
     TRANSITION_AVAILABILITY_OBSERVATION = "TRANSITION_AVAILABILITY_OBSERVATION"
+    DEADLINE_SNAPSHOT = "DEADLINE_SNAPSHOT"
 
 
 class EngineRunRuleViolation(ValueError):
@@ -500,6 +533,60 @@ def assert_run_transition(
             "availability_observation_id is request-governed only on a transition "
             "into READY or UNAVAILABLE and is otherwise carried forward unchanged",
         )
+    _require_bookkeeping(stored, replacement)
+
+
+#: Stage 9 plan 2.4: the three fields a deadline snapshot may change.
+_DEADLINE_SNAPSHOT_MUTABLE_FIELDS: Final[frozenset[str]] = frozenset(
+    {"finalization_deadline_utc", "revision", "updated_at_utc"}
+)
+
+
+def assert_deadline_snapshot(
+    stored: EngineRunRecord,
+    replacement: EngineRunRecord,
+) -> None:
+    """Stage 9 plan 2.4: is ``stored -> replacement`` the lawful deadline snapshot?
+
+    The RESULT finalization lease writes the one reflexive run edge the Stage 5
+    table has no owner for: the same ``RUNNING`` record with
+    ``finalization_deadline_utc`` added. Checks, in report order: both arguments
+    are ``EngineRunRecord`` instances (``TypeError`` otherwise); one identity;
+    ``stored`` and ``replacement`` both ``RUNNING``; the deadline ``MISSING`` on
+    ``stored`` and present on ``replacement``; every other field equal; revision
+    plus one; and ``updated_at_utc`` not moved backwards. Pure over its arguments.
+    """
+    if not isinstance(stored, EngineRunRecord) or not isinstance(
+        replacement, EngineRunRecord
+    ):
+        raise TypeError("stored and replacement must be EngineRunRecord instances")
+    _require_same_run(stored, replacement)
+    if stored.state is not _R.RUNNING or replacement.state is not _R.RUNNING:
+        raise EngineRunRuleViolation(
+            EngineRunCheck.DEADLINE_SNAPSHOT,
+            "a deadline snapshot is a RUNNING -> RUNNING write; "
+            f"{stored.state.value} -> {replacement.state.value} is not one",
+        )
+    if not _is_missing(stored.finalization_deadline_utc):
+        raise EngineRunRuleViolation(
+            EngineRunCheck.DEADLINE_SNAPSHOT,
+            "finalization_deadline_utc is snapshotted once: the stored record "
+            "already carries it",
+        )
+    if _is_missing(replacement.finalization_deadline_utc):
+        raise EngineRunRuleViolation(
+            EngineRunCheck.DEADLINE_SNAPSHOT,
+            "a deadline snapshot must add finalization_deadline_utc",
+        )
+    for name in EngineRunRecord.model_fields:
+        if name in _DEADLINE_SNAPSHOT_MUTABLE_FIELDS:
+            continue
+        if getattr(replacement, name) != getattr(stored, name):
+            raise EngineRunRuleViolation(
+                EngineRunCheck.DEADLINE_SNAPSHOT,
+                f"{name} may not change: a deadline snapshot adds the deadline and "
+                "advances the bookkeeping only",
+            )
     _require_bookkeeping(stored, replacement)
 
 

@@ -1126,6 +1126,10 @@ def test_the_consistency_report_is_zero_on_a_migrated_empty_database(
         "unresolved_causal_references",
         "registry_projection_mismatches",
         "foreign_key_violations",
+        "unmapped_finalizing",
+        "refs_without_manifest_file",
+        "success_without_manifest",
+        "journal_open",
     )
     with pytest.raises(FrozenInstanceError):
         report.foreign_key_violations = 1  # type: ignore[misc]

@@ -120,6 +120,10 @@ _INFRASTRUCTURE_EXEMPTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
         ("persistence/repositories.py", "sqlalchemy"),
         ("persistence/unit_of_work.py", "sqlalchemy"),
         ("persistence/reconciliation_source.py", "sqlalchemy"),
+        ("persistence/artifact_repositories.py", "sqlalchemy"),
+        ("persistence/audit_sink.py", "sqlalchemy"),
+        ("persistence/migrations/versions/r0002_stage9_artifacts.py", "sqlalchemy"),
+        ("persistence/migrations/versions/r0002_stage9_artifacts.py", "alembic"),
     }
 )
 #: Resolved through the module's own import bindings, so ``from datetime import
@@ -590,6 +594,12 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
             ("persistence/repositories.py", "sqlalchemy"),
             ("persistence/unit_of_work.py", "sqlalchemy"),
             ("persistence/reconciliation_source.py", "sqlalchemy"),
+            # Stage 9 plan section 2.6 (Task 5): three sqlalchemy pairs and the
+            # successor revision's alembic pair, 13 -> 17.
+            ("persistence/artifact_repositories.py", "sqlalchemy"),
+            ("persistence/audit_sink.py", "sqlalchemy"),
+            ("persistence/migrations/versions/r0002_stage9_artifacts.py", "sqlalchemy"),
+            ("persistence/migrations/versions/r0002_stage9_artifacts.py", "alembic"),
         }
     )
     source = repository_root / "src/crypto_lab"

@@ -1509,7 +1509,13 @@ def test_os_is_imported_only_by_the_artifact_store() -> None:
 
 def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
     """Plan 2.6 for Task 4 on the Task-3-excluded branch: paths 121 -> 125, roots
-    29 -> 30 with ``os``, deferred names 19 -> 18 without ``ContentHasher``."""
+    29 -> 30 with ``os``, deferred names 19 -> 18 without ``ContentHasher``.
+
+    Task 5 (the same branch table, "Tasks 4-7 running sizes" 125, 129, 132, 135)
+    moved the two census sizes 125 -> 129 with its four persistence modules; the
+    roots, the deferred names and the Task 4 module slice are Task-5-independent
+    and stay pinned exactly.
+    """
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert {
         "artifacts/paths.py",
@@ -1517,7 +1523,7 @@ def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
         "artifacts/validation.py",
         "artifacts/store.py",
     } <= allowed
-    assert len(allowed) == 125
+    assert len(allowed) == 129
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "os" in roots
     assert len(roots) == 30
@@ -1532,4 +1538,4 @@ def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
         "crypto_lab.artifacts.validation",
         "crypto_lab.artifacts.store",
     )
-    assert len(modules) == 125
+    assert len(modules) == 129

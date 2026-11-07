@@ -82,6 +82,9 @@ _VERIFIER = _REPOSITORY / "scripts/verify.ps1"
 _VERIFICATION_GUIDE = _REPOSITORY / "docs/development/verification.md"
 _README = _REPOSITORY / "README.md"
 _BASELINE = "r0001_stage8_baseline"
+#: Stage 9 Task 5: the packaged head is the baseline's single successor; a
+#: migrated database is CURRENT at it and the test successors descend from it.
+_HEAD = "r0002_stage9_artifacts"
 _PACKAGED_SCRIPTS = Path(migrations.__file__).resolve().parent
 #: Plan section 2.6: the six Task 2 source paths and the seven exemption pairs.
 _TASK2_SOURCE_PATHS = frozenset(
@@ -117,6 +120,12 @@ _EXPECTED_EXEMPTIONS = frozenset(
         ("persistence/repositories.py", "sqlalchemy"),  # Task 4
         ("persistence/unit_of_work.py", "sqlalchemy"),  # Task 4
         ("persistence/reconciliation_source.py", "sqlalchemy"),  # Task 5
+        # Stage 9 Task 5 (Stage 9 plan section 2.6): three sqlalchemy pairs and
+        # one alembic pair, 13 -> 17.
+        ("persistence/artifact_repositories.py", "sqlalchemy"),
+        ("persistence/audit_sink.py", "sqlalchemy"),
+        ("persistence/migrations/versions/r0002_stage9_artifacts.py", "sqlalchemy"),
+        ("persistence/migrations/versions/r0002_stage9_artifacts.py", "alembic"),
     }
 )
 _EXTRA_TABLE_REVISION_SOURCE = '''"""Test-only successor: adds one table."""
@@ -127,7 +136,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "r0002_test_extra"
-down_revision = "r0001_stage8_baseline"
+down_revision = "r0002_stage9_artifacts"
 branch_labels = None
 depends_on = None
 
@@ -146,7 +155,7 @@ from __future__ import annotations
 from alembic import op
 
 revision = "r0002_test_sibling"
-down_revision = "r0001_stage8_baseline"
+down_revision = "r0002_stage9_artifacts"
 branch_labels = None
 depends_on = None
 
@@ -166,7 +175,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "r0002_test_dbapi"
-down_revision = "r0001_stage8_baseline"
+down_revision = "r0002_stage9_artifacts"
 branch_labels = None
 depends_on = None
 
@@ -305,16 +314,20 @@ def _literal(path: Path, name: str) -> Any:
 
 
 def test_the_script_directory_has_exactly_one_head_named_by_the_baseline() -> None:
-    assert expected_head() == _BASELINE
+    """The name is historical: since Stage 9 Task 5 the one head is the baseline's
+    single successor ``r0002_stage9_artifacts``."""
+    assert expected_head() == _HEAD
 
 
 def test_the_migration_history_is_the_one_baseline_revision() -> None:
-    """Reading 18: one revision file beside an ignored ``__init__.py`` (reading 17),
-    identifier-safe, with no down revision."""
+    """Reading 18: the baseline revision file and its one Stage 9 successor beside
+    an ignored ``__init__.py`` (reading 17), identifier-safe; the baseline has no
+    down revision and is never edited."""
     versions = _PACKAGED_SCRIPTS / "versions"
     assert sorted(path.name for path in versions.glob("*.py")) == [
         "__init__.py",
         f"{_BASELINE}.py",
+        f"{_HEAD}.py",
     ]
     assert r0001_stage8_baseline.revision == _BASELINE
     assert r0001_stage8_baseline.down_revision is None
@@ -423,7 +436,7 @@ def test_every_revision_state_is_classified_and_refusals_do_not_mutate(
         report = check_revision(connection)
         assert report.state is RevisionState.EMPTY
         assert not isinstance(report.current_revision, str)
-        assert report.expected_head == _BASELINE
+        assert report.expected_head == _HEAD
     migrating.close()
     assert path.is_file()
     before = file_sha256(path)
@@ -432,15 +445,15 @@ def test_every_revision_state_is_classified_and_refusals_do_not_mutate(
     assert _details(empty) == {
         "operation": "open",
         "state": "EMPTY",
-        "expected_head": _BASELINE,
+        "expected_head": _HEAD,
     }
     assert file_sha256(path) == before
 
     migrating = ok(open_for_migration(path, busy_timeout_ms=100, clock=_clock()))
     applied = ok(apply_migrations(migrating))
     assert applied.state is RevisionState.CURRENT
-    assert applied.current_revision == _BASELINE
-    assert applied.expected_head == _BASELINE
+    assert applied.current_revision == _HEAD
+    assert applied.expected_head == _HEAD
     migrating.close()
     current = ok(open_database(path, busy_timeout_ms=100, clock=_clock()))
     with current.read_only() as connection:
@@ -455,7 +468,7 @@ def test_every_revision_state_is_classified_and_refusals_do_not_mutate(
         "operation": "open",
         "state": "UNKNOWN",
         "current_revision": "zz_future",
-        "expected_head": _BASELINE,
+        "expected_head": _HEAD,
     }
     assert (
         code(open_for_migration(path, busy_timeout_ms=100, clock=_clock()))
@@ -517,8 +530,8 @@ def test_a_current_database_is_refused_by_apply_migrations(tmp_path: Path) -> No
         assert _details(refused) == {
             "operation": "upgrade",
             "state": "CURRENT",
-            "current_revision": _BASELINE,
-            "expected_head": _BASELINE,
+            "current_revision": _HEAD,
+            "expected_head": _HEAD,
         }
         with database.read_only() as connection:
             assert check_revision(connection).state is RevisionState.CURRENT
@@ -539,7 +552,7 @@ def test_a_behind_database_is_admitted_by_apply_migrations_only(
         with database.read_only() as connection:
             report = check_revision(connection, script_location=scripts)
             assert report.state is RevisionState.BEHIND
-            assert report.current_revision == _BASELINE
+            assert report.current_revision == _HEAD
             assert report.expected_head == "r0002_test_extra"
         applied = ok(apply_migrations(database, script_location=scripts))
         assert applied.state is RevisionState.CURRENT
@@ -579,7 +592,7 @@ def test_a_behind_database_refuses_the_normal_open_and_admits_migration(
     assert _details(refused) == {
         "operation": "open",
         "state": "BEHIND",
-        "current_revision": _BASELINE,
+        "current_revision": _HEAD,
         "expected_head": "r0002_test_extra",
     }
     assert file_sha256(path) == before
@@ -679,7 +692,7 @@ def test_a_failing_revision_rolls_back_to_the_prior_revision(
             connection, script_location=two_revision_script_directory
         )
         assert report.state is RevisionState.BEHIND
-        assert report.current_revision == _BASELINE
+        assert report.current_revision == _HEAD
         assert "half_table" not in {row.name for row in schema_objects(connection)}
         assert connection.execute(text("PRAGMA quick_check")).scalar_one() == "ok"
     opened.close()
@@ -753,7 +766,7 @@ def test_a_revision_raising_a_dbapi_error_reports_its_result_code(
         with opened.read_only() as connection:
             report = check_revision(connection, script_location=scripts)
             assert report.state is RevisionState.BEHIND
-            assert report.current_revision == _BASELINE
+            assert report.current_revision == _HEAD
     finally:
         opened.close()
 
@@ -780,7 +793,7 @@ def test_the_failing_revision_is_named_when_a_later_one_exists(
                 connection, script_location=two_revision_script_directory
             )
             assert report.state is RevisionState.BEHIND
-            assert report.current_revision == _BASELINE
+            assert report.current_revision == _HEAD
     finally:
         opened.close()
 
@@ -1026,28 +1039,33 @@ def test_verify_migrations_imports_no_subprocess_and_reads_no_environment() -> N
 def test_the_source_allowlist_and_import_roots_name_the_migration_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert _TASK2_SOURCE_PATHS <= allowed
-    assert len(allowed) == 125  # Stage 9 Task 4 appended the four store modules
+    assert len(allowed) == 129  # Stage 9 Task 5 appended the four persistence modules
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "alembic" in roots
     assert len(roots) == 30  # Stage 9 Task 4 added `os`
     modules = _literal(_PACKAGE_LAYOUT, "PACKAGE_MODULES")
     start = modules.index("crypto_lab.persistence.diagnostics") + 1
     assert tuple(modules[start : start + len(_TASK2_MODULES)]) == _TASK2_MODULES
-    assert len(modules) == 125
+    # Stage 9 Task 5: the successor revision directly after the baseline.
+    assert modules[start + len(_TASK2_MODULES)] == (
+        "crypto_lab.persistence.migrations.versions.r0002_stage9_artifacts"
+    )
+    assert len(modules) == 129
 
 
 def test_the_two_cross_pins_moved_to_the_task_two_sizes() -> None:
     for path in (_PREFLIGHT_TESTS, _RECONCILIATION_TESTS):
         source = path.read_text(encoding="utf-8")
-        assert "len(allowed) == 125" in source  # moved again by Stage 9 Task 4
-        assert "len(modules) == 125" in source
+        assert "len(allowed) == 129" in source  # moved again by Stage 9 Task 5
+        assert "len(modules) == 129" in source
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     assert "len(roots) == 30" in preflight
 
 
-def test_the_infrastructure_exemptions_are_exactly_the_thirteen_reviewed_pairs() -> (
+def test_the_infrastructure_exemptions_are_exactly_the_seventeen_reviewed_pairs() -> (
     None
 ):
+    assert len(_EXPECTED_EXEMPTIONS) == 17
     assert _literal(_STAGE5_GUARD, "_INFRASTRUCTURE_EXEMPTIONS") == _EXPECTED_EXEMPTIONS
 
 

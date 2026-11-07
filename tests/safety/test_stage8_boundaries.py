@@ -106,13 +106,23 @@ STAGE8_SOURCE_FILES: Final[tuple[str, ...]] = (
 #: The persistence package: the fifteen minus the two ports plus the pre-existing
 #: package marker.
 _PERSISTENCE_PACKAGE_INIT: Final = "persistence/__init__.py"
+#: Stage 9 plan section 2.6 (Task 5): the four persistence increments, unioned
+#: into the derivation below while ``STAGE8_SOURCE_FILES`` stays fifteen.
+_STAGE9_PERSISTENCE_FILES: Final[tuple[str, ...]] = (
+    "persistence/artifact_codecs.py",
+    "persistence/artifact_repositories.py",
+    "persistence/audit_sink.py",
+    "persistence/migrations/versions/r0002_stage9_artifacts.py",
+)
 _PERSISTENCE_MODULES: Final[frozenset[str]] = frozenset(
     {path for path in STAGE8_SOURCE_FILES if path.startswith("persistence/")}
     | {_PERSISTENCE_PACKAGE_INIT}
+    | set(_STAGE9_PERSISTENCE_FILES)
 )
 _PORT_MODULES: Final[tuple[str, ...]] = ("datasets/ports.py", "strategy/ports.py")
 #: Plan section 2.6 (import-root allowlist): the exact importer sets of the two
-#: Stage 8 roots.
+#: Stage 8 roots; Stage 9 Task 5 adds three ``sqlalchemy`` importers and one
+#: ``alembic`` importer (the successor revision).
 _SQLALCHEMY_IMPORTERS: Final[frozenset[str]] = frozenset(
     {
         "persistence/database.py",
@@ -124,6 +134,9 @@ _SQLALCHEMY_IMPORTERS: Final[frozenset[str]] = frozenset(
         "persistence/unit_of_work.py",
         "persistence/repositories.py",
         "persistence/reconciliation_source.py",
+        "persistence/artifact_repositories.py",
+        "persistence/audit_sink.py",
+        "persistence/migrations/versions/r0002_stage9_artifacts.py",
     }
 )
 _ALEMBIC_IMPORTERS: Final[frozenset[str]] = frozenset(
@@ -131,6 +144,7 @@ _ALEMBIC_IMPORTERS: Final[frozenset[str]] = frozenset(
         "persistence/migration_runner.py",
         "persistence/migrations/env.py",
         "persistence/migrations/versions/r0001_stage8_baseline.py",
+        "persistence/migrations/versions/r0002_stage9_artifacts.py",
     }
 )
 _ROOT_CONFINEMENT: Final[dict[str, frozenset[str]]] = {
@@ -239,6 +253,58 @@ _PERSISTENCE_IMPORTS: Final[dict[str, frozenset[str]]] = {
     "persistence/migrations/versions/r0001_stage8_baseline.py": frozenset(
         {"persistence"}
     ),
+    "persistence/migrations/versions/r0002_stage9_artifacts.py": frozenset(
+        {"persistence"}
+    ),
+    # Stage 9 Task 5: the codecs consume the five Stage 9 families and the Stage 8
+    # codec helpers; the repositories and the sink build on the Stage 8 scope,
+    # registries and schema.
+    "persistence/artifact_codecs.py": frozenset(
+        {
+            "artifacts.journal",
+            "artifacts.manifest",
+            "artifacts.models",
+            "artifacts.ownership",
+            "audit.models",
+            "domain.canonical_json",
+            "domain.hashing",
+            "domain.ports",
+            "domain.results",
+            "persistence.codecs",
+        }
+    ),
+    "persistence/artifact_repositories.py": frozenset(
+        {
+            "artifacts.journal",
+            "artifacts.manifest",
+            "artifacts.models",
+            "artifacts.ownership",
+            "domain.identifiers",
+            "domain.results",
+            "persistence.artifact_codecs",
+            "persistence.codecs",
+            "persistence.registries",
+            "persistence.repositories",
+            "persistence.schema",
+        }
+    ),
+    "persistence/audit_sink.py": frozenset(
+        {
+            "audit.models",
+            "domain.canonical_json",
+            "domain.diagnostics",
+            "domain.identifiers",
+            "domain.ports",
+            "domain.results",
+            "persistence.artifact_codecs",
+            "persistence.codecs",
+            "persistence.database",
+            "persistence.diagnostics",
+            "persistence.registries",
+            "persistence.repositories",
+            "persistence.schema",
+        }
+    ),
     "persistence/reconciliation_source.py": frozenset(
         {
             "domain.command_invocation",
@@ -300,7 +366,10 @@ _PERSISTENCE_IMPORTS: Final[dict[str, frozenset[str]]] = {
         {
             "adapters.limits",
             "adapters.vocabulary",
+            "artifacts.journal",
+            "artifacts.models",
             "artifacts.ownership",
+            "audit.models",
             "configuration.models",
             "datasets",
             "domain.base",
@@ -327,6 +396,8 @@ _PERSISTENCE_IMPORTS: Final[dict[str, frozenset[str]]] = {
             "domain.results",
             "domain.versioning",
             "experiments.ports",
+            "persistence.artifact_repositories",
+            "persistence.audit_sink",
             "persistence.database",
             "persistence.diagnostics",
             "persistence.registries",
@@ -346,7 +417,13 @@ _PERSISTENCE_FAMILIES: Final[frozenset[str]] = frozenset(
         "adapters.limits",
         "adapters.ports",
         "adapters.vocabulary",
+        # Stage 9 plan section 2.6 (Task 5): exactly the five Stage 9 families.
+        "artifacts.journal",
+        "artifacts.manifest",
+        "artifacts.models",
         "artifacts.ownership",
+        "audit.models",
+        "audit.sink",
         "configuration.models",
         "configuration.retry_policy",
         "configuration.snapshot",
@@ -406,6 +483,8 @@ _DIAGNOSTIC_IDS_NAMERS: Final[frozenset[str]] = frozenset(
 )
 _COMMAND_INVOCATION_ENCODER: Final = "encode_command_invocation"
 _BASELINE_REVISION: Final = "r0001_stage8_baseline"
+#: Stage 9 Task 5: the baseline's single successor and the one head.
+_STAGE9_REVISION: Final = "r0002_stage9_artifacts"
 _VERSIONS_DIRECTORY: Final = "persistence/migrations/versions"
 _ROADMAP: Final = "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md"
 _VERIFICATION_GUIDE: Final = "docs/development/verification.md"
@@ -770,11 +849,13 @@ def test_the_stage_eight_source_files_are_exactly_the_fifteen_plan_paths(
     assert _PERSISTENCE_PACKAGE_INIT not in STAGE8_SOURCE_FILES
     # The whole inventory: 95 at the planning base plus the fifteen, plus the five
     # artifact contract modules of Stage 9 Task 1, the five audit modules and
-    # the metric module of Stage 9 Task 2, and the four path, hashing, validation
-    # and store modules of Stage 9 Task 4 (Stage 9 plan section 2.6, the
-    # Task-3-excluded branch).
-    assert len(_ALLOWED_SOURCE_FILES) == 125
-    assert len(_source_files(repository_root)) == 125
+    # the metric module of Stage 9 Task 2, the four path, hashing, validation
+    # and store modules of Stage 9 Task 4, and the four persistence increments of
+    # Stage 9 Task 5 (Stage 9 plan section 2.6, the Task-3-excluded branch).
+    assert len(_ALLOWED_SOURCE_FILES) == 129
+    assert len(_source_files(repository_root)) == 129
+    assert set(_STAGE9_PERSISTENCE_FILES) <= _ALLOWED_SOURCE_FILES
+    assert set(_STAGE9_PERSISTENCE_FILES).isdisjoint(STAGE8_SOURCE_FILES)
     on_disk = {
         _label(repository_root, path)
         for path in _source_files(repository_root)
@@ -794,8 +875,9 @@ def test_each_stage_eight_import_root_is_confined_to_its_named_modules(
         assert importers <= _PERSISTENCE_MODULES
         violations.extend(_confinement_violations(roots_by_module, root, importers))
     assert violations == []
-    assert len(_SQLALCHEMY_IMPORTERS) == 9
-    assert len(_ALEMBIC_IMPORTERS) == 3
+    # Stage 9 Task 5: 9 -> 12 and 3 -> 4 (Stage 9 plan section 2.6).
+    assert len(_SQLALCHEMY_IMPORTERS) == 12
+    assert len(_ALEMBIC_IMPORTERS) == 4
     assert _ALEMBIC_IMPORTERS < _SQLALCHEMY_IMPORTERS
     # Every exemption pair of the Stage 5 guard is one of these importers' roots.
     stage8_pairs = {
@@ -918,26 +1000,39 @@ def test_diagnostic_ids_are_written_only_through_the_whole_row_encode(
     assert _values_call_violations(unit_of_work, "persistence/unit_of_work.py") == []
 
 
-def test_the_script_directory_holds_exactly_the_baseline_head(
-    repository_root: Path,
-) -> None:
-    assert expected_head() == _BASELINE_REVISION
-    versions = _source_path(repository_root, _VERSIONS_DIRECTORY)
-    assert sorted(path.name for path in versions.rglob("*.py")) == [
-        "__init__.py",
-        f"{_BASELINE_REVISION}.py",
-    ]
-    tree = _parse(versions / f"{_BASELINE_REVISION}.py")
+def _revision_bindings(path: Path) -> dict[str, object]:
+    tree = _parse(path)
     bindings: dict[str, object] = {}
     for node in tree.body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
             if isinstance(target, ast.Name) and isinstance(node.value, ast.Constant):
                 bindings[target.id] = node.value.value
-    assert bindings["revision"] == _BASELINE_REVISION
-    assert bindings["down_revision"] is None
-    assert bindings["branch_labels"] is None
-    assert bindings["depends_on"] is None
+    return bindings
+
+
+def test_the_script_directory_holds_exactly_the_baseline_head(
+    repository_root: Path,
+) -> None:
+    """The name is historical: since Stage 9 Task 5 the one head is the baseline's
+    single successor and the baseline itself is unchanged."""
+    assert expected_head() == _STAGE9_REVISION
+    versions = _source_path(repository_root, _VERSIONS_DIRECTORY)
+    assert sorted(path.name for path in versions.rglob("*.py")) == [
+        "__init__.py",
+        f"{_BASELINE_REVISION}.py",
+        f"{_STAGE9_REVISION}.py",
+    ]
+    baseline = _revision_bindings(versions / f"{_BASELINE_REVISION}.py")
+    assert baseline["revision"] == _BASELINE_REVISION
+    assert baseline["down_revision"] is None
+    assert baseline["branch_labels"] is None
+    assert baseline["depends_on"] is None
+    successor = _revision_bindings(versions / f"{_STAGE9_REVISION}.py")
+    assert successor["revision"] == _STAGE9_REVISION
+    assert successor["down_revision"] == _BASELINE_REVISION
+    assert successor["branch_labels"] is None
+    assert successor["depends_on"] is None
 
 
 def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
@@ -949,11 +1044,12 @@ def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
     # registry and files 35 -> 43, hashing profiles 12 -> 17; Task 2: paths -> 121,
     # deferred names -> 19, registry and files -> 46, profiles -> 18; Task 4
     # (Task-3-excluded branch): paths -> 125, import roots 29 -> 30 (`os`),
-    # deferred names -> 18; the rest is unchanged.
-    assert len(_ALLOWED_SOURCE_FILES) == 125
+    # deferred names -> 18; Task 5: paths -> 129, exemption pairs 13 -> 17; the
+    # rest is unchanged.
+    assert len(_ALLOWED_SOURCE_FILES) == 129
     assert len(_ALLOWED_IMPORT_ROOTS) == 30
     assert len(_DEFERRED_DEFINITIONS) == 18
-    assert len(_INFRASTRUCTURE_EXEMPTIONS) == 13
+    assert len(_INFRASTRUCTURE_EXEMPTIONS) == 17
     assert len(_EXPECTED_READER_IMPLEMENTATIONS) == 5
     assert len(_SUBPROCESS_IMPORTERS) == 12
     assert len(_EXPECTED_RUNTIME_REQUIREMENTS) == 4

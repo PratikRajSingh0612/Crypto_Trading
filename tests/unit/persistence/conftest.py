@@ -11,8 +11,10 @@ table in the plan 6.4 dependency order, executed through ``raw_connection`` beca
 no codec exists before Task 3) and ``two_revision_script_directory`` (a
 ``tmp_path`` copy of the packaged script directory plus a generated
 ``r0002_test_failing.py`` whose ``upgrade()`` creates ``half_table`` and then
-raises; cases C-21 ``BEHIND`` and C-22). Task 4 adds ``sqlite_harness``; no fixture
-is redefined by a later task. The seed rows are imported relatively: this
+raises; cases C-21 ``BEHIND`` and C-22; since Stage 9 Task 5 the test successor
+descends from the Stage 9 head ``r0002_stage9_artifacts``). Task 4 adds
+``sqlite_harness``; no fixture is redefined by a later task. The seed rows are
+imported relatively: this
 directory is the ``persistence`` test package (Task 1's authorized marker), so
 the constraints module and this conftest share one qualified module identity
 under pytest and the pinned mypy configuration alike.
@@ -30,6 +32,7 @@ from crypto_lab.domain.results import Success
 from crypto_lab.persistence import migrations
 from crypto_lab.persistence.database import SqliteDatabase
 from doubles.experiments import INSTANT, FixedClock
+from persistence_support.artifacts import ArtifactHarness
 from persistence_support.harness import (
     SqliteHarness,
     accept_any_revision,
@@ -50,7 +53,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "r0002_test_failing"
-down_revision = "r0001_stage8_baseline"
+down_revision = "r0002_stage9_artifacts"
 branch_labels = None
 depends_on = None
 
@@ -126,6 +129,20 @@ def sqlite_harness(sqlite_database: SqliteDatabase) -> Iterator[SqliteHarness]:
     one included -- and then disposes the engine, so no lock or handle survives.
     """
     harness = SqliteHarness(sqlite_database)
+    try:
+        yield harness
+    finally:
+        harness.close()
+
+
+@pytest.fixture
+def artifact_harness(sqlite_database: SqliteDatabase) -> Iterator[ArtifactHarness]:
+    """The Stage 9 Task 5 harness over the migrated database (Stage 9 plan 7.1).
+
+    ``close()`` rolls back every transaction a test left open and then disposes
+    the engine, exactly as ``sqlite_harness`` does.
+    """
+    harness = ArtifactHarness(sqlite_database)
     try:
         yield harness
     finally:

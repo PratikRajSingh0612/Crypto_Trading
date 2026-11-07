@@ -47,8 +47,9 @@ schema's generated CHECK lists consume); the
 Stage 8 guard narrows the allowance to the exact module set in Task 8. The prohibited
 set names ``capabilities``, ``cli`` and the composition module: the implementation of
 the application-owned ports never imports the resolver, a composition root or the
-registry that composes the layers, and ``audit`` stays outside the closure because it
-is Stage 9's package.
+registry that composes the layers. ``audit`` stayed outside the closure until Stage 9
+Task 5 (Stage 9 plan section 2.6), whose SQLite audit sink persists ``AuditEvent``
+rows; the negative control moved to the composition edges that stay refused.
 """
 
 from __future__ import annotations
@@ -150,6 +151,8 @@ _PROHIBITED_FOR_PERSISTENCE: tuple[str, ...] = (
 )
 #: Stage 8 plan section 2.6: the package-level closure of ``persistence`` (module
 #: docstring); the Stage 8 guard narrows it to the exact module set in Task 8.
+#: Stage 9 plan section 2.6 (Task 5) admits ``audit``: the SQLite audit sink
+#: persists ``AuditEvent`` rows (specification 27.1 permits the table edge).
 _ALLOWED_FOR_PERSISTENCE: tuple[str, ...] = (
     "crypto_lab.domain",
     "crypto_lab.experiments",
@@ -160,6 +163,7 @@ _ALLOWED_FOR_PERSISTENCE: tuple[str, ...] = (
     "crypto_lab.strategy",
     "crypto_lab.configuration",
     "crypto_lab.persistence",
+    "crypto_lab.audit",
 )
 _ARTIFACTS = "artifacts"
 #: Stage 9 plan section 2.6 (architecture closure): every central package
@@ -532,6 +536,12 @@ def test_persistence_reaches_only_its_stage_eight_allowlist(
     assert "crypto_lab.experiments.ports" in reached
     assert "crypto_lab.adapters.ports" in reached
     assert "crypto_lab.process_supervision.models" in reached
+    # Stage 9 Task 5: the audit sink persists ``AuditEvent`` rows and the Stage 9
+    # codecs consume the artifact records (the five families of the Stage 8 guard).
+    assert "crypto_lab.audit.models" in reached
+    assert "crypto_lab.artifacts.models" in reached
+    assert "crypto_lab.artifacts.journal" in reached
+    assert "crypto_lab.artifacts.manifest" in reached
 
 
 def test_artifacts_imports_nothing_from_any_prohibited_package(
@@ -730,22 +740,30 @@ def test_the_scanner_rejects_every_package_prohibited_for_persistence(
     assert tuple(item.imported_name for item in violations) == (prohibited_package,)
 
 
-def test_the_persistence_allowlist_rejects_the_table_permitted_audit_edge(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "from crypto_lab.cli import main\n",
+        "def compose() -> None:\n"
+        "    from crypto_lab.schema_registry import SCHEMA_DEFINITIONS\n"
+        "    del SCHEMA_DEFINITIONS\n",
+    ],
+)
+def test_the_persistence_allowlist_still_refuses_the_composition_edges(
+    tmp_path: Path, statement: str
 ) -> None:
-    """The allowlist is a scope closure: ``audit`` abstractions are permitted by
-    section 27.1 and still outside Stage 8, so a planted edge must surface as
-    unexpected."""
-    package_root = _write_package(
-        tmp_path, _PERSISTENCE, "from crypto_lab.audit import sink\n"
-    )
+    """Stage 9 Task 5 admitted ``audit`` to the closure (the audit sink), so the
+    negative control moves to the edges that stay refused: a composition root
+    and the composition module -- a function-local import just the same."""
+    package_root = _write_package(tmp_path, _PERSISTENCE, statement)
 
     reached = _allowed_project_imports(package_root, _PERSISTENCE)
 
-    assert reached == ("crypto_lab.audit",)
+    assert len(reached) == 1
     assert not any(
         _is_within(reached[0], allowed) for allowed in _ALLOWED_FOR_PERSISTENCE
     )
+    assert reached[0] in {"crypto_lab.cli", _COMPOSITION_MODULE}
 
 
 @pytest.mark.parametrize("prohibited_package", _PROHIBITED_FOR_ARTIFACTS)
