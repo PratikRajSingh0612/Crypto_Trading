@@ -48,21 +48,47 @@ from pydantic.experimental.missing_sentinel import MISSING
 from sqlalchemy import Select, select
 from sqlalchemy.exc import DBAPIError
 
+from crypto_lab.artifacts.finalizer import CoreArtifactFinalizer
+from crypto_lab.artifacts.hashing import StreamingContentHasher
 from crypto_lab.artifacts.journal import (
     FinalizationJournalEntry,
     FinalizationJournalState,
 )
 from crypto_lab.artifacts.manifest import ArtifactManifest
-from crypto_lab.artifacts.models import ArtifactRef, CandidateArtifact
+from crypto_lab.artifacts.models import (
+    ArtifactRef,
+    CandidateArtifact,
+    CandidateArtifactState,
+    FinalizationResult,
+)
 from crypto_lab.artifacts.ownership import ArtifactOwnerRef
+from crypto_lab.artifacts.ports import (
+    CommandRootPaths,
+    FinalizationLog,
+    FinalizationProbe,
+)
+from crypto_lab.artifacts.recovery import (
+    FinalizationReconciliationReport,
+    reconcile_finalization,
+)
+from crypto_lab.artifacts.requests import (
+    EvidenceCorrelation,
+    EvidenceFinalizationRequest,
+    ResultFinalizationRequest,
+)
 from crypto_lab.audit.models import AuditEvent
 from crypto_lab.domain.command_invocation import CommandInvocationRecord
-from crypto_lab.domain.engine_run import EngineRunRecord
+from crypto_lab.domain.diagnostics import Diagnostic, DiagnosticCategory
+from crypto_lab.domain.engine_run import AttemptTokenMaterial, EngineRunRecord
 from crypto_lab.domain.lifecycle import (
     CommandInvocationState,
     CommandKind,
     EngineRunState,
+    ExperimentState,
 )
+from crypto_lab.domain.results import Result
+from crypto_lab.experiments.requests import RunTransitionRequest
+from crypto_lab.experiments.run_service import transition_run
 from crypto_lab.persistence.artifact_codecs import (
     decode_artifact_manifest,
     decode_artifact_ref,
@@ -78,15 +104,19 @@ from crypto_lab.persistence.artifact_repositories import (
     SanitizedManifestFacts,
     ValidationResultFacts,
 )
-from crypto_lab.persistence.codecs import micros_to_utc_text
+from crypto_lab.persistence.codecs import decode_diagnostic, micros_to_utc_text
 from crypto_lab.persistence.database import SqliteDatabase
-from crypto_lab.persistence.registries import SqliteArtifactOwnerRegistry
+from crypto_lab.persistence.registries import (
+    SqliteArtifactOwnerRegistry,
+    SqliteDiagnosticRecorder,
+)
 from crypto_lab.persistence.schema import (
     STAGE8_TABLE_COUNT,
     TABLES_IN_DEPENDENCY_ORDER,
     ArtifactRefRow,
     AuditEventRow,
     CandidateArtifactRow,
+    DiagnosticRow,
     FinalizationJournalRow,
     RunArtifactRow,
     RunManifestRow,
@@ -96,14 +126,39 @@ from crypto_lab.persistence.unit_of_work import SqliteTransaction, SqliteUnitOfW
 from doubles.artifacts import (
     ADAPTER_OWNER,
     DEADLINE,
+    EVIDENCE_FILES,
+    INVOCATION_CORRELATION,
+    RESULT_FILES,
     RUN_OWNER,
     RUN_OWNER_WITHOUT_INVOCATION,
     SYSTEM_OWNER,
+    ArtifactStoreFixture,
+    DurableState,
+    EvidencePlan,
+    FactAuditor,
+    FlagCancellationToken,
+    MemoryRecoveryValidator,
+    MemoryRegistrar,
+    RecordingLog,
+    RecordingProbe,
+    ResultPlan,
+    SequentialAuditIds,
+    plant_command_root,
+    plant_core_evidence,
+    read_token_material,
+    result_candidates,
+    run_coroutine,
+    sample_evidence_request,
+    sample_result_request,
 )
 from doubles.experiments import (
+    DIAG_ID,
     INSTANT,
+    OTHER_DIAG_ID,
     RUN_ID,
     FixedClock,
+    sample_diagnostic,
+    sample_experiment,
     sample_invocation,
     sample_run,
 )
@@ -111,6 +166,8 @@ from persistence_support.harness import (
     SqliteHarness,
     commit,
     ok,
+    open_test_database,
+    put_experiment,
     put_invocation,
     put_lifecycle_parents,
     put_run,
@@ -122,6 +179,7 @@ __all__ = [
     "STAGE9_TABLES",
     "TRIGGER_TABLES",
     "ArtifactHarness",
+    "FinalizationFixture",
     "Refusal",
     "ResultPrestate",
     "scan_tree_for_token",
@@ -541,3 +599,383 @@ def _execute_ddl(database: SqliteDatabase, statement: str) -> None:
         connection.execute(statement)
     finally:
         connection.close()
+
+
+# --------------------------------------------------------------------------
+# Task 6 (plan 7.1): the finalization fixture over SQLite
+# --------------------------------------------------------------------------
+
+_CANCELLATION_CODE: Final = "PROCESS.CANCELLED"
+_VERDICT_FAILURE_CODE: Final = "ENGINE.RUNTIME_FAILURE"
+_FIXTURE_REASON: Final = "TEST.FINALIZATION_FIXTURE"
+
+
+class FinalizationFixture:
+    """Plan 7.1: ``ArtifactStoreFixture``, the migrated test database,
+    ``SqliteUnitOfWork``, the Task 6 doubles (``MemoryRegistrar``,
+    ``MemoryRecoveryValidator``, ``FactAuditor`` over ``SequentialAuditIds``)
+    and ``CoreArtifactFinalizer`` composed under one ``tmp_path``.
+
+    The registrar records evidence links only and refuses every RESULT
+    registration, and the validator answers planted facts, so RESULT success is
+    unreachable here by construction; Task 7 replaces both with the production
+    registrar and validator. The probe is per call, so ``recover()`` -- always
+    ``NoProbe()`` -- never re-trips a crashing probe. ``reopen()`` closes and
+    reopens the database and keeps every root, so a crash-point test asserts
+    durable state through a fresh connection; ``open(..., reuse=True)`` composes
+    over an existing layout (the crash child's entry point).
+    """
+
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        clock: FixedClock,
+        reuse: bool,
+        hasher: StreamingContentHasher | None = None,
+    ) -> None:
+        self.tmp_path = tmp_path
+        self.clock = clock
+        self.hasher = hasher if hasher is not None else StreamingContentHasher()
+        self.roots = ArtifactStoreFixture(
+            tmp_path, clock=clock, hasher=self.hasher, reuse=reuse
+        )
+        self.database = open_test_database(tmp_path, clock=clock)
+        self.harness = ArtifactHarness(self.database)
+        # A fixture composed over an existing layout (the parent after the crash
+        # child) draws its audit identifiers from a seed the earlier process
+        # never used, so a committed row of that process is never re-identified.
+        committed = len(self.harness.committed_audit_events()) if reuse else 0
+        seed = "task6-sqlite" if not reuse else f"task6-sqlite-reopen-{committed}"
+        self.audit_ids = SequentialAuditIds(seed)
+        self.auditor = FactAuditor(self.audit_ids, clock)
+        self.registrar = MemoryRegistrar()
+        self.validator = MemoryRecoveryValidator(clock)
+        self.log = RecordingLog()
+        self.prestate: ResultPrestate | None = None
+        self._command_roots: dict[str, CommandRootPaths] = {}
+        if reuse:
+            self._rediscover_command_roots()
+
+    @classmethod
+    def open(
+        cls,
+        tmp_path: Path,
+        *,
+        clock: FixedClock,
+        reuse: bool = False,
+        hasher: StreamingContentHasher | None = None,
+    ) -> FinalizationFixture:
+        return cls(tmp_path, clock=clock, reuse=reuse, hasher=hasher)
+
+    # -- composition -----------------------------------------------------------
+
+    def _rediscover_command_roots(self) -> None:
+        """The command roots an earlier fixture planted under the runtime root."""
+        for child in sorted(self.roots.runtime_root.iterdir()):
+            if not child.is_dir() or not child.name.startswith("inv_"):
+                continue
+            runs = child / "runs"
+            if not runs.is_dir():
+                continue
+            for run_dir in sorted(runs.iterdir()):
+                work_dir = run_dir / "work"
+                self._command_roots[child.name] = CommandRootPaths(
+                    command_root=child,
+                    request_path=child / "request.json",
+                    work_dir=work_dir,
+                    result_path=work_dir / "adapter-result-manifest.json",
+                )
+
+    def command_roots(self, invocation_id: str) -> CommandRootPaths | MISSING:  # type: ignore[valid-type]
+        return self._command_roots.get(invocation_id, MISSING)
+
+    def token_material(self, invocation_id: str) -> AttemptTokenMaterial | MISSING:  # type: ignore[valid-type]
+        roots = self._command_roots.get(invocation_id)
+        if roots is None or not roots.request_path.is_file():
+            return MISSING
+        work_dir = roots.work_dir
+        run_id = work_dir.parent.name if isinstance(work_dir, Path) else RUN_ID
+        return read_token_material(roots, run_id=run_id)
+
+    def unit_of_work(self) -> SqliteUnitOfWork:
+        return self.harness.unit_of_work()
+
+    def begin(self) -> SqliteTransaction:
+        """The unit-of-work factory the finalizer and the reconciler call."""
+        return self.unit_of_work().begin()
+
+    def finalizer(
+        self,
+        probe: FinalizationProbe | None = None,
+        *,
+        log: FinalizationLog | None = None,
+        registrar: MemoryRegistrar | None = None,
+    ) -> CoreArtifactFinalizer:
+        return CoreArtifactFinalizer(
+            self.begin,
+            self.clock,
+            self.hasher,
+            self.roots.store,
+            probe if probe is not None else RecordingProbe(),
+            registrar if registrar is not None else self.registrar,
+            self.auditor,
+            command_roots=self.command_roots,
+            token_material=self.token_material,
+            log=log,
+        )
+
+    # -- planting --------------------------------------------------------------
+
+    def plant_run(
+        self,
+        *,
+        run_state: EngineRunState = EngineRunState.RUNNING,
+        invocation_state: CommandInvocationState = CommandInvocationState.EXITED,
+        experiment_state: ExperimentState = ExperimentState.RUNNING,
+    ) -> ResultPrestate:
+        """The section 5 pre-state rows: experiment, observation, the run (no
+        deadline: the finalizer snapshots it), the run-command invocation and the
+        owner rows."""
+        put_experiment(self.harness.lifecycle(), sample_experiment(experiment_state))
+        self.prestate = self.harness.seed_result_prestate(
+            run_state=run_state, deadline=None, invocation_state=invocation_state
+        )
+        return self.prestate
+
+    def plant_result_prestate(
+        self,
+        *,
+        files: Mapping[str, bytes] = RESULT_FILES,
+        candidate_state: CandidateArtifactState = CandidateArtifactState.CANDIDATE,
+        **request_overrides: Any,
+    ) -> ResultPlan:
+        """The section 5 RESULT pre-state: the rows, the work directory files,
+        ``request.json`` with the fixture token, two ``CANDIDATE`` rows and the
+        request."""
+        prestate = self.prestate if self.prestate is not None else self.plant_run()
+        roots = plant_command_root(
+            self.roots.runtime_root,
+            run_id=prestate.run.run_id,
+            invocation_id=prestate.invocation.invocation_id,
+            files=files,
+        )
+        self._command_roots[prestate.invocation.invocation_id] = roots
+        candidates = result_candidates(files=files, state=candidate_state)
+        for candidate in candidates:
+            self.harness.put_candidate(candidate)
+        request = sample_result_request(
+            [candidate.candidate_artifact_id for candidate in candidates],
+            run=prestate.run,
+            invocation=prestate.invocation,
+            **request_overrides,
+        )
+        return ResultPlan(
+            run=prestate.run,
+            invocation=prestate.invocation,
+            candidates=candidates,
+            roots=roots,
+            request=request,
+        )
+
+    def plant_evidence_prestate(
+        self,
+        owner: ArtifactOwnerRef = RUN_OWNER,
+        *,
+        correlation: EvidenceCorrelation = INVOCATION_CORRELATION,
+        files: Mapping[str, bytes] = EVIDENCE_FILES,
+        with_run: bool = True,
+        **request_overrides: Any,
+    ) -> EvidencePlan:
+        if with_run and self.prestate is None:
+            self.plant_run()
+        candidates = plant_core_evidence(
+            self.roots.store, owner=owner, correlation=correlation, files=files
+        )
+        for candidate in candidates:
+            self.harness.put_candidate(candidate)
+        request = sample_evidence_request(
+            [candidate.candidate_artifact_id for candidate in candidates],
+            owner=owner,
+            correlation=correlation,
+            **request_overrides,
+        )
+        return EvidencePlan(owner=owner, candidates=candidates, request=request)
+
+    def evidence_request_for(
+        self, owner: ArtifactOwnerRef = RUN_OWNER, *, correlation: EvidenceCorrelation
+    ) -> EvidenceFinalizationRequest:
+        """The EVIDENCE request over the committed ``CANDIDATE`` rows of ``owner``
+        (the crash child rebuilds its request from the planted rows)."""
+        transaction = self.begin()
+        try:
+            listed = ok(
+                transaction.candidate_artifacts.list_recoverable(
+                    (
+                        CandidateArtifactState.CANDIDATE,
+                        CandidateArtifactState.VALIDATING,
+                    ),
+                    owner,
+                )
+            )
+        finally:
+            transaction.rollback()
+        return sample_evidence_request(
+            [candidate.candidate_artifact_id for candidate in listed],
+            owner=owner,
+            correlation=correlation,
+        )
+
+    # -- driving -----------------------------------------------------------------
+
+    def finalize(
+        self,
+        request: ResultFinalizationRequest | EvidenceFinalizationRequest,
+        *,
+        probe: FinalizationProbe | None = None,
+        cancellation: FlagCancellationToken | None = None,
+        log: FinalizationLog | None = None,
+        registrar: MemoryRegistrar | None = None,
+    ) -> Result[FinalizationResult]:
+        token = cancellation if cancellation is not None else FlagCancellationToken()
+        finalizer = self.finalizer(probe, log=log, registrar=registrar)
+        return run_coroutine(finalizer.finalize(request, token))
+
+    def finalize_result(
+        self, plan: ResultPlan, *, probe: FinalizationProbe | None = None
+    ) -> Result[FinalizationResult]:
+        return self.finalize(plan.request, probe=probe)
+
+    def finalize_evidence(
+        self, plan: EvidencePlan, *, probe: FinalizationProbe | None = None
+    ) -> Result[FinalizationResult]:
+        return self.finalize(plan.request, probe=probe)
+
+    def recover(self) -> Result[FinalizationReconciliationReport]:
+        return reconcile_finalization(
+            unit_of_work_factory=self.begin,
+            store=self.roots.store,
+            hasher=self.hasher,
+            registrar=self.registrar,
+            recovery_validator=self.validator,
+            auditor=self.auditor,
+            clock=self.clock,
+            runtime_root=self.roots.runtime_root,
+            command_roots=self.command_roots,
+            token_material=self.token_material,
+            log=self.log,
+        )
+
+    def advance_clock(self, seconds: float) -> None:
+        self.clock.advance(seconds)
+
+    def reopen(self) -> None:
+        """Close the database and reopen it on the same path; every root and the
+        command roots stay (plan 7.1)."""
+        self.harness.close()
+        self.database = open_test_database(self.tmp_path, clock=self.clock)
+        self.harness = ArtifactHarness(self.database)
+
+    def close(self) -> None:
+        self.harness.close()
+
+    # -- the Stage 5 run writes the races use -------------------------------------
+
+    def current_run(self, run_id: str = RUN_ID) -> EngineRunRecord:
+        runs = [
+            run
+            for run in self.harness.lifecycle().committed_engine_runs()
+            if run.run_id == run_id
+        ]
+        assert len(runs) == 1, runs
+        return runs[0]
+
+    def cancel_run(self, run_id: str = RUN_ID) -> EngineRunRecord:
+        """The Stage 5 ``transition_run(RUNNING -> CANCELLED)`` with a recorded
+        ``CANCELLATION`` diagnostic naming the invocation (reading 23)."""
+        return self._transition(
+            run_id,
+            EngineRunState.CANCELLED,
+            sample_diagnostic(
+                DIAG_ID,
+                error_code=_CANCELLATION_CODE,
+                category=DiagnosticCategory.CANCELLATION,
+                retriable=False,
+            ),
+        )
+
+    def fail_run_by_verdict(self, run_id: str = RUN_ID) -> EngineRunRecord:
+        """The run moved ``RUNNING -> FAILED`` by a verdict (RC-14's pre-state)."""
+        return self._transition(
+            run_id,
+            EngineRunState.FAILED,
+            sample_diagnostic(
+                OTHER_DIAG_ID,
+                error_code=_VERDICT_FAILURE_CODE,
+                category=DiagnosticCategory.ENGINE_RUNTIME,
+                retriable=False,
+            ),
+        )
+
+    def _transition(
+        self, run_id: str, target: EngineRunState, diagnostic: Diagnostic
+    ) -> EngineRunRecord:
+        recorder = SqliteDiagnosticRecorder(self.database, clock=self.clock)
+        ok(recorder.record(diagnostic))
+        run = self.current_run(run_id)
+        # The Stage 5 operation stamps ``updated_at_utc`` from its clock, which
+        # never moves backwards past the planted row's own instant.
+        operation_clock = FixedClock(max(self.clock.now_utc(), run.updated_at_utc))
+        return ok(
+            transition_run(
+                RunTransitionRequest(
+                    schema_version="1.0.0",
+                    run_id=run_id,
+                    expected_revision=run.revision,
+                    target_state=target,
+                    reason_code=_FIXTURE_REASON,
+                    primary_terminal_diagnostic_id=diagnostic.diagnostic_id,
+                ),
+                unit_of_work=self.unit_of_work(),
+                clock=operation_clock,
+            )
+        )
+
+    # -- the durable snapshot ----------------------------------------------------
+
+    def committed_diagnostics(self) -> tuple[Diagnostic, ...]:
+        statement = select(DiagnosticRow).order_by(DiagnosticRow.diagnostic_id)
+        return tuple(
+            ok(decode_diagnostic(row, clock=self.clock))
+            for row in self.harness._rows(statement)
+        )
+
+    def durable(self, run_id: str = RUN_ID) -> DurableState:
+        """Every Stage 9 table beside the run and invocation rows, the filesystem
+        listing and the audit rows, through fresh read-only sessions (plan 7.1)."""
+        runs = [
+            run
+            for run in self.harness.lifecycle().committed_engine_runs()
+            if run.run_id == run_id
+        ]
+        invocations = [
+            invocation
+            for invocation in self.harness.lifecycle().committed_command_invocations()
+            if invocation.run_id == run_id
+            and invocation.command_kind is CommandKind.RUN
+        ]
+        return DurableState(
+            journal=self.harness.committed_journal(),
+            candidates=self.harness.committed_candidates(),
+            refs=self.harness.committed_refs(),
+            run=runs[0] if runs else None,
+            invocation=invocations[0] if invocations else None,
+            run_manifests=self.harness.committed_run_manifests(),
+            run_artifacts=self.harness.committed_run_artifacts(),
+            audit_events=self.harness.committed_audit_events(),
+            diagnostics=self.committed_diagnostics(),
+            object_blobs=self.roots.object_blobs(),
+            staging_files=self.roots.staging_files(),
+            command_root_files=self.roots.command_root_files(),
+            quarantine_entries=self.roots.quarantine_entries(),
+        )

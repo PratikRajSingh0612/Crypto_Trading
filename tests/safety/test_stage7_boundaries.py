@@ -253,12 +253,19 @@ _VERIFICATION_DESCENDANT_RULE: Final = "\n".join(
 )
 _DESCENDANT_RULE_PHRASE: Final = "not earlier than"
 _DESCENDANT_RULE_RETIRED_PHRASE: Final = "later than its parent"
-_NUMBER_WORDS: Final[Mapping[int, str]] = {10: "ten", 11: "eleven", 12: "twelve"}
+_NUMBER_WORDS: Final[Mapping[int, str]] = {
+    10: "ten",
+    11: "eleven",
+    12: "twelve",
+    13: "thirteen",
+}
 #: The guide's earlier counts: "ten" retired with the Stage 7 fake script, "eleven"
-#: with the Stage 8 interrupted-writer test (Stage 8 plan section 2.6, Task 6).
+#: with the Stage 8 interrupted-writer test (Stage 8 plan section 2.6, Task 6),
+#: "twelve" with the finalization crash child (Stage 9 plan section 2.6, Task 6).
 _RETIRED_SUBPROCESS_IMPORTER_PHRASES: Final[tuple[str, ...]] = (
     "the ten `subprocess` importers",
     "the eleven `subprocess` importers",
+    "the twelve `subprocess` importers",
 )
 
 
@@ -775,7 +782,7 @@ def test_the_guide_names_the_subprocess_importer_count_the_guard_pins(
     repository_root: Path,
 ) -> None:
     guide = _read(repository_root, _VERIFICATION_GUIDE)
-    assert len(_SUBPROCESS_IMPORTERS) == 12
+    assert len(_SUBPROCESS_IMPORTERS) == 13
     assert _subprocess_importer_phrase(len(_SUBPROCESS_IMPORTERS)) in guide
     for retired in _RETIRED_SUBPROCESS_IMPORTER_PHRASES:
         assert retired not in guide
@@ -913,9 +920,9 @@ def test_the_popen_locator_resolves_aliases_and_ignores_other_calls() -> None:
 
 
 def test_the_number_word_lookup_fails_by_name_outside_its_table() -> None:
-    assert _subprocess_importer_phrase(11) == "the eleven `subprocess` importers"
-    with pytest.raises(AssertionError, match="no number word for 13 importers"):
-        _number_word(13)
+    assert _subprocess_importer_phrase(12) == "the twelve `subprocess` importers"
+    with pytest.raises(AssertionError, match="no number word for 14 importers"):
+        _number_word(14)
 
 
 def test_the_fake_popen_scan_detects_each_mutation() -> None:

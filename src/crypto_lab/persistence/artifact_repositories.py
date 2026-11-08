@@ -19,7 +19,11 @@ sourced from a ``FINALIZING`` candidate -- so a refusal at a later mapping inser
 nothing (the table trigger refuses a non-``FINALIZING`` source the same way, so
 the repository answer is the invariant and never a raised error).
 ``list_recoverable`` excludes a ``FINALIZING`` candidate that already has a
-reference (plan RV-12, 19.1:1358).
+reference (plan RV-12, 19.1:1358). ``list_by_content_hash`` is the read-only
+lookup over ``ix_artifact_refs_content_hash`` the Task 6 reconciler decides RV-9
+with -- the one member added over the plan 4.1 list, recorded as a Task 6
+file-map correction for RV-9 and plan 6.2 (the row is authoritative; the
+``manifests/<artifact_id>.json`` projection may be absent).
 
 ``SqliteRunManifestRepository``, ``SqliteSanitizedManifestRepository``,
 ``SqliteValidationResultRepository`` and ``SqliteRunArtifactRepository`` are typed
@@ -689,6 +693,37 @@ class SqliteArtifactRepository:
                 operation="list_by_owner",
                 identity=owner_hash,
             )
+        return self._decode_rows(opened, rows)
+
+    def list_by_content_hash(
+        self, content_hash: Sha256
+    ) -> Result[tuple[ArtifactRef, ...]]:
+        """Every reference registering ``content_hash``, by ``artifact_id``: the
+        read-only lookup over ``ix_artifact_refs_content_hash`` the Task 6
+        reconciler decides RV-9 with (plan 6.2: the row is authoritative). One
+        ``SELECT``; a refusal is the classified failure naming this operation."""
+        opened = self._scope.open_statement()
+        if isinstance(opened, Failure):
+            return opened
+        statement = (
+            select(ArtifactRefRow)
+            .where(ArtifactRefRow.content_hash == content_hash)
+            .order_by(ArtifactRefRow.artifact_id)
+        )
+        try:
+            rows = opened.execute(statement).mappings().all()
+        except DBAPIError as error:
+            return self._scope.refused(
+                error,
+                table="artifact_refs",
+                operation="list_by_content_hash",
+                identity=content_hash,
+            )
+        return self._decode_rows(opened, rows)
+
+    def _decode_rows(
+        self, opened: Connection, rows: Sequence[RowMapping]
+    ) -> Result[tuple[ArtifactRef, ...]]:
         decoded: list[ArtifactRef] = []
         for row in rows:
             item = self._decode(opened, row)

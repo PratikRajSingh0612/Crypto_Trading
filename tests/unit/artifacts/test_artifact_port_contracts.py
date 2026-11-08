@@ -11,19 +11,22 @@ replacement step, a refused domain transition and a payload of the other record
 type are the invariant; and no method raises. The reference repository is the
 only writer of references, through ``stage_reference`` then
 ``record_finalization``, and refuses a candidate payload at the boundary (plan
-3.5 "candidate != reference", requirement rows F8.1-2, F8.1-3, F8.2-1, F8.2-2).
+3.5 "candidate != reference", requirement rows F8.1-2, F8.1-3, F8.2-1, F8.2-2);
+its ``list_by_content_hash`` is the Task 6 content-hash read (RV-9, plan 6.2),
+answered identically by both kinds.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import FrozenInstanceError, dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 import pytest
 from pydantic.experimental.missing_sentinel import MISSING
 
+from crypto_lab.artifacts.journal import FinalizationJournalState
 from crypto_lab.artifacts.models import (
     ArtifactFinalizationPurpose,
     ArtifactRef,
@@ -34,6 +37,23 @@ from crypto_lab.artifacts.models import (
     FinalizationResult,
 )
 from crypto_lab.artifacts.ownership import RunArtifactOwner
+from crypto_lab.artifacts.ports import (
+    Answer,
+    AuditFact,
+    CommandRootPaths,
+    FinalizationAuditor,
+    PurposeRegistrar,
+    ResultLeaseFacts,
+    ResultRegistration,
+    RunArtifactLink,
+)
+from crypto_lab.audit.models import CORE_ACTOR, AuditEvent, audit_details_hash
+from crypto_lab.domain.diagnostics import DiagnosticDetailValue
+from crypto_lab.domain.lifecycle import (
+    CommandInvocationState,
+    CommandKind,
+    EngineRunState,
+)
 from crypto_lab.domain.results import Failure, Result, Success
 from crypto_lab.persistence.diagnostics import (
     CONCURRENCY_CONFLICT,
@@ -51,23 +71,27 @@ from doubles.artifacts import (
     MemoryArtifactRepository,
     MemoryArtifactStore,
     MemoryCandidateArtifactRepository,
+    MemoryFinalizationHarness,
     bump_candidate,
     sample_artifact_manifest,
     sample_candidate,
     sample_finalization_result,
+    sample_journal,
     sample_mapping,
     sample_ref,
 )
 from doubles.experiments import (
     EXPERIMENT_ID,
     INSTANT,
+    INVOCATION_ID,
     OTHER_INVOCATION_ID,
     OTHER_RUN_ID,
+    RUN_ID,
     UUID_D,
     UUID_E,
     FixedClock,
 )
-from persistence_support.artifacts import ArtifactHarness
+from persistence_support.artifacts import ArtifactHarness, FinalizationFixture
 from persistence_support.harness import code, ok, open_test_database
 
 _S = CandidateArtifactState
@@ -410,6 +434,7 @@ def test_reference_answer_shapes_and_record_finalization(
     assert "does not exist" in _message(missing)
     assert code(refs.get_manifest(ref.artifact_id)) == INVARIANT_VIOLATION
     assert ok(refs.list_by_owner(RUN_OWNER)) == ()
+    assert ok(refs.list_by_content_hash(ref.content_hash)) == ()
     unstaged = refs.record_finalization(result)
     assert code(unstaged) == INVARIANT_VIOLATION
     assert "not staged" in _message(unstaged)
@@ -451,12 +476,59 @@ def test_reference_answer_shapes_and_record_finalization(
     assert ok(refs.list_by_owner(RUN_OWNER, _F.RESULT)) == (ref,)
     assert ok(refs.list_by_owner(RUN_OWNER, _F.EVIDENCE)) == ()
     assert ok(refs.list_by_owner(SYSTEM_OWNER)) == ()
+    assert ok(refs.list_by_content_hash(ref.content_hash)) == (ref,)
+    assert ok(refs.list_by_content_hash("f" * 64)) == ()
     # A second recording of the same identity is the conflict, not an exception.
     ok(refs.stage_reference(ref, manifest))
     assert code(refs.record_finalization(result)) == CONCURRENCY_CONFLICT
     _commit(ports)
     assert harness.committed_refs() == (ref,)
     assert harness.committed_candidates() == (finalizing,)
+
+
+def test_list_by_content_hash_answers_every_reference_of_a_hash_by_identity(
+    harness: ContractHarness,
+) -> None:
+    """The Task 6 content-hash read (RV-9; plan 6.2: the row is the authority a
+    blob's registration is read from). Deduplicated content is one blob
+    registered by several references, so both kinds answer every reference of
+    the hash in ``artifact_id`` order whatever the recording order, the hash of
+    another blob answers its own reference alone and an unregistered hash
+    answers ``()``."""
+    harness.seed()
+    shared = "f" * 64
+    first = sample_ref(
+        _finalize(harness, _put_candidate(harness, sample_candidate())),
+        content_hash=shared,
+    )
+    second = sample_ref(
+        _finalize(
+            harness,
+            _put_candidate(
+                harness, sample_candidate(candidate_artifact_id=OTHER_CANDIDATE_ID)
+            ),
+        ),
+        content_hash=shared,
+    )
+    other = sample_ref(
+        _finalize(
+            harness,
+            _put_candidate(
+                harness, sample_candidate(candidate_artifact_id=THIRD_CANDIDATE_ID)
+            ),
+        )
+    )
+    # The shared pair is recorded in reverse identity order, so an answer in
+    # recording order would differ from the identity order the lookup promises.
+    for ref in (*_by_identity(first, second)[::-1], other):
+        _record(harness, ref)
+    ports = harness.begin()
+    refs = ports.artifact_refs
+    assert ok(refs.list_by_content_hash(shared)) == _by_identity(first, second)
+    assert ok(refs.list_by_content_hash(other.content_hash)) == (other,)
+    assert ok(refs.list_by_content_hash("0" * 64)) == ()
+    ports.rollback()
+    assert harness.committed_refs() == _by_identity(first, second, other)
 
 
 # --------------------------------------------------------------------------
@@ -657,3 +729,234 @@ def test_a_later_mapping_refusal_records_none_of_the_batch(
     assert ok(ports.artifact_refs.record_finalization(result)) == batch
     _commit(ports)
     assert harness.committed_refs() == _by_identity(existing, first, second)
+
+
+# --------------------------------------------------------------------------
+# Task 6 compatibility evidence (plan 4.1 declared readings of ``ports.py``):
+# the fact-based auditor over the SQLite sink, the registrar's answer shapes
+# and the covariant ``Answer`` view over both facts implementations
+# --------------------------------------------------------------------------
+
+_PREPARED_DETAILS: dict[str, DiagnosticDetailValue] = {
+    "purpose": "EVIDENCE",
+    "candidates": 1,
+}
+
+
+@pytest.fixture
+def finalization(tmp_path: Path) -> Iterator[FinalizationFixture]:
+    opened = FinalizationFixture.open(tmp_path, clock=FixedClock(INSTANT))
+    try:
+        yield opened
+    finally:
+        opened.close()
+
+
+def test_fact_auditor_appends_canonical_events_through_the_sqlite_sink(
+    finalization: FinalizationFixture,
+) -> None:
+    """The fact port (``ports.py`` declared reading of plan 4.1 ``audit
+    (AuditSink)``): the auditor turns an ``AuditFact`` into a canonical
+    ``AuditEvent`` and appends it through ``SqliteTransaction.audit`` on the
+    caller's open transaction, so the row rolls back or commits with that
+    transaction; a fact outside the closed action vocabulary never becomes an
+    event."""
+    finalization.plant_run()
+    auditor: FinalizationAuditor = finalization.auditor
+    assert isinstance(auditor, FinalizationAuditor)
+    fact = AuditFact(
+        action="FINALIZATION_PREPARED",
+        outcome="SUCCEEDED",
+        correlation_id="fin_port-contract",
+        experiment_id=EXPERIMENT_ID,
+        run_id=RUN_ID,
+        invocation_id=INVOCATION_ID,
+        details=_PREPARED_DETAILS,
+    )
+    rolled_back = finalization.begin()
+    assert ok(auditor.append(rolled_back, fact)) is None
+    rolled_back.rollback()
+    assert finalization.harness.committed_audit_events() == ()
+    committed = finalization.begin()
+    assert ok(auditor.append(committed, fact)) is None
+    assert finalization.harness.committed_audit_events() == ()  # not yet visible
+    ok(committed.commit())
+    (event,) = finalization.harness.committed_audit_events()
+    assert isinstance(event, AuditEvent)
+    assert event.action.value == "FINALIZATION_PREPARED"
+    assert event.outcome.value == "SUCCEEDED"
+    assert event.actor == CORE_ACTOR
+    assert (event.experiment_id, event.run_id, event.invocation_id) == (
+        EXPERIMENT_ID,
+        RUN_ID,
+        INVOCATION_ID,
+    )
+    assert event.correlation_id == "fin_port-contract"
+    assert event.timestamp_utc == INSTANT
+    assert dict(event.details) == _PREPARED_DETAILS
+    assert event.details_hash == audit_details_hash(_PREPARED_DETAILS)
+    assert event.audit_event_id in finalization.audit_ids.issued
+    outside = AuditFact(
+        action="FINALIZATION_IMAGINED",
+        outcome="SUCCEEDED",
+        correlation_id="fin_port-contract",
+        details={},
+    )
+    transaction = finalization.begin()
+    try:
+        with pytest.raises(ValueError, match="FINALIZATION_IMAGINED"):
+            auditor.append(transaction, outside)
+    finally:
+        transaction.rollback()
+    assert len(finalization.harness.committed_audit_events()) == 1
+
+
+def test_registrar_answer_shapes_keep_result_success_unreachable(
+    tmp_path: Path,
+) -> None:
+    """Plan 4.1: ``register_evidence`` answers ``Result[None]`` and records the
+    ``RUN_EVIDENCE`` link on the open T3; ``register_result`` answers
+    ``Result[ResultRegistration]`` -- the Task 6 double refuses every call with
+    ``CORE.INVARIANT_VIOLATION`` and writes nothing, so RESULT success stays
+    unreachable here; the success shape is the frozen ``ResultRegistration``."""
+    harness = MemoryFinalizationHarness(tmp_path)
+    registrar = harness.registrar
+    assert isinstance(registrar, PurposeRegistrar)
+    evidence = harness.plant_evidence_prestate()
+    registered = ok(harness.finalize(evidence.request))
+    assert registered.journal_state == "REGISTERED"
+    assert (registrar.evidence_calls, registrar.result_calls) == (1, 0)
+    durable = harness.durable()
+    (ref,) = durable.refs
+    (link,) = durable.run_artifacts
+    assert (link.run_id, link.artifact_id, link.link_role) == (
+        RUN_ID,
+        ref.artifact_id,
+        "RUN_EVIDENCE",
+    )
+    assert not isinstance(link.run_manifest_id, str)
+    journal = sample_journal(FinalizationJournalState.MOVED, _F.RESULT)
+    transaction = harness.unit_of_work.begin()
+    try:
+        refused: Result[ResultRegistration] = registrar.register_result(
+            transaction, journal, (), object()
+        )
+        assert code(refused) == INVARIANT_VIOLATION
+        assert "Task 6 memory registrar" in _message(refused)
+        assert journal.finalization_id in _message(refused)
+    finally:
+        transaction.rollback()
+    assert registrar.result_calls == 1
+    assert harness.durable() == durable
+    registration = ResultRegistration(
+        run_manifest_id=RUN_MANIFEST_ID,
+        run_manifest_hash=RUN_MANIFEST_HASH,
+        refs=(ref,),
+        manifests=(sample_artifact_manifest(ref),),
+    )
+    assert registration.refs == (ref,)
+    assert registration.manifests[0].artifact_id == ref.artifact_id
+    with pytest.raises(FrozenInstanceError):
+        registration.refs = ()
+
+
+def test_answer_view_admits_both_facts_implementations(
+    finalization: FinalizationFixture, tmp_path: Path
+) -> None:
+    """Plan 4.1 declared reading of ``ports.py``: ``Success[T]`` is invariant, so
+    the facts members are typed ``Answer[<view>] | Failure``; the persistence
+    dataclass and the memory double both satisfy the view structurally --
+    ``mypy-all`` checks the annotated assignments, the asserts check the values.
+    The nominal alternative is refused by strict mypy (the ignored error below
+    is a used ignore, so its disappearance would fail ``mypy-all``)."""
+    finalization.plant_run()
+    transaction = finalization.begin()
+    try:
+        sqlite_answer: Answer[ResultLeaseFacts] | Failure = (
+            transaction.result_leases.active_attempt_facts(RUN_ID, INVOCATION_ID)
+        )
+        sqlite_links: Answer[tuple[RunArtifactLink, ...]] | Failure = (
+            transaction.run_artifacts.list_for_run(RUN_ID)
+        )
+        answered = transaction.result_leases.active_attempt_facts(RUN_ID, INVOCATION_ID)
+        nominal: Result[ResultLeaseFacts] = answered  # type: ignore[assignment]
+    finally:
+        transaction.rollback()
+    harness = MemoryFinalizationHarness(tmp_path / "memory")
+    harness.plant_run()
+    memory = harness.unit_of_work.begin()
+    try:
+        memory_answer: Answer[ResultLeaseFacts] | Failure = (
+            memory.result_leases.active_attempt_facts(RUN_ID, INVOCATION_ID)
+        )
+    finally:
+        memory.rollback()
+    for answer in (sqlite_answer, memory_answer):
+        assert not isinstance(answer, Failure), answer
+        assert answer.outcome == "SUCCESS"
+        facts: ResultLeaseFacts = answer.value
+        assert facts.run_id == RUN_ID
+        assert facts.run_invocation_id == INVOCATION_ID
+        assert facts.experiment_id == EXPERIMENT_ID
+        assert facts.run_state is EngineRunState.RUNNING
+        assert facts.invocation_state is CommandInvocationState.EXITED
+        assert facts.command_kind is CommandKind.RUN
+        assert facts.is_latest_attempt is True
+        assert facts.deadline_snapshotted is False
+    assert not isinstance(sqlite_links, Failure)
+    assert sqlite_links.value == ()
+    assert not isinstance(nominal, Failure)
+    assert not isinstance(sqlite_answer, Failure)
+    assert nominal.value.run_revision == sqlite_answer.value.run_revision
+
+
+# --------------------------------------------------------------------------
+# CommandRootPaths (plan 4.1): the kind-governed projection refuses every
+# shape the Stage 7 record would refuse
+# --------------------------------------------------------------------------
+
+
+def test_command_root_paths_refuse_every_foreign_shape(tmp_path: Path) -> None:
+    root = tmp_path / "inv_root"
+    manifest = root / "runs" / "run" / "work" / "adapter-result-manifest.json"
+    describe: dict[str, Any] = {
+        "command_root": root,
+        "request_path": root / "request.json",
+        "output_path": root / "output.json",
+    }
+    run: dict[str, Any] = {
+        "command_root": root,
+        "request_path": root / "request.json",
+        "work_dir": manifest.parent,
+        "result_path": manifest,
+    }
+    cases: list[tuple[dict[str, Any], str]] = [
+        (
+            {**describe, "command_root": Path("relative")},
+            "command_root must be an absolute",
+        ),
+        (
+            {**describe, "output_path": Path("output.json")},
+            "absolute Path when present",
+        ),
+        ({**describe, "work_dir": manifest.parent}, "present together or absent"),
+        (
+            {**run, "output_path": root / "output.json"},
+            "exactly when work_dir is absent",
+        ),
+        (
+            {**describe, "request_path": tmp_path / "elsewhere" / "request.json"},
+            "request_path must be lexically under command_root",
+        ),
+        (
+            {**run, "result_path": manifest.with_name("other.json")},
+            "adapter-result-manifest",
+        ),
+    ]
+    for fields, fragment in cases:
+        with pytest.raises(ValueError, match=fragment):
+            CommandRootPaths(**fields)
+    # The two admitted shapes, for contrast.
+    assert CommandRootPaths(**describe).is_run_root is False
+    assert CommandRootPaths(**run).is_run_root is True
+    assert CommandRootPaths(**run).raw_byte_paths == (root / "request.json", manifest)

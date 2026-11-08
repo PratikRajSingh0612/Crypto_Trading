@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import _winapi
 import ast
+import dataclasses
 import json
 import os
 from datetime import UTC, datetime
@@ -31,7 +32,8 @@ from crypto_lab.artifacts.diagnostics import (
     artifact_failure,
 )
 from crypto_lab.artifacts.hashing import HashScan, StreamingContentHasher
-from crypto_lab.artifacts.paths import ConfinedPath
+from crypto_lab.artifacts.models import MAX_SIZE_BYTES
+from crypto_lab.artifacts.paths import ConfinedPath, confine_orphan_path
 from crypto_lab.artifacts.store import (
     CORE_INVARIANT_VIOLATION,
     PROCESS_PATH_PREFLIGHT_REJECTED,
@@ -39,6 +41,7 @@ from crypto_lab.artifacts.store import (
     ArtifactStore,
     MoveOutcome,
     QuarantineEntry,
+    QuarantineMetadata,
     QuarantineOutcome,
     RemovalReport,
     read_confined,
@@ -60,6 +63,9 @@ _NOW = datetime(2026, 8, 10, 1, 2, 3, tzinfo=UTC)
 _OWNER_HASH = "a" * 64
 _RELATIVE = f"INVOCATION/{INVOCATION_ID}/stderr.txt"
 _ENTRY = "fin_12345678-1234-4234-8234-123456789abc"
+#: The entry identity the RV-9 sweep derives for an orphan (shape only).
+_ORPHAN_ENTRY = "unregistered_12345678-1234-4234-8234-123456789abc"
+_ORPHAN_NAMES = (".hidden", "odd name.bin")
 _REPOSITORY = Path(__file__).resolve().parents[3]
 _SOURCE = _REPOSITORY / "src/crypto_lab"
 _STORE = _SOURCE / "artifacts/store.py"
@@ -1440,6 +1446,520 @@ def test_replay_refuses_a_hard_linked_leaf_before_reading_it(
     assert confined.path.read_bytes() == data
 
 
+# --- Task 6 RV-9 file-map correction: the orphan quarantine ---------------------------
+
+
+def _orphan(
+    store: ArtifactStore, name: str, data: bytes = b"not a blob\n"
+) -> ConfinedPath:
+    """``objects/<name>`` planted under the artifacts root and confined as an
+    orphan (a name the candidate grammar refuses)."""
+    leaf = store.objects_root / name
+    leaf.write_bytes(data)
+    confined = confine_orphan_path(
+        store.artifacts_root, f"objects/{name}", now_utc=_NOW
+    )
+    assert isinstance(confined, Success), confined
+    value = confined.value
+    assert isinstance(value, ConfinedPath)
+    return value
+
+
+def _quarantined(result: object) -> QuarantineOutcome:
+    assert isinstance(result, Success), result
+    value = result.value
+    assert isinstance(value, QuarantineOutcome)
+    return value
+
+
+@pytest.mark.parametrize("name", _ORPHAN_NAMES)
+def test_quarantine_orphan_moves_under_the_entry_at_the_original_path(
+    tmp_path: Path, name: str
+) -> None:
+    """Plan 6.2: the destination is ``<quarantine_root>/<entry_id>/<original
+    relative path>`` -- the entry keyed by the identity the caller derived, the
+    bytes at the very path they were found under the artifacts root -- the bytes
+    are preserved, and the metadata is validated and readable: that path as
+    ``relative_path``, no digest claim. A second orphan into the same entry lands
+    at its own path and leaves the metadata as written; the same path planted
+    again meets the existing destination and nothing is overwritten."""
+    store = _open(tmp_path)
+    data = b"orphan bytes\n"
+    relative = f"objects/{name}"
+    confined = _orphan(store, name, data)
+    outcome = _quarantined(
+        store.quarantine_orphan(
+            confined, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    )
+    entry_root = store.quarantine_root / _ORPHAN_ENTRY
+    assert outcome == QuarantineOutcome(
+        entry_id=_ORPHAN_ENTRY,
+        target=entry_root / "objects" / name,
+        metadata_path=entry_root / "quarantine.json",
+        metadata_written=True,
+    )
+    assert outcome.target.read_bytes() == data
+    assert not confined.path.exists()
+    assert list(store.objects_root.iterdir()) == []
+    metadata = json.loads(outcome.metadata_path.read_text(encoding="utf-8"))
+    assert metadata == {
+        "schema_version": "1.0.0",
+        "entry_id": _ORPHAN_ENTRY,
+        "reason_code": ARTIFACT_VALIDATION_FAILED,
+        "quarantined_at_utc": "2026-08-10T01:02:03Z",
+        "source_root": str(store.artifacts_root),
+        "relative_path": relative,
+        "size_bytes": len(data),
+    }
+    metadata_bytes = outcome.metadata_path.read_bytes()
+    typed = QuarantineMetadata.model_validate_json(metadata_bytes)
+    assert typed.relative_path == relative
+    assert not isinstance(typed.sha256, str)
+    assert store.quarantine_entries() == (
+        QuarantineEntry(
+            entry_id=_ORPHAN_ENTRY,
+            reason_code=ARTIFACT_VALIDATION_FAILED,
+            quarantined_at_utc=_NOW,
+            files=(relative,),
+        ),
+    )
+    # A second orphan into the same entry lands at its own path; the metadata,
+    # written once per entry, stays as written.
+    second = _orphan(store, ".other", b"second\n")
+    added = _quarantined(
+        store.quarantine_orphan(
+            second, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    )
+    assert added.target == entry_root / "objects" / ".other"
+    assert added.metadata_written is False
+    assert added.target.read_bytes() == b"second\n"
+    assert outcome.metadata_path.read_bytes() == metadata_bytes
+    (listed,) = store.quarantine_entries()
+    assert listed.files == tuple(sorted((relative, "objects/.other")))
+    # No overwrite: the same path planted again meets the existing destination.
+    again = _orphan(store, name, b"planted again\n")
+    refused = store.quarantine_orphan(
+        again, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+    )
+    assert _codes(refused) == (CORE_INVARIANT_VIOLATION,)
+    assert outcome.target.read_bytes() == data
+    assert again.path.read_bytes() == b"planted again\n"
+    assert outcome.metadata_path.read_bytes() == metadata_bytes
+
+
+def test_quarantine_orphan_argument_refusals_touch_nothing(tmp_path: Path) -> None:
+    """Every argument rule is applied before any filesystem action: the type and
+    grammar of the entry id and reason, the entry id forming one candidate-grammar
+    segment, the source rooted at this store's artifacts root beneath
+    ``objects/``, and the path being no canonical object -- the complete layout
+    ``objects/<hh>/<sha256>`` with the shard matching the leaf, in whatever case
+    the supported case-insensitive store spells it (a canonical blob is
+    quarantined through ``quarantine_move`` with its digest claim)."""
+    store = _open(tmp_path)
+    confined = _orphan(store, ".hidden")
+    reason = ARTIFACT_VALIDATION_FAILED
+    with pytest.raises(TypeError, match="ConfinedPath"):
+        store.quarantine_orphan(confined.path, _ORPHAN_ENTRY, reason, now_utc=_NOW)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="entry id"):
+        store.quarantine_orphan(confined, "../escape", reason, now_utc=_NOW)
+    with pytest.raises(ValueError, match="entry id"):
+        store.quarantine_orphan(confined, "odd entry", reason, now_utc=_NOW)
+    with pytest.raises(ValueError, match="reason"):
+        store.quarantine_orphan(confined, _ORPHAN_ENTRY, "not a code", now_utc=_NOW)
+    staged = _staged(store, b"staged")
+    with pytest.raises(ValueError, match="artifacts root"):
+        store.quarantine_orphan(staged, _ORPHAN_ENTRY, reason, now_utc=_NOW)
+    (store.manifests_root / ".hidden").write_bytes(b"a projection-shaped orphan")
+    projection = confine_orphan_path(
+        store.artifacts_root, "manifests/.hidden", now_utc=_NOW
+    )
+    assert isinstance(projection, Success)
+    with pytest.raises(ValueError, match="objects/"):
+        store.quarantine_orphan(projection.value, _ORPHAN_ENTRY, reason, now_utc=_NOW)
+    digest = sha256_bytes(b"addressed")
+    blob = store.finalized_path_for(digest)
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"addressed")
+    addressed = confine_orphan_path(
+        store.artifacts_root, f"objects/{digest[:2]}/{digest}", now_utc=_NOW
+    )
+    assert isinstance(addressed, Success)
+    with pytest.raises(ValueError, match="content address"):
+        store.quarantine_orphan(addressed.value, digest, reason, now_utc=_NOW)
+    # The same canonical object after a case-only rename of its leaf (the
+    # supported store is case-insensitive) is still no orphan.
+    renamed = blob.with_name(blob.name.upper())
+    assert renamed.name != blob.name, blob.name
+    blob.rename(renamed)
+    case_variant = confine_orphan_path(
+        store.artifacts_root, f"objects/{digest[:2]}/{renamed.name}", now_utc=_NOW
+    )
+    assert isinstance(case_variant, Success), case_variant
+    with pytest.raises(ValueError, match="content address"):
+        store.quarantine_orphan(case_variant.value, digest, reason, now_utc=_NOW)
+    assert confined.path.read_bytes() == b"not a blob\n"
+    assert staged.path.read_bytes() == b"staged"
+    assert renamed.read_bytes() == b"addressed"
+    assert list(store.quarantine_root.iterdir()) == []
+
+
+def test_canonical_content_address_folds_case_and_requires_the_complete_layout(
+    tmp_path: Path,
+) -> None:
+    """The one classifier the store and the RV-9 sweep share: a path is a
+    canonical object exactly when, compared case-folded as the supported
+    case-insensitive store compares names (the fold of ``is_within_root``), it is
+    the complete layout ``objects/<hh>/<sha256>`` with the shard equal to the
+    leaf's prefix; the answer is the lowercase digest. A content-address leaf
+    anywhere else, a non-matching shard, a projection, a truncated or non-hex
+    leaf and a bare digest are no canonical object. The classifier is textual,
+    so the digest is a hex string whose shard carries letters to fold."""
+    digest = "ab" + sha256_bytes(b"addressed")[2:]
+    shard = digest[:2]
+    classify = store_module.canonical_content_address
+    assert classify(f"objects/{shard}/{digest}") == digest
+    assert classify(f"objects/{shard.upper()}/{digest}") == digest
+    assert classify(f"objects/{shard}/{digest.upper()}") == digest
+    assert classify(f"OBJECTS/{shard.upper()}/{digest.upper()}") == digest
+    for misplaced in (
+        f"objects/.x/{digest}",
+        f"objects/odd dir/{digest}",
+        f"objects/zz/{digest}",
+        f"objects/{shard}/{shard}/{digest}",
+        f"objects/{digest}",
+        f"manifests/{shard}/{digest}",
+        f"objects/{shard}/{digest[:63]}",
+        f"objects/{shard}/{digest}0",
+        f"objects/{shard}/{'g' * 64}",
+        f"objects/{shard}/",
+        digest,
+        "",
+    ):
+        assert classify(misplaced) is None, misplaced
+    with pytest.raises(TypeError, match="built-in string"):
+        classify(b"objects")  # type: ignore[arg-type]
+    # The same answer the sweep reads off a real store after a case-only rename.
+    store = _open(tmp_path)
+    blob = store.finalized_path_for(digest)
+    blob.parent.mkdir(parents=True)
+    blob.write_bytes(b"addressed")
+    blob.parent.rename(blob.parent.with_name(shard.upper()))
+    (observed,) = [path for path in store.objects_root.rglob("*") if path.is_file()]
+    relative = observed.relative_to(store.artifacts_root).as_posix()
+    assert relative == f"objects/{shard.upper()}/{digest}"
+    assert classify(relative) == digest
+
+
+@pytest.mark.parametrize("directory", [".x", "odd dir", "zz"])
+def test_quarantine_orphan_admits_a_misplaced_content_address(
+    tmp_path: Path, directory: str
+) -> None:
+    """The recovery-only guard classifies a canonical object by its complete
+    layout ``objects/<hh>/<sha256>`` with the shard matching the leaf, never by
+    the leaf alone: a file whose leaf is the content address of its own bytes but
+    which lies under a dot-prefixed, space-bearing or non-matching directory is
+    an orphan -- moved to the plan 6.2 layout ``<entry_id>/<original relative
+    path>`` with the metadata naming that path and no digest claimed -- while the
+    canonical layout of the same digest is still refused toward
+    ``quarantine_move``."""
+    store = _open(tmp_path)
+    data = b"misplaced bytes\n"
+    digest = sha256_bytes(data)
+    relative = f"objects/{directory}/{digest}"
+    leaf = store.objects_root / directory / digest
+    leaf.parent.mkdir()
+    leaf.write_bytes(data)
+    confined = confine_orphan_path(store.artifacts_root, relative, now_utc=_NOW)
+    assert isinstance(confined, Success), confined
+    outcome = _quarantined(
+        store.quarantine_orphan(
+            confined.value, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    )
+    entry_root = store.quarantine_root / _ORPHAN_ENTRY
+    assert outcome.target == entry_root / "objects" / directory / digest
+    assert outcome.target.read_bytes() == data
+    assert not leaf.exists()
+    typed = QuarantineMetadata.model_validate_json(outcome.metadata_path.read_bytes())
+    assert typed.entry_id == _ORPHAN_ENTRY
+    assert typed.relative_path == relative
+    assert typed.size_bytes == len(data)
+    assert not isinstance(typed.sha256, str)
+    # The canonical layout of the same digest is no orphan.
+    canonical = store.finalized_path_for(digest)
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(data)
+    addressed = confine_orphan_path(
+        store.artifacts_root, f"objects/{digest[:2]}/{digest}", now_utc=_NOW
+    )
+    assert isinstance(addressed, Success), addressed
+    with pytest.raises(ValueError, match="content address"):
+        store.quarantine_orphan(
+            addressed.value, "planted", ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    assert canonical.read_bytes() == data
+    assert store.quarantine_entries() == (
+        QuarantineEntry(
+            entry_id=_ORPHAN_ENTRY,
+            reason_code=ARTIFACT_VALIDATION_FAILED,
+            quarantined_at_utc=_NOW,
+            files=(relative,),
+        ),
+    )
+
+
+def test_quarantine_orphan_validates_metadata_and_rechecks_identity_before_moving(
+    tmp_path: Path,
+) -> None:
+    """The metadata representation is validated before the move, so a refused
+    representation strands nothing; the path confinement is repeated and its
+    identity compared immediately before the move, so a swapped, resized or
+    hard-linked source is refused unmoved; a share-locked source is the storage
+    posture. No entry directory is created by any refusal."""
+    store = _open(tmp_path)
+    confined = _orphan(store, ".hidden")
+    entry_root = store.quarantine_root / _ORPHAN_ENTRY
+
+    forged = dataclasses.replace(
+        confined,
+        identity=dataclasses.replace(confined.identity, st_size=MAX_SIZE_BYTES + 1),
+    )
+    unrepresentable = store.quarantine_orphan(
+        forged, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+    )
+    assert _codes(unrepresentable) == (ARTIFACT_VALIDATION_FAILED,)
+    assert "metadata" in _failure(unrepresentable).diagnostics[0].message
+    assert confined.path.read_bytes() == b"not a blob\n"
+    assert not entry_root.exists()
+
+    alias = tmp_path / "alias.bin"
+    os.link(confined.path, alias)
+    try:
+        linked = store.quarantine_orphan(
+            confined, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    finally:
+        alias.unlink()
+    assert _codes(linked) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+    assert "link" in _failure(linked).diagnostics[0].message
+    assert confined.path.read_bytes() == b"not a blob\n"
+    assert not entry_root.exists()
+
+    handle = _hold_open_without_sharing(confined.path)
+    try:
+        locked = store.quarantine_orphan(
+            confined, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    finally:
+        _winapi.CloseHandle(handle)
+    assert _codes(locked) == (ARTIFACT_MOVE_FAILED,)
+    assert "reopened" in _failure(locked).diagnostics[0].message
+    assert confined.path.read_bytes() == b"not a blob\n"
+    assert not entry_root.exists()
+
+    confined.path.unlink()
+    confined.path.write_bytes(b"swapped bytes of another size")
+    swapped = store.quarantine_orphan(
+        confined, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+    )
+    assert _codes(swapped) == (ARTIFACT_VALIDATION_FAILED,)
+    assert "changed while finalizing" in _failure(swapped).diagnostics[0].message
+    assert confined.path.read_bytes() == b"swapped bytes of another size"
+    assert not entry_root.exists()
+    confined.path.unlink()
+    vanished = store.quarantine_orphan(
+        confined, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+    )
+    assert _codes(vanished) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+    assert not entry_root.exists()
+
+
+def test_quarantine_orphan_refuses_an_unsafe_destination_before_creating_anything(
+    tmp_path: Path,
+) -> None:
+    """A reparse point where the entry root, its ``objects/`` directory or any
+    deeper directory of the destination path belongs is refused before the
+    directory walk creates or moves anything on the far side; a file where the
+    entry belongs is the storage posture."""
+    store = _open(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    confined = _orphan(store, ".hidden")
+    entry_root = store.quarantine_root / _ORPHAN_ENTRY
+
+    _winapi.CreateJunction(str(elsewhere), str(entry_root))
+    try:
+        through_root = store.quarantine_orphan(
+            confined, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    finally:
+        os.rmdir(entry_root)
+    assert _codes(through_root) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+    assert "reparse" in _failure(through_root).diagnostics[0].message
+    assert list(elsewhere.iterdir()) == []
+    assert confined.path.read_bytes() == b"not a blob\n"
+
+    entry_root.mkdir()
+    _winapi.CreateJunction(str(elsewhere), str(entry_root / "objects"))
+    try:
+        through_objects = store.quarantine_orphan(
+            confined, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    finally:
+        os.rmdir(entry_root / "objects")
+        entry_root.rmdir()
+    assert _codes(through_objects) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+    assert list(elsewhere.iterdir()) == []
+    assert confined.path.read_bytes() == b"not a blob\n"
+
+    # A misplaced content address under ``objects/.x``: the junction planted at
+    # the deeper ``<entry>/objects/.x`` of its destination is refused as well.
+    data = b"misplaced bytes\n"
+    digest = sha256_bytes(data)
+    deep_leaf = store.objects_root / ".x" / digest
+    deep_leaf.parent.mkdir()
+    deep_leaf.write_bytes(data)
+    deep = confine_orphan_path(
+        store.artifacts_root, f"objects/.x/{digest}", now_utc=_NOW
+    )
+    assert isinstance(deep, Success), deep
+    (entry_root / "objects").mkdir(parents=True)
+    _winapi.CreateJunction(str(elsewhere), str(entry_root / "objects" / ".x"))
+    try:
+        through_deep = store.quarantine_orphan(
+            deep.value, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    finally:
+        os.rmdir(entry_root / "objects" / ".x")
+        (entry_root / "objects").rmdir()
+        entry_root.rmdir()
+    assert _codes(through_deep) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+    assert "reparse" in _failure(through_deep).diagnostics[0].message
+    assert list(elsewhere.iterdir()) == []
+    assert deep_leaf.read_bytes() == data
+    assert not (entry_root / "quarantine.json").exists()
+
+    entry_root.write_bytes(b"a file where an entry belongs")
+    blocked = store.quarantine_orphan(
+        confined, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+    )
+    assert _codes(blocked) == (ARTIFACT_MOVE_FAILED,)
+    assert "entry could not be created" in _failure(blocked).diagnostics[0].message
+    assert confined.path.read_bytes() == b"not a blob\n"
+
+
+def test_quarantine_orphan_storage_refusals_mirror_quarantine_move(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A rename refused by the volume leaves the source; a refused metadata write
+    after the move is the storage posture with the bytes moved; a planted
+    ``quarantine.json`` is never overwritten."""
+    store = _open(tmp_path)
+    confined = _orphan(store, ".hidden")
+
+    def disk_full(self: Path, target: Path) -> Path:
+        raise OSError(28, "No space left on device")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(Path, "rename", disk_full)
+        full = store.quarantine_orphan(
+            confined, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    assert _codes(full) == (ARTIFACT_MOVE_FAILED,)
+    assert "quarantined" in _failure(full).diagnostics[0].message
+    assert confined.path.read_bytes() == b"not a blob\n"
+
+    original_open = Path.open
+
+    def refuse_exclusive(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if args and args[0] == "xb":
+            raise PermissionError(13, "Permission denied")
+        return original_open(self, *args, **kwargs)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(Path, "open", refuse_exclusive)
+        unwritable = store.quarantine_orphan(
+            confined, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    assert _codes(unwritable) == (ARTIFACT_MOVE_FAILED,)
+    assert "metadata" in _failure(unwritable).diagnostics[0].message
+    moved = store.quarantine_root / _ORPHAN_ENTRY / "objects" / ".hidden"
+    assert moved.read_bytes() == b"not a blob\n"
+    assert not confined.path.exists()
+
+    planted_entry = store.quarantine_root / "planted"
+    planted_entry.mkdir()
+    (planted_entry / "quarantine.json").write_bytes(b"{}")
+    other = _orphan(store, "odd name.bin", b"planted\n")
+    planted = _quarantined(
+        store.quarantine_orphan(other, "planted", ARTIFACT_MOVE_FAILED, now_utc=_NOW)
+    )
+    assert planted.metadata_written is False
+    assert (planted_entry / "quarantine.json").read_bytes() == b"{}"
+    assert planted.target.read_bytes() == b"planted\n"
+
+
+def test_quarantine_move_refuses_an_orphan_confinement_before_any_move(
+    tmp_path: Path,
+) -> None:
+    """The candidate quarantine never admits what only the orphan operation may:
+    an orphan confinement is refused by the candidate grammar before the reopen,
+    the rename or the metadata, so no move can ever outrun its metadata."""
+    store = _open(tmp_path)
+    confined = _orphan(store, ".hidden")
+    with pytest.raises(ValueError, match="candidate path"):
+        store.quarantine_move(
+            confined, _ORPHAN_ENTRY, ARTIFACT_VALIDATION_FAILED, now_utc=_NOW
+        )
+    assert confined.path.read_bytes() == b"not a blob\n"
+    assert list(store.quarantine_root.iterdir()) == []
+
+
+def test_the_orphan_operations_are_referenced_only_by_the_store_and_recovery() -> None:
+    """The narrow scope as a tree-wide pin: ``confine_orphan_path`` and
+    ``lexical_orphan_path`` are referenced by ``paths.py`` (defined), ``store.py``
+    (the orphan quarantine and its metadata type), ``recovery.py`` (the RV-9
+    sweep) and the package ``__init__``; ``quarantine_orphan`` is called by
+    ``recovery.py`` alone; the finalizer and the validation never name any of
+    them, so normal candidate finalization has no permissive mode."""
+    names: dict[str, set[str]] = {
+        "confine_orphan_path": set(),
+        "lexical_orphan_path": set(),
+        "quarantine_orphan": set(),
+    }
+    for path in sorted(_SOURCE.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        relative = path.relative_to(_SOURCE).as_posix()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id in names:
+                names[node.id].add(relative)
+            elif isinstance(node, ast.Attribute) and node.attr in names:
+                names[node.attr].add(relative)
+            elif isinstance(node, ast.FunctionDef) and node.name in names:
+                names[node.name].add(relative)
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name in names:
+                        names[alias.name].add(relative)
+    assert names["confine_orphan_path"] == {
+        "artifacts/__init__.py",
+        "artifacts/paths.py",
+        "artifacts/recovery.py",
+        "artifacts/store.py",
+    }
+    assert names["lexical_orphan_path"] == {
+        "artifacts/__init__.py",
+        "artifacts/paths.py",
+        "artifacts/store.py",
+    }
+    assert names["quarantine_orphan"] == {"artifacts/recovery.py", "artifacts/store.py"}
+    for referencing in names.values():
+        assert "artifacts/finalizer.py" not in referencing
+        assert "artifacts/validation.py" not in referencing
+
+
 # --- Plan 2.6: the ``os`` root, confined to this module and two attributes ------------
 
 
@@ -1512,9 +2032,10 @@ def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
     29 -> 30 with ``os``, deferred names 19 -> 18 without ``ContentHasher``.
 
     Task 5 (the same branch table, "Tasks 4-7 running sizes" 125, 129, 132, 135)
-    moved the two census sizes 125 -> 129 with its four persistence modules; the
-    roots, the deferred names and the Task 4 module slice are Task-5-independent
-    and stay pinned exactly.
+    moved the two census sizes 125 -> 129 with its four persistence modules; Task
+    6 moved them 129 -> 132 with its port, finalizer and recovery modules and the
+    deferred names 18 -> 15 with the three port names it defines; the roots and
+    the Task 4 module slice stay pinned exactly.
     """
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert {
@@ -1523,13 +2044,13 @@ def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
         "artifacts/validation.py",
         "artifacts/store.py",
     } <= allowed
-    assert len(allowed) == 129
+    assert len(allowed) == 132
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "os" in roots
     assert len(roots) == 30
     deferred = _literal(_STAGE3_GUARD, "_DEFERRED_DEFINITIONS")
     assert "ContentHasher" not in deferred
-    assert len(deferred) == 18
+    assert len(deferred) == 15
     modules = _literal(_PACKAGE_LAYOUT, "PACKAGE_MODULES")
     anchor = modules.index("crypto_lab.artifacts.diagnostics") + 1
     assert tuple(modules[anchor : anchor + 4]) == (
@@ -1538,4 +2059,4 @@ def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
         "crypto_lab.artifacts.validation",
         "crypto_lab.artifacts.store",
     )
-    assert len(modules) == 129
+    assert len(modules) == 132

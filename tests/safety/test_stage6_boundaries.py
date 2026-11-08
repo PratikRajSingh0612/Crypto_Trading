@@ -100,11 +100,14 @@ _FAKE_ADAPTER_ROOTS: Final = frozenset(
 #: Plan Task 9 step 2: the nine importers at the planning base plus the harness; the
 #: Stage 7 plan (section 2.6, Task 8) adds the Stage 7 fake script as the eleventh;
 #: the Stage 8 plan (section 2.6, Task 6) adds the persistence interrupted-writer
-#: test, which launches the one child interpreter of case C-17, as the twelfth.
+#: test, which launches the one child interpreter of case C-17, as the twelfth;
+#: the Stage 9 plan (section 2.6, Task 6) adds the finalization crash child, which
+#: launches the one child interpreter of cells CP-5 and CP-6, as the thirteenth.
 _SUBPROCESS_IMPORTERS: Final = frozenset(
     {
         "tests/contract/harness.py",
         "tests/fake_adapters/supervision_fake.py",
+        "tests/integration/artifacts/test_finalization_crash_child.py",
         "tests/integration/persistence/test_wal_restart.py",
         "tests/safety/test_forbidden_runtime_paths.py",
         "tests/safety/test_gitnexus_development_tooling.py",
@@ -383,7 +386,7 @@ def test_no_test_or_script_module_invokes_a_shell_or_a_string_command(
         )
     assert violations == []
     assert importers == set(_SUBPROCESS_IMPORTERS)
-    assert len(_SUBPROCESS_IMPORTERS) == 12
+    assert len(_SUBPROCESS_IMPORTERS) == 13
     assert _HARNESS in _SUBPROCESS_IMPORTERS
     # The harness safety test inspects the launch helper's returned arguments and
     # must not import subprocess; the allowlist enforces it.

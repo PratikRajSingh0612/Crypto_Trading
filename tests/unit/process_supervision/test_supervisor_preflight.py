@@ -1243,8 +1243,8 @@ def test_the_source_allowlist_and_import_roots_name_the_supervisor_module() -> N
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert "process_supervision/supervisor.py" in allowed
     assert (
-        len(allowed) == 129
-    )  # Stage 9 Task 5 appended the four persistence increment modules
+        len(allowed) == 132
+    )  # Stage 9 Task 6 appended the three port, finalizer and recovery modules
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "asyncio" in roots
     assert len(roots) == 30  # Stage 9 Task 4 added os
@@ -1254,8 +1254,8 @@ def test_the_source_allowlist_and_import_roots_name_the_supervisor_module() -> N
         modules.index("crypto_lab.process_supervision.windows_process") + 1
     )
     assert (
-        len(modules) == 129
-    )  # Stage 9 Task 5 appended the four persistence increment modules
+        len(modules) == 132
+    )  # Stage 9 Task 6 appended the three port, finalizer and recovery modules
 
 
 def test_the_task_five_pin_keeps_its_eleven_names_and_pins_the_nine_doubles() -> None:

@@ -28,14 +28,22 @@ from crypto_lab.artifacts.paths import (
     ConfinedPath,
     FileIdentity,
     confine_candidate_path,
+    confine_orphan_path,
     is_within_root,
     lexical_candidate_path,
+    lexical_orphan_path,
     recheck_confined_path,
 )
 from crypto_lab.domain.results import Failure, Success
 
 _NOW = datetime(2026, 8, 10, 1, 2, 3, tzinfo=UTC)
 _RELATIVE = "results/native.bin"
+#: The two ordinary names the candidate grammar refuses and the orphan
+#: confinement admits (Task 6 RV-9 file-map correction).
+_ORPHAN_NAMES = (".hidden", "odd name.bin")
+#: A lone UTF-16 surrogate, built at runtime: a name NTFS stores and UTF-8 cannot
+#: encode, so no identity may ever be derived from it.
+_LONE_SURROGATE = chr(0xDCFF)
 
 
 def _failure(result: object) -> Failure:
@@ -351,3 +359,206 @@ def test_file_identity_is_the_lstat_quadruple_and_frozen(tmp_path: Path) -> None
         confined.identity.st_size = 1  # type: ignore[misc]
     with pytest.raises(dataclasses.FrozenInstanceError):
         confined.relative = "other"  # type: ignore[misc]
+
+
+# --- Task 6 RV-9 file-map correction: the orphan confinement --------------------------
+
+
+def _objects(
+    tmp_path: Path, name: str, data: bytes = b"not a blob\n"
+) -> tuple[Path, Path]:
+    """An artifacts root holding ``objects/<name>``; the root and the leaf."""
+    root = tmp_path / "artifacts"
+    leaf = root / "objects" / name
+    leaf.parent.mkdir(parents=True, exist_ok=True)
+    leaf.write_bytes(data)
+    return root, leaf
+
+
+@pytest.mark.parametrize("name", _ORPHAN_NAMES)
+def test_orphan_confinement_admits_ordinary_names_the_candidate_grammar_refuses(
+    tmp_path: Path, name: str
+) -> None:
+    """The orphan confinement carries the truthful root, relative path, leaf and
+    ``lstat`` identity of a dot-prefixed or space-bearing file under ``objects/``;
+    the candidate confinement of the same path stays refused (AC2)."""
+    root, leaf = _objects(tmp_path, name)
+    relative = f"objects/{name}"
+    confined = _confined(confine_orphan_path(root, relative, now_utc=_NOW))
+    assert confined == ConfinedPath(
+        root=root, relative=relative, path=leaf, identity=_identity_of(leaf)
+    )
+    assert lexical_orphan_path(relative) == relative
+    refused = confine_candidate_path(root, relative, now_utc=_NOW)
+    assert _codes(refused) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+    with pytest.raises(ValueError, match="candidate path"):
+        lexical_candidate_path(relative)
+    assert leaf.read_bytes() == b"not a blob\n"
+
+
+@pytest.mark.parametrize(
+    ("relative", "rule"),
+    [
+        ("", "length"),
+        ("o" * 513, "length"),
+        ("/".join(["s"] * 33), "segments"),
+        ("objects//x", "empty"),
+        ("objects/.", "'.' or '..'"),
+        ("objects/..", "'.' or '..'"),
+        ("../x", "'.' or '..'"),
+        ("/objects/x", "empty"),
+        ("objects/" + "a" * 256, "255"),
+        ("objects\\x", "forbidden character"),
+        ("objects/x:stream", "forbidden character"),
+        ("C:/objects/x", "forbidden character"),
+        ("objects/x<y", "forbidden character"),
+        ("objects/x>y", "forbidden character"),
+        ('objects/x"y', "forbidden character"),
+        ("objects/x|y", "forbidden character"),
+        ("objects/x?y", "forbidden character"),
+        ("objects/x*y", "forbidden character"),
+        ("objects/x\ty", "forbidden character"),
+        ("objects/x\x7fy", "forbidden character"),
+        ("objects/x\x00y", "forbidden character"),
+        ("objects/trailing.", "end in"),
+        ("objects/trailing ", "end in"),
+        ("objects/aux.bin", "reserved"),
+        ("objects/CON", "reserved"),
+        (f"objects/bad{_LONE_SURROGATE}name", "UTF-8"),
+    ],
+)
+def test_orphan_lexical_rules_refuse_every_unsafe_or_unaddressable_shape(
+    tmp_path: Path, relative: str, rule: str
+) -> None:
+    """The relaxed grammar keeps every structural rule and bound of the candidate
+    grammar (relative, no traversal, no empty segment, no ``\\``, no ``:``, no
+    control or Win32-forbidden character, no trailing dot or space, no reserved
+    device stem, 512/32/255) and adds the UTF-8 rule; it relaxes only the
+    character class. Each refusal is a ``ValueError`` naming its rule and, through
+    the confinement, a boundary violation that never carries the path."""
+    with pytest.raises(ValueError, match=rule):
+        lexical_orphan_path(relative)
+    root, _ = _objects(tmp_path, ".hidden")
+    refused = confine_orphan_path(root, relative, now_utc=_NOW)
+    assert _codes(refused) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+    message = _failure(refused).diagnostics[0].message
+    assert message.startswith("orphan path refused: ")
+    assert str(root) not in message
+    assert "objects/" not in message
+    with pytest.raises(TypeError, match="built-in string"):
+        lexical_orphan_path(b"objects/x")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "relative",
+    [
+        "results/native.bin",
+        "a",
+        "a/b/c.d",
+        "results/native.",
+        "results/.hidden",
+        "résumé/native.bin",
+        "results/native bin",
+        "results/%41.bin",
+        "a" * 255,
+        "a" * 256,
+        "/".join(["s"] * 32),
+        "/".join(["s"] * 33),
+        "objects/aux.bin",
+        "objects/x:stream",
+    ],
+)
+def test_the_orphan_grammar_is_a_superset_of_the_candidate_grammar(
+    relative: str,
+) -> None:
+    """Every path the candidate grammar admits, the orphan grammar admits; the
+    orphan grammar additionally admits a leading dot, a space and other printable
+    characters, and never admits a shape the candidate grammar refuses for a
+    structural reason (bounds, ``:``, reserved stems)."""
+    if _accepts(lexical_candidate_path, relative):
+        assert _accepts(lexical_orphan_path, relative), relative
+    candidate_only_refusals = {
+        "results/.hidden",
+        "résumé/native.bin",
+        "results/native bin",
+        "results/%41.bin",
+    }
+    if relative in candidate_only_refusals:
+        assert not _accepts(lexical_candidate_path, relative)
+        assert _accepts(lexical_orphan_path, relative)
+    elif not _accepts(lexical_candidate_path, relative):
+        assert not _accepts(lexical_orphan_path, relative), relative
+
+
+def test_orphan_confinement_keeps_every_physical_rule_and_opens_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Root containment, the ancestor and leaf reparse checks, the regular-file and
+    hard-link checks and the strict resolution are the candidate confinement's
+    own, applied to an orphan name; nothing is opened."""
+    root, leaf = _objects(tmp_path, ".hidden")
+    elsewhere = tmp_path / "elsewhere"
+    (elsewhere / "deep").mkdir(parents=True)
+    (elsewhere / "deep" / ".secret").write_bytes(b"through the junction")
+    (root / "objects" / "folder").mkdir()
+
+    def refuse_open(*args: object, **kwargs: object) -> None:
+        raise AssertionError("confinement opened a file")
+
+    with monkeypatch.context() as patched:
+        patched.setattr(Path, "open", refuse_open)
+        patched.setattr(builtins, "open", refuse_open)
+        missing = confine_orphan_path(root, "objects/.absent", now_utc=_NOW)
+        assert _codes(missing) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+        assert "does not exist" in _failure(missing).diagnostics[0].message
+        directory = confine_orphan_path(root, "objects/folder", now_utc=_NOW)
+        assert _codes(directory) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+        assert "regular file" in _failure(directory).diagnostics[0].message
+        missing_root = confine_orphan_path(
+            tmp_path / "absent", "objects/.hidden", now_utc=_NOW
+        )
+        assert _codes(missing_root) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+        relative_root = confine_orphan_path(
+            Path("artifacts"), "objects/.hidden", now_utc=_NOW
+        )
+        assert "absolute" in _failure(relative_root).diagnostics[0].message
+        with pytest.raises(TypeError, match="root must be a Path"):
+            confine_orphan_path(str(root), "objects/.hidden", now_utc=_NOW)  # type: ignore[arg-type]
+        _winapi.CreateJunction(str(elsewhere), str(root / "objects" / "jx"))
+        try:
+            through = confine_orphan_path(root, "objects/jx/deep/.secret", now_utc=_NOW)
+            assert _codes(through) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+            assert "reparse" in _failure(through).diagnostics[0].message
+            as_leaf = confine_orphan_path(root, "objects/jx", now_utc=_NOW)
+            assert _codes(as_leaf) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+            assert "reparse" in _failure(as_leaf).diagnostics[0].message
+        finally:
+            os.rmdir(root / "objects" / "jx")
+        alias = tmp_path / "alias.bin"
+        os.link(leaf, alias)
+        try:
+            linked = confine_orphan_path(root, "objects/.hidden", now_utc=_NOW)
+            assert _codes(linked) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+            assert "link" in _failure(linked).diagnostics[0].message
+        finally:
+            alias.unlink()
+    assert (elsewhere / "deep" / ".secret").read_bytes() == b"through the junction"
+
+    original_resolve = Path.resolve
+
+    def resolve_elsewhere(self: Path, strict: bool = False) -> Path:
+        if self == leaf:
+            return elsewhere / ".hidden"
+        return original_resolve(self, strict=strict)
+
+    with monkeypatch.context() as patched:
+        patched.setattr(Path, "resolve", resolve_elsewhere)
+        escaped = confine_orphan_path(root, "objects/.hidden", now_utc=_NOW)
+    assert _codes(escaped) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)
+    assert "outside the root" in _failure(escaped).diagnostics[0].message
+    # Positive control once every fixture and patch is gone, and the candidate
+    # recheck of an orphan confinement is refused by the candidate grammar.
+    confined = _confined(confine_orphan_path(root, "objects/.hidden", now_utc=_NOW))
+    assert confined.identity == _identity_of(leaf)
+    rechecked = recheck_confined_path(confined, now_utc=_NOW)
+    assert _codes(rechecked) == (ARTIFACT_PATH_BOUNDARY_VIOLATION,)

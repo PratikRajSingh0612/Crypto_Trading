@@ -21,6 +21,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Final, Protocol
 
 import pytest
@@ -127,6 +128,7 @@ from persistence_support.harness import (
     commit,
     cursor_fault,
     ok,
+    open_test_database,
     put_invocation,
     put_run,
     sql_identity_literal,
@@ -995,14 +997,17 @@ def test_refs_never_update(artifact_harness: ArtifactHarness) -> None:
         refusal = artifact_harness.refuse(statement, parameters)
         assert refusal.code == INVARIANT_VIOLATION
         assert "insert-only" in refusal.message
-    # The repository offers no update path: its public surface is the four reads
-    # and the staged write of plan 4.1.
+    # The repository offers no update path: its public surface is the reads of
+    # plan 4.1, the content-hash read of the Task 6 RV-9 correction (plan 6.2:
+    # the row is the authority a blob's registration is read from) and the
+    # staged write.
     public = {
         name for name in dir(SqliteArtifactRepository) if not name.startswith("_")
     }
     assert public == {
         "get",
         "get_manifest",
+        "list_by_content_hash",
         "list_by_owner",
         "record_finalization",
         "stage_reference",
@@ -1056,6 +1061,71 @@ def test_a_torn_reference_row_is_refused_on_egress(
     transaction.rollback()
     report = artifact_harness.database.consistency_report()
     assert (report.refs_without_manifest_file, report.unmapped_finalizing) == (1, 0)
+
+
+_CONTENT_HASH_PREDICATE: Final = "WHERE artifact_refs.content_hash"
+
+
+def test_list_by_content_hash_reads_registered_rows_after_reopen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Task 6 content-hash read (RV-9; plan 6.2: the ``artifact_refs`` row is
+    the authority a blob's registration is read from). Two references of
+    distinct candidates registering one content hash and a third registering
+    another are planted, the database is closed and reopened on the same file,
+    and the lookup through a fresh transaction answers the shared hash's two
+    references by ``artifact_id``, the other hash's one and ``()`` for a hash no
+    row registers. The statement recorder sees ``SELECT`` reads of
+    ``artifact_refs`` and ``artifact_owners`` alone, each lookup is one search
+    of ``ix_artifact_refs_content_hash``, and the rows are unchanged after."""
+    shared = "f" * 64
+    harness = ArtifactHarness(open_test_database(tmp_path, clock=_CLOCK))
+    try:
+        harness.seed_result_prestate()
+        first = sample_ref(_finalizing(harness), content_hash=shared)
+        second = sample_ref(
+            _finalizing(harness, candidate_artifact_id=OTHER_CANDIDATE_ID),
+            content_hash=shared,
+        )
+        other = sample_ref(
+            _finalizing(harness, candidate_artifact_id=THIRD_CANDIDATE_ID)
+        )
+        # The shared pair is planted in reverse identity order, so an answer in
+        # row order would differ from the identity order the lookup promises.
+        for ref in (*_by_identity(first, second)[::-1], other):
+            harness.put_ref(ref, sample_artifact_manifest(ref))
+        planted = harness.committed_refs()
+    finally:
+        harness.close()
+    assert planted == _by_identity(first, second, other)
+    harness = ArtifactHarness(open_test_database(tmp_path, clock=_CLOCK))
+    try:
+        with cursor_fault(harness.database, monkeypatch) as recorder:
+            transaction = harness.begin()
+            before = len(recorder.passed)
+            refs = transaction.artifact_refs
+            assert ok(refs.list_by_content_hash(shared)) == _by_identity(first, second)
+            assert ok(refs.list_by_content_hash(other.content_hash)) == (other,)
+            assert ok(refs.list_by_content_hash("0" * 64)) == ()
+            assert transaction.open_failure() is None
+            issued = recorder.passed[before:]
+            transaction.rollback()
+        assert issued, "the lookups were issued"
+        assert all(statement.startswith("SELECT") for statement in issued)
+        assert all(
+            _from("artifact_refs")(statement) or _from("artifact_owners")(statement)
+            for statement in issued
+        )
+        lookups = [s for s in issued if _CONTENT_HASH_PREDICATE in s]
+        assert len(lookups) == 3
+        with harness.database.read_only() as connection:
+            plan = connection.exec_driver_sql(
+                f"EXPLAIN QUERY PLAN {lookups[0]}", (shared,)
+            ).fetchall()
+        assert any("ix_artifact_refs_content_hash" in str(row) for row in plan), plan
+        assert harness.committed_refs() == planted
+    finally:
+        harness.close()
 
 
 # --------------------------------------------------------------------------
@@ -1566,6 +1636,11 @@ _FAULTED_CALLS: Final[
         lambda t: t.artifact_refs.list_by_owner(RUN_OWNER),
     ),
     (
+        "artifact_refs list_by_content_hash",
+        _from("artifact_refs"),
+        lambda t: t.artifact_refs.list_by_content_hash(_SEEDED_REF.content_hash),
+    ),
+    (
         "artifact_refs record_finalization",
         _from("candidate_artifacts"),
         _record_pending,
@@ -1727,6 +1802,11 @@ _FAULTED_CALLS: Final[
     (
         "artifact_owners get",
         _from("artifact_owners"),
+        lambda t: t.artifact_refs.list_by_content_hash(_SEEDED_REF.content_hash),
+    ),
+    (
+        "artifact_owners get",
+        _from("artifact_owners"),
         lambda t: t.finalization_journal.get(_SEEDED_JOURNAL.finalization_id),
     ),
     (
@@ -1867,6 +1947,10 @@ def test_a_failed_transaction_answers_every_stage9_member_without_sql(
             ("artifact_refs.get", refs.get(_SEEDED_REF.artifact_id)),
             ("artifact_refs.get_manifest", refs.get_manifest(_SEEDED_REF.artifact_id)),
             ("artifact_refs.list_by_owner", refs.list_by_owner(RUN_OWNER)),
+            (
+                "artifact_refs.list_by_content_hash",
+                refs.list_by_content_hash(_SEEDED_REF.content_hash),
+            ),
             (
                 "artifact_refs.record_finalization",
                 refs.record_finalization(sample_finalization_result((_PENDING_REF,))),

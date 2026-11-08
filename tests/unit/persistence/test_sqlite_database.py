@@ -1806,7 +1806,7 @@ def test_a_non_dbapi_error_at_commit_releases_the_connection_before_it_escapes(
 def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert {"persistence/database.py", "persistence/diagnostics.py"} <= allowed
-    assert len(allowed) == 129  # Stage 9 Task 5 appended the four persistence modules
+    assert len(allowed) == 132  # Stage 9 Task 6 appended the three finalizer modules
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "sqlalchemy" in roots
     assert "alembic" in roots  # Task 2 added it
@@ -1850,15 +1850,15 @@ def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> No
         "crypto_lab.persistence.database",
         "crypto_lab.persistence.diagnostics",
     )
-    assert len(modules) == 129  # Stage 9 Task 5
+    assert len(modules) == 132  # Stage 9 Task 6
 
 
 def test_the_two_cross_pins_moved_to_the_running_sizes() -> None:
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     reconciliation = _RECONCILIATION_TESTS.read_text(encoding="utf-8")
     for source in (preflight, reconciliation):
-        assert "len(allowed) == 129" in source  # Stage 9 Task 5
-        assert "len(modules) == 129" in source
+        assert "len(allowed) == 132" in source  # Stage 9 Task 6
+        assert "len(modules) == 132" in source
         assert "len(allowed) == 95" not in source
         assert "len(modules) == 95" not in source
     assert "len(roots) == 30" in preflight
@@ -1922,16 +1922,18 @@ def test_the_stage_seven_shape_scan_and_its_stage_nine_half_are_retired() -> Non
         assert retired not in source, retired
     released = _literal(_STAGE3_GUARD, "_STAGE9_TASK1_RELEASED_DEFINITIONS")
     assert len(released) == 11
+    # Stage 9 Task 6 released the three port names; `RunManifest` is Task 7's.
     still_deferred = _literal(
         _STAGE3_GUARD, "_STAGE9_STILL_DEFERRED_FINALIZATION_NAMES"
     )
-    assert still_deferred == (
+    assert still_deferred == ("RunManifest",)
+    assert set(still_deferred) <= set(_literal(_STAGE3_GUARD, "_DEFERRED_DEFINITIONS"))
+    task_six = _literal(_STAGE3_GUARD, "_STAGE9_TASK6_RELEASED_DEFINITIONS")
+    assert set(task_six) == {
         "ArtifactFinalizer",
         "ArtifactRepository",
         "CandidateArtifactRepository",
-        "RunManifest",
-    )
-    assert set(still_deferred) <= set(_literal(_STAGE3_GUARD, "_DEFERRED_DEFINITIONS"))
+    }
 
 
 def test_the_architecture_closure_names_persistence() -> None:

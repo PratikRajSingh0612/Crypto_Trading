@@ -557,12 +557,16 @@ _FOCUSED_COMMAND_PREFIX: Final = (
 )
 #: The guide's subprocess-importer sentence, closed against the current census
 #: now that the containment literal has advanced; the deferred wording retires.
+#: Stage 9 plan section 2.6 (Task 6): the finalization crash child joins the
+#: parenthetical and the Stage 8 text joins the retired forms.
 _SUBPROCESS_IMPORTER_PARENTHETICAL: Final = (
-    " (the ten of Stage 6, the Stage 7 fake\nscript and the Stage 8 "
-    "interrupted-writer test)"
+    " (the ten of Stage 6, the Stage 7 fake\nscript, the Stage 8 "
+    "interrupted-writer test and the finalization crash child)"
 )
-_RETIRED_SUBPROCESS_IMPORTER_PARENTHETICAL: Final = (
-    "the persistence interrupted-writer test"
+_RETIRED_SUBPROCESS_IMPORTER_PARENTHETICAL: Final[tuple[str, ...]] = (
+    "the persistence interrupted-writer test",
+    " (the ten of Stage 6, the Stage 7 fake\nscript and the Stage 8 "
+    "interrupted-writer test)",
 )
 #: The guide's recorded Stage 8 evidence and limitations, byte-exact including
 #: its hard wrapping; the completion wording cannot be widened by deleting them.
@@ -850,10 +854,11 @@ def test_the_stage_eight_source_files_are_exactly_the_fifteen_plan_paths(
     # The whole inventory: 95 at the planning base plus the fifteen, plus the five
     # artifact contract modules of Stage 9 Task 1, the five audit modules and
     # the metric module of Stage 9 Task 2, the four path, hashing, validation
-    # and store modules of Stage 9 Task 4, and the four persistence increments of
-    # Stage 9 Task 5 (Stage 9 plan section 2.6, the Task-3-excluded branch).
-    assert len(_ALLOWED_SOURCE_FILES) == 129
-    assert len(_source_files(repository_root)) == 129
+    # and store modules of Stage 9 Task 4, the four persistence increments of
+    # Stage 9 Task 5 and the three port, finalizer and recovery modules of
+    # Stage 9 Task 6 (Stage 9 plan section 2.6, the Task-3-excluded branch).
+    assert len(_ALLOWED_SOURCE_FILES) == 132
+    assert len(_source_files(repository_root)) == 132
     assert set(_STAGE9_PERSISTENCE_FILES) <= _ALLOWED_SOURCE_FILES
     assert set(_STAGE9_PERSISTENCE_FILES).isdisjoint(STAGE8_SOURCE_FILES)
     on_disk = {
@@ -968,8 +973,9 @@ def test_persistence_names_no_raw_token_bare_identifier_or_deferred_name(
     # Stage 9 plan section 2.6 (Task 1): 33 -> 22; the `<=` pin over the retired
     # Stage 7 literal is replaced by the Stage 3 guard's released-names positive.
     # Task 2: 22 -> 19 (`AuditEvent`, `AuditSink`, `MetricValue`). Task 4: 19 -> 18
-    # (`ContentHasher`) on the Task-3-excluded branch.
-    assert len(_DEFERRED_DEFINITIONS) == 18
+    # (`ContentHasher`) on the Task-3-excluded branch. Task 6: 18 -> 15
+    # (`ArtifactFinalizer`, `ArtifactRepository`, `CandidateArtifactRepository`).
+    assert len(_DEFERRED_DEFINITIONS) == 15
 
 
 def test_diagnostic_ids_are_written_only_through_the_whole_row_encode(
@@ -1044,14 +1050,15 @@ def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
     # registry and files 35 -> 43, hashing profiles 12 -> 17; Task 2: paths -> 121,
     # deferred names -> 19, registry and files -> 46, profiles -> 18; Task 4
     # (Task-3-excluded branch): paths -> 125, import roots 29 -> 30 (`os`),
-    # deferred names -> 18; Task 5: paths -> 129, exemption pairs 13 -> 17; the
-    # rest is unchanged.
-    assert len(_ALLOWED_SOURCE_FILES) == 129
+    # deferred names -> 18; Task 5: paths -> 129, exemption pairs 13 -> 17; Task 6:
+    # paths -> 132, deferred names -> 15, subprocess importers 12 -> 13; the rest
+    # is unchanged.
+    assert len(_ALLOWED_SOURCE_FILES) == 132
     assert len(_ALLOWED_IMPORT_ROOTS) == 30
-    assert len(_DEFERRED_DEFINITIONS) == 18
+    assert len(_DEFERRED_DEFINITIONS) == 15
     assert len(_INFRASTRUCTURE_EXEMPTIONS) == 17
     assert len(_EXPECTED_READER_IMPLEMENTATIONS) == 5
-    assert len(_SUBPROCESS_IMPORTERS) == 12
+    assert len(_SUBPROCESS_IMPORTERS) == 13
     assert len(_EXPECTED_RUNTIME_REQUIREMENTS) == 4
     assert len(_PROHIBITED_FAMILIES) == 27
     assert len(_EXPECTED_OPERATIONS) == 21
@@ -1119,7 +1126,8 @@ def test_the_guide_records_the_stage_eight_focused_checks_and_evidence(
     assert _VERIFICATION_STAGE8_LIMITATIONS in guide
     phrase = _subprocess_importer_phrase(len(_SUBPROCESS_IMPORTERS))
     assert f"{phrase}{_SUBPROCESS_IMPORTER_PARENTHETICAL}" in guide
-    assert _RETIRED_SUBPROCESS_IMPORTER_PARENTHETICAL not in guide
+    for retired in _RETIRED_SUBPROCESS_IMPORTER_PARENTHETICAL:
+        assert retired not in guide
     lines = _verifier_step_lines()
     positions = [guide.find(line) for line in lines]
     assert all(position >= 0 for position in positions), lines

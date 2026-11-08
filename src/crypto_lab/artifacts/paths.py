@@ -16,6 +16,15 @@ stripped. The returned ``ConfinedPath`` carries the ``lstat`` identity
 same confinement and compares that identity, reporting a change as
 ``ARTIFACT.VALIDATION_FAILED``.
 
+``confine_orphan_path`` is the Task 6 RV-9 file-map correction: the same physical
+walk over an orphan file beneath the store's ``objects/`` root -- a file the
+store never wrote, whose ordinary name (a leading dot, a space) the candidate
+grammar refuses -- behind ``lexical_orphan_path``, which keeps every structural
+rule and bound of the candidate grammar and relaxes its character class alone.
+The candidate confinement is untouched: the two lexical halves share nothing but
+the physical walk, and only the store's orphan quarantine consumes the orphan
+confinement, so normal candidate finalization has no permissive mode.
+
 ``artifacts`` imports ``domain`` and itself only (plan 2.6), so the Win32
 attribute and ``st_mode`` masks are spelled locally rather than imported from
 ``stat`` or ``process_supervision/roots.py``; the root must be an absolute,
@@ -25,6 +34,7 @@ refusal messages never carry a path.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
@@ -37,7 +47,13 @@ from crypto_lab.artifacts.diagnostics import (
     ARTIFACT_VALIDATION_FAILED,
     artifact_failure,
 )
-from crypto_lab.artifacts.models import validate_relative_staging_path
+from crypto_lab.artifacts.models import (
+    _RESERVED_STEMS,
+    MAX_PATH_SEGMENTS,
+    MAX_RELATIVE_PATH_CHARACTERS,
+    MAX_SEGMENT_CHARACTERS,
+    validate_relative_staging_path,
+)
 from crypto_lab.domain.results import Failure, Result, Success
 
 #: Win32 file attributes and ``st_mode`` masks, spelled locally (plan 2.6: no
@@ -47,6 +63,9 @@ _FILE_ATTRIBUTE_REPARSE_POINT: Final = 0x400
 _S_IFMT: Final = 0o170000
 _S_IFREG: Final = 0o100000
 _EXTENDED_LENGTH_PREFIX: Final = "\\\\?\\"
+#: The characters Win32 refuses in a file name, with the two separators and the
+#: stream and drive separator: refused by the orphan grammar in every position.
+_WIN32_FORBIDDEN_CHARACTERS: Final[frozenset[str]] = frozenset('<>:"/\\|?*')
 #: Reading 18: the one message of an identity change, shared with the store.
 CHANGED_WHILE_FINALIZING: Final = "candidate changed while finalizing"
 
@@ -117,6 +136,53 @@ def lexical_candidate_path(relative: str) -> str:
         ) from error
 
 
+def lexical_orphan_path(relative: str) -> str:
+    """The lexical half of the orphan confinement (Task 6 RV-9 correction).
+
+    Purely textual. UTF-8 encodability comes first, because an identity is
+    derived from the path and a lone surrogate NTFS stores encodes to nothing;
+    then the structural rules and bounds of the candidate grammar rule for rule
+    (relative, no empty segment, no ``.`` or ``..``, no ``\\``, no ``:``, no
+    reserved device stem, no trailing dot or space, at most 512 characters, 32
+    segments and 255 per segment), with the character class alone relaxed from
+    ``[A-Za-z0-9._-]`` to every printable character outside the Win32-forbidden
+    set, so an ordinary dot-prefixed or space-bearing name is admitted. Control
+    characters are never printable and are refused with the forbidden set.
+    """
+    if type(relative) is not str:
+        raise TypeError("orphan path must be a built-in string")
+    try:
+        relative.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError("orphan path is not UTF-8 encodable") from error
+    if not 1 <= len(relative) <= MAX_RELATIVE_PATH_CHARACTERS:
+        raise ValueError(
+            f"orphan path length must be 1 through {MAX_RELATIVE_PATH_CHARACTERS}"
+        )
+    segments = relative.split("/")
+    if len(segments) > MAX_PATH_SEGMENTS:
+        raise ValueError(f"orphan path has more than {MAX_PATH_SEGMENTS} segments")
+    for segment in segments:
+        if not segment:
+            raise ValueError("orphan path segment must not be empty")
+        if segment in {".", ".."}:
+            raise ValueError("orphan path segment must not be '.' or '..'")
+        if len(segment) > MAX_SEGMENT_CHARACTERS:
+            raise ValueError(
+                f"orphan path segment exceeds {MAX_SEGMENT_CHARACTERS} characters"
+            )
+        if any(
+            character in _WIN32_FORBIDDEN_CHARACTERS or not character.isprintable()
+            for character in segment
+        ):
+            raise ValueError("orphan path segment contains a forbidden character")
+        if segment.endswith((".", " ")):
+            raise ValueError("orphan path segment must not end in '.' or ' '")
+        if segment.partition(".")[0].upper() in _RESERVED_STEMS:
+            raise ValueError("orphan path segment uses a reserved Windows device name")
+    return relative
+
+
 def _comparable(path: Path) -> str:
     text = str(path)
     if text.startswith(_EXTENDED_LENGTH_PREFIX):
@@ -173,6 +239,41 @@ def confine_candidate_path(
         validated = lexical_candidate_path(relative)
     except ValueError as error:
         return refuse(f"candidate path refused: {error}")
+    return _confine_physically(root, validated, refuse)
+
+
+def confine_orphan_path(
+    root: Path, relative: str, *, now_utc: datetime
+) -> Result[ConfinedPath]:
+    """Task 6 RV-9 correction: confine an orphan file lexically through
+    ``lexical_orphan_path``, then physically through the very walk of
+    ``confine_candidate_path`` -- root containment, the ancestor and leaf reparse
+    checks, the regular-file and hard-link checks, the strict resolution and the
+    ``lstat`` identity. The ``ConfinedPath`` carries the truthful root, relative
+    path and identity; it is consumed by the store's orphan quarantine alone.
+    Every refusal is ``ARTIFACT.PATH_BOUNDARY_VIOLATION`` and names its rule,
+    never the path. Nothing is opened.
+    """
+    if not isinstance(root, Path):
+        raise TypeError("root must be a Path")
+
+    def refuse(message: str) -> Failure:
+        return artifact_failure(
+            ARTIFACT_PATH_BOUNDARY_VIOLATION, message=message, now_utc=now_utc
+        )
+
+    try:
+        validated = lexical_orphan_path(relative)
+    except ValueError as error:
+        return refuse(f"orphan path refused: {error}")
+    return _confine_physically(root, validated, refuse)
+
+
+def _confine_physically(
+    root: Path, validated: str, refuse: Callable[[str], Failure]
+) -> Result[ConfinedPath]:
+    """The physical half of plan 6.3 over an already validated relative path: the
+    root, every ancestor and the leaf by ``lstat``, then the strict resolution."""
     root_refusal = _root_refusal(root)
     if root_refusal is not None:
         return refuse(root_refusal)
@@ -250,8 +351,10 @@ __all__ = (
     "FileIdentity",
     "StatLike",
     "confine_candidate_path",
+    "confine_orphan_path",
     "file_identity_of",
     "is_within_root",
     "lexical_candidate_path",
+    "lexical_orphan_path",
     "recheck_confined_path",
 )

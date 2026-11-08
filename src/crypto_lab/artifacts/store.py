@@ -34,9 +34,25 @@ bounded ``read`` for its ``SCHEMA`` step, so the bytes decoded there were read
 from a handle whose identity was checked before and after the read as well. The
 existing finalized blob of the dedup branch is the one blob opened by path here
 and handed to the same stream.
-``quarantine_move`` uses the same primitive toward
-``<quarantine_root>/<entry_id>/<relative path>`` and writes ``quarantine.json``
-exclusive-create once per entry. ``write_staged`` is the only writer into core
+``quarantine_move`` uses the same primitive toward the plan 6.2 layout
+``<quarantine_root>/<entry_id>/<original relative path>`` and writes
+``quarantine.json`` exclusive-create once per entry; it admits candidate paths
+alone. ``quarantine_orphan`` is the Task 6 RV-9 file-map correction: the
+recovery-only quarantine of an orphan file beneath this store's ``objects/``
+root whose ordinary name the candidate grammar refuses or whose layout is no
+canonical object (a content-address leaf under any directory but its own
+shard), confined by ``confine_orphan_path`` and moved by the same primitive to
+the same layout -- the entry keyed by the identity the caller derived, the bytes
+at the very root-relative path they were found at -- with the metadata validated
+and serialized before any byte moves and every directory of the destination path
+refused while it is a reparse point. ``canonical_content_address`` is the one
+classifier of a canonical object the store and the RV-9 sweep share: the
+supported store is a case-insensitive Windows volume, so a root-relative path is
+the complete layout ``objects/<hh>/<sha256>`` when it equals that layout compared
+case-folded as ``is_within_root`` compares (a case-only rename of a shard or a
+leaf leaves the very same file at the very same path there), and it is nothing
+else -- a content-address leaf under any other directory is misplaced content,
+never canonical. ``write_staged`` is the only writer into core
 staging: the relative path passes the lexical grammar, the chain below the owner
 root is checked for reparse points before anything is created, the file is opened
 ``xb``, written and ``fsync``ed, and an existing file is confined before it is
@@ -61,9 +77,16 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
-from typing import BinaryIO, Final, Literal, cast
+from typing import Annotated, BinaryIO, Final, Literal, cast
 
-from pydantic import InstanceOf, JsonValue, TypeAdapter, ValidationError
+from pydantic import (
+    AfterValidator,
+    InstanceOf,
+    JsonValue,
+    StringConstraints,
+    TypeAdapter,
+    ValidationError,
+)
 from pydantic.experimental.missing_sentinel import MISSING
 
 from crypto_lab.artifacts.diagnostics import (
@@ -80,7 +103,7 @@ from crypto_lab.artifacts.hashing import (
     StreamingContentHasher,
 )
 from crypto_lab.artifacts.models import (
-    RelativeStagingPath,
+    MAX_RELATIVE_PATH_CHARACTERS,
     SizeBytes,
     finalized_relative_path_for,
 )
@@ -88,8 +111,10 @@ from crypto_lab.artifacts.paths import (
     CHANGED_WHILE_FINALIZING,
     ConfinedPath,
     confine_candidate_path,
+    confine_orphan_path,
     file_identity_of,
     lexical_candidate_path,
+    lexical_orphan_path,
 )
 from crypto_lab.domain.base import CanonicalModel
 from crypto_lab.domain.canonical_json import canonical_json_bytes
@@ -184,16 +209,36 @@ class RemovalReport:
     failed: tuple[Path, ...]
 
 
+#: The root-relative path of quarantined bytes: bounded and structurally
+#: validated by the orphan grammar -- every rule and bound of the candidate
+#: grammar with the character class alone relaxed (its superset, pinned by test)
+#: -- so the metadata carries nothing that grammar refused, whether the bytes
+#: came through the candidate quarantine (whose path the candidate grammar had
+#: already admitted) or the orphan quarantine.
+type _QuarantineRelativePath = Annotated[
+    str,
+    StringConstraints(
+        strict=True, min_length=1, max_length=MAX_RELATIVE_PATH_CHARACTERS
+    ),
+    AfterValidator(lexical_orphan_path),
+]
+
+
 class QuarantineMetadata(CanonicalModel):
     """Plan 6.2: the ``quarantine.json`` of one entry -- reason code, instant,
-    source path facts and the content hash when the caller knew it."""
+    source path facts and the content hash when the caller knew it.
+    ``relative_path`` is the root-relative path the bytes were found at and, the
+    layout being ``<quarantine_root>/<entry_id>/<original relative path>``, the
+    entry-relative path they lie at now: the candidate quarantine and the orphan
+    quarantine (Task 6 RV-9 correction) alike. ``sha256`` is present when the
+    caller knew the digest (a canonical object); an orphan claims none."""
 
     schema_version: Literal["1.0.0"]
     entry_id: str
     reason_code: ErrorCode
     quarantined_at_utc: CalendarValidUtcDateTime
     source_root: str
-    relative_path: RelativeStagingPath
+    relative_path: _QuarantineRelativePath
     size_bytes: SizeBytes
     sha256: Sha256 | MISSING = MISSING  # type: ignore[valid-type]
 
@@ -270,6 +315,28 @@ def _physical_root_refusal(root: Path, *, may_be_created: bool) -> str | None:
 
 def _is_sha256_hex(value: str) -> bool:
     return len(value) == 64 and set(value) <= _SHA256_HEX
+
+
+def canonical_content_address(relative: str) -> str | None:
+    """The digest a root-relative path under the artifacts root addresses as a
+    canonical object, or ``None`` when the path is no canonical object (plan 6.2,
+    RV-9). The supported store is a case-insensitive Windows volume, on which a
+    case-only rename of a shard directory or of a leaf leaves the very same file
+    at the very same path, so the path is compared case-folded -- the fold
+    ``is_within_root`` compares resolved paths with -- against the complete
+    layout ``objects/<hh>/<sha256>`` of its folded leaf, the shard equal to the
+    digest's prefix. The complete layout is required: a content-address leaf
+    under any other directory (``objects/.x/<sha256>``, ``objects/zz/<sha256>``),
+    a bare digest, a projection or a leaf of any other shape is misplaced or
+    foreign content the store never wrote, and the answer is ``None``. Purely
+    textual; nothing is consulted on the filesystem."""
+    if type(relative) is not str:
+        raise TypeError("relative path must be a built-in string")
+    folded = relative.casefold()
+    digest = folded.rsplit("/", 1)[-1]
+    if not _is_sha256_hex(digest) or folded != finalized_relative_path_for(digest):
+        return None
+    return digest
 
 
 def _require_sha256_hex(value: str, label: str) -> None:
@@ -709,13 +776,23 @@ class ArtifactStore:
         sha256: str | MISSING = MISSING,  # type: ignore[valid-type]
     ) -> Result[QuarantineOutcome]:
         """Plan 6.2 and 6.5: the same primitive toward the quarantine root, and
-        ``quarantine.json`` exclusive-create once per entry."""
+        ``quarantine.json`` exclusive-create once per entry. Admits candidate
+        paths alone: an orphan confinement, whose relative path the candidate
+        grammar refuses, is refused here before the reopen, the rename or the
+        metadata -- it is quarantined through ``quarantine_orphan``."""
         if not isinstance(confined, ConfinedPath):
             raise TypeError("confined must be a ConfinedPath")
         _require_entry_id(entry_id)
         _require_error_code(reason)
         if isinstance(sha256, str):
             _require_sha256_hex(sha256, "sha256")
+        try:
+            lexical_candidate_path(confined.relative)
+        except ValueError as error:
+            raise ValueError(
+                "quarantine_move admits a candidate path alone; an orphan is "
+                "quarantined through quarantine_orphan"
+            ) from error
         prepared = self._reopen_and_fsync(confined, now_utc)
         if prepared is not None:
             return prepared
@@ -748,17 +825,11 @@ class ArtifactStore:
         if isinstance(sha256, str):
             facts["sha256"] = sha256
         metadata = QuarantineMetadata.model_validate(facts)
-        try:
-            with metadata_path.open("xb") as handle:
-                handle.write(canonical_json_bytes(metadata))
-                handle.flush()
-                os.fsync(handle.fileno())
-        except FileExistsError:
-            written = False
-        except OSError:
-            return _move_failed("the quarantine metadata could not be written", now_utc)
-        else:
-            written = True
+        written = self._write_metadata(
+            metadata_path, canonical_json_bytes(metadata), now_utc
+        )
+        if isinstance(written, Failure):
+            return written
         return Success[InstanceOf[QuarantineOutcome]](
             outcome="SUCCESS",
             value=QuarantineOutcome(
@@ -768,6 +839,152 @@ class ArtifactStore:
                 metadata_written=written,
             ),
         )
+
+    def quarantine_orphan(
+        self,
+        confined: ConfinedPath,
+        entry_id: str,
+        reason: str,
+        *,
+        now_utc: datetime,
+    ) -> Result[QuarantineOutcome]:
+        """Task 6 RV-9 file-map correction: quarantine an orphan file beneath this
+        store's ``objects/`` root -- a file the store never wrote, confined by
+        ``confine_orphan_path`` because its ordinary name is outside the candidate
+        grammar or because its layout is no canonical object -- to the plan 6.2
+        layout ``<quarantine_root>/<entry_id>/<original relative path>``: the entry
+        keyed by the identity the caller derived, the bytes at the very
+        root-relative path they were found at.
+
+        Every rule precedes every filesystem action: the entry id and reason
+        grammars, the entry id forming one candidate-grammar segment; the source
+        rooted at this store's artifacts root beneath ``objects/`` at a path that
+        is no canonical object by ``canonical_content_address`` -- the complete
+        layout ``objects/<hh>/<sha256>`` with the shard matching the leaf, in any
+        case the supported case-insensitive store spells it, is quarantined
+        through ``quarantine_move`` with its digest claim, while a leaf that
+        merely resembles a content address under any other directory is
+        misplaced content and an orphan here, with no digest claimed for it; and
+        the metadata, validated and serialized here so a refused representation
+        strands nothing. The orphan confinement is then repeated and its identity
+        compared (a change is ``ARTIFACT.VALIDATION_FAILED``), the handle
+        identity is compared and ``fsync``ed by the shared primitive, a reparse
+        point where the entry root or any directory of the destination path
+        belongs is refused before the walk creates anything on its far side, the
+        same-volume rename never overwrites, and ``quarantine.json`` -- the path
+        as ``relative_path``, no digest -- is written exclusive-create once per
+        entry.
+        """
+        if not isinstance(confined, ConfinedPath):
+            raise TypeError("confined must be a ConfinedPath")
+        _require_entry_id(entry_id)
+        _require_error_code(reason)
+        try:
+            lexical_candidate_path(entry_id)
+        except ValueError as error:
+            raise ValueError("entry id must form a candidate path segment") from error
+        if confined.root != self._artifacts_root:
+            raise ValueError("an orphan is confined under this store's artifacts root")
+        segments = confined.relative.split("/")
+        if len(segments) < 2 or segments[0] != OBJECTS_SEGMENT:
+            raise ValueError("an orphan lies beneath objects/")
+        if canonical_content_address(confined.relative) is not None:
+            raise ValueError(
+                "a canonical content address is quarantined through quarantine_move"
+            )
+        try:
+            metadata = QuarantineMetadata.model_validate(
+                {
+                    "schema_version": "1.0.0",
+                    "entry_id": entry_id,
+                    "reason_code": reason,
+                    "quarantined_at_utc": now_utc,
+                    "source_root": str(confined.root),
+                    "relative_path": confined.relative,
+                    "size_bytes": confined.identity.st_size,
+                }
+            )
+        except ValueError:
+            return artifact_failure(
+                ARTIFACT_VALIDATION_FAILED,
+                message="the orphan admits no quarantine metadata",
+                now_utc=now_utc,
+            )
+        payload = canonical_json_bytes(metadata)
+        rechecked = confine_orphan_path(
+            confined.root, confined.relative, now_utc=now_utc
+        )
+        if isinstance(rechecked, Failure):
+            return rechecked
+        if rechecked.value.identity != confined.identity:
+            return artifact_failure(
+                ARTIFACT_VALIDATION_FAILED,
+                message=CHANGED_WHILE_FINALIZING,
+                now_utc=now_utc,
+            )
+        prepared = self._reopen_and_fsync(confined, now_utc)
+        if prepared is not None:
+            return prepared
+        entry_root = self._quarantine_root / entry_id
+        target = entry_root.joinpath(*segments)
+        destination_directories = [entry_root]
+        for segment in segments[:-1]:
+            destination_directories.append(destination_directories[-1] / segment)
+        for component in destination_directories:
+            try:
+                attributes = _attributes(component)
+            except OSError:
+                continue
+            if _is_reparse_point(attributes):
+                return artifact_failure(
+                    ARTIFACT_PATH_BOUNDARY_VIOLATION,
+                    message="the quarantine destination is a reparse point",
+                    now_utc=now_utc,
+                )
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return _move_failed("the quarantine entry could not be created", now_utc)
+        try:
+            confined.path.rename(target)
+        except FileExistsError:
+            return _store_failure(
+                CORE_INVARIANT_VIOLATION,
+                message="a quarantine target already exists",
+                now_utc=now_utc,
+            )
+        except OSError:
+            return _move_failed("the orphan could not be quarantined", now_utc)
+        metadata_path = entry_root / QUARANTINE_METADATA_NAME
+        written = self._write_metadata(metadata_path, payload, now_utc)
+        if isinstance(written, Failure):
+            return written
+        return Success[InstanceOf[QuarantineOutcome]](
+            outcome="SUCCESS",
+            value=QuarantineOutcome(
+                entry_id=entry_id,
+                target=target,
+                metadata_path=metadata_path,
+                metadata_written=written,
+            ),
+        )
+
+    def _write_metadata(
+        self, metadata_path: Path, payload: bytes, now_utc: datetime
+    ) -> bool | Failure:
+        """``quarantine.json`` exclusive-create: ``True`` once written and
+        ``fsync``ed, ``False`` when the entry already carries one (never
+        overwritten), the storage posture when the write is refused."""
+        try:
+            with metadata_path.open("xb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except FileExistsError:
+            return False
+        except OSError:
+            return _move_failed("the quarantine metadata could not be written", now_utc)
+        return True
 
     def quarantine_entries(self) -> tuple[QuarantineEntry, ...]:
         """Every entry directory of the quarantine root, by name; a reparse point
@@ -931,6 +1148,7 @@ __all__ = (
     "QuarantineMetadata",
     "QuarantineOutcome",
     "RemovalReport",
+    "canonical_content_address",
     "read_confined",
     "same_volume",
     "scan_confined",
