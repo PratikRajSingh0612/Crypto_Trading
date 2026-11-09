@@ -8,8 +8,15 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 6 (round 5 REQUEST_CHANGES on `e2686a74...`: the Task 1 boundary row,
-folded in here; independent review: round 1 REQUEST_CHANGES on sha256 `44174509...`,
+**Status.** Revision 7 (controller finding of 2026-11-09, 17:00Z: the worker's PreToolUse
+hook admits a launcher only when it is committed at the task's base commit and admits no
+lock or sync profile, so revision 6's Task 1 Step 0, in which the worker authored the
+sub-project launcher and ran the offline proofs through it, was not executable by any
+worker; this revision adds Task 0, a scaffold base commit authored by the controller
+session and independently reviewed, moves the four environment proofs to the operator,
+and leaves every worker task executable; an alternative is named under Task 0 for the
+advisor's decision. Revision 6 history: round 5 REQUEST_CHANGES on `e2686a74...`: the
+Task 1 boundary row, folded in here; independent review: round 1 REQUEST_CHANGES on sha256 `44174509...`,
 round 2 APPROVE on `6804539e...`, re-pinned APPROVE on `b34034a4...`, round 4
 REQUEST_CHANGES on `4ddc6b4f...` (P2-B2 bounding and the boundary-test RED row, folded in
 here); advisor acceptance turn on `b34034a4...`: REJECTED with four binding conditions,
@@ -106,6 +113,13 @@ acceptance); `01_MISSION_AND_AUTHORITY.md:5, 26, 33`.
   descriptor; rows are never interpolated, dropped silently or de-duplicated silently.
 - **Test-first.** Every behaviour lands as a focused failing test, the minimum
   implementation, the focused passing test, then the sub-project's quality gates.
+- **Execution route.** The worker reaches the sub-project's tooling only through the
+  committed `offline_data/scripts/invoke-offline-uv.ps1`, admitted by the controller's
+  per-run hook for the profiles `pytest-focused`, `ruff-format-all`, `ruff-check-all` and
+  `mypy-all`. The environment profiles `lock-resolve-offline`, `lock-check` and `sync` are
+  operator-run (the controller session), never a worker's, exactly as in the core. The hook
+  binds a launcher to its bytes at the task's base commit, so a launcher that is not
+  committed there cannot be run by the worker; this is why Task 0 exists.
 
 ## 1. Goal, scope and exclusions
 
@@ -256,13 +270,16 @@ converted to `Failure`; no exception crosses the sub-project's public functions.
   `scripts/verify.ps1` before claiming completion) applies to every Project 2 task.
 - The sub-project's own `scripts/invoke-offline-uv.ps1` mirrors the core launcher's
   closed profile set (`lock-check`, `lock-resolve-offline`, `sync`, `pytest-focused`,
-  `ruff-format-all`, `ruff-check-all`, `mypy-all`) with the same `--offline`,
+  `ruff-format-all`, `ruff-check-all`, `mypy-all`, plus `pytest-all` for the verify script
+  alone, never admitted to a worker) with the same `--offline`,
   `--managed-python`, `--no-python-downloads`, `--no-config` controls, rooted at
   `offline_data/` (its `pytest-focused` takes targets under `offline_data/tests/`,
   spelled `tests/...` relative to that root) and pinned to `offline_data/.venv`. Its
   distinct file name matters for the controller's competition rule only across
   worktrees; inside one worktree every launcher run is competition, which is why section
-  8 runs verification alone.
+  8 runs verification alone. The launcher and the verify script are committed by Task 0
+  before any worker dispatch, because the controller's hook binds a launcher to its bytes
+  at the base commit and admits no environment profile.
 - `offline_data/scripts/verify-offline.ps1` runs: lock check, sync, format check, lint,
   strict types, test suite with branch coverage, Git whitespace check. The branch
   coverage floor is 98.61 percent, the figure the current core stage plan holds as its
@@ -327,11 +344,13 @@ work from the local cache:
   `librt==0.15.0`, `hatchling==1.31.0`, `trove-classifiers==2026.6.1.19` (the sub-project
   imports no yaml, so `types-pyyaml` is not carried).
 
-Task 1 step 0 proves, in this order and offline: `lock-resolve-offline` succeeds (this
-proof produces `offline_data/uv.lock`); `lock-check` passes; `offline_data/uv.lock` records
-`crypto-trading-lab` with a `directory = "../"` source; `sync` builds the core wheel without
-isolation. Any failure is reported once with the exact uv message as P2-B2; from then on
-only authoring continues (Global Constraints) until the environment resolves.
+Task 0 proves, in this order and offline, run by the controller session through the
+sub-project launcher as authored (the bytes Task 0 commits): `lock-resolve-offline` succeeds (this proof produces
+`offline_data/uv.lock`, committed in Task 0); `lock-check` passes; `offline_data/uv.lock`
+records `crypto-trading-lab` with a `directory = "../"` source; `sync` builds the core wheel
+without isolation. Any failure is reported once with the exact uv message as P2-B2; Task 0
+is then not committed and only authoring continues (Global Constraints) until the
+environment resolves. No worker runs an environment profile.
 
 ### 2.8 Dependency acquisition gates
 
@@ -495,25 +514,82 @@ models in strict JSON mode and recomputes the hash with the core's function.
 
 ## 7. Task decomposition
 
-Each task: test-first, one commit, clean worktree, `offline_data/scripts/verify-offline.ps1`
+Each worker task: test-first, one commit, clean worktree, `offline_data/scripts/verify-offline.ps1`
 green and then the core's `scripts/verify.ps1` green (run alone, serialized by the
 controller) before the commit. The sub-project never touches the core's paths.
 
-### Task 1 - Sub-project scaffold, pinned environment, launcher, verify script and the `ohlcv-csv/1` reader
+### Scaffold base commit, called Task 0 (controller session; not a worker dispatch, so not a `### Task n` heading)
 
-**Objective.** Create the isolated sub-project, prove the offline environment, and
-deliver the strict reader with injected diagnostics.
+**Why a Task 0.** The controller's worker hook admits a launcher only when it is committed
+at the task's base commit, and it admits no lock or sync profile: the environment is
+operator-provisioned, exactly as for the core. A worker therefore cannot author the
+sub-project launcher and run it within the same task. Task 0 is performed by the controller
+session as the mission's base commit under the same delegated acceptance as this plan: a
+hash-pinned independent review of the scaffold diff by a read-only reviewer, and the
+advisor's acceptance of this revision, which names the scaffold's exact file list and
+proofs. It is recorded as a delegated acceptance, never as a human review.
 
-**Prerequisites.** Managed CPython 3.12 present; the local uv cache resolves the pinned
-closure of section 2.7 offline (otherwise boundary P2-B2 is reported and the plan stops).
+**Files created.** `offline_data/pyproject.toml` (section 2.3 configuration, section 2.7
+pins), `offline_data/uv.lock` (produced by the first proof), `offline_data/README.md`
+(scope, the operator-run environment profiles, the worker's admitted profiles, the two
+reporting boundaries; the input format section is written by Task 1),
+`offline_data/scripts/invoke-offline-uv.ps1`, `offline_data/scripts/verify-offline.ps1`,
+`offline_data/src/crypto_lab_offline_data/__init__.py` (`__version__ = "0.1.0"` only),
+`offline_data/tests/conftest.py` (the explicit test root; no fixtures yet),
+`offline_data/tests/unit/test_package.py` (one smoke test pinning `__version__`, so the
+verify script's test stage collects a test and the coverage floor is measured over the
+one-line package). No production behaviour, no fixture, no reader.
 
-**Files created.** `offline_data/pyproject.toml`, `offline_data/uv.lock`,
-`offline_data/README.md`, `offline_data/scripts/invoke-offline-uv.ps1`,
-`offline_data/scripts/verify-offline.ps1`, `offline_data/src/crypto_lab_offline_data/__init__.py`,
-`offline_data/src/crypto_lab_offline_data/candle_csv.py`,
+**Files modified.** None.
+
+**Steps.**
+
+- [ ] **Step 1 Author.** The files above per sections 2.3 and 2.7: the launcher mirrors the
+  core launcher's closed profile set (`lock-check`, `lock-resolve-offline`, `sync`,
+  `pytest-focused`, `ruff-format-all`, `ruff-check-all`, `mypy-all`) and controls
+  (`--offline`, `--managed-python`, `--no-python-downloads`, `--no-config`, exactly one
+  resolvable `uv.exe`, absolute tools pinned in `offline_data/.venv`, no `uv run` outside
+  the pinned environment, no caller-selected Python or flags), rooted at `offline_data/`,
+  with `pytest-focused` targets spelled `tests/...` relative to that root; the verify
+  script runs lock check, sync, format check, lint, strict types, tests with branch
+  coverage at the 98.61 percent floor, and the Git whitespace check, each through the
+  launcher. LF line endings; nothing outside `offline_data/` is written.
+- [ ] **Step 2 Proofs (operator).** The four ordered offline proofs of section 2.7 through
+  the authored launcher (the exact bytes Step 5 commits); on any failure, P2-B2 is reported
+  once and Task 0 is not committed.
+- [ ] **Step 3 Gates (operator).** `verify-offline.ps1` green; the core `scripts/verify.ps1`
+  green (run alone on the host).
+- [ ] **Step 4 Review.** Independent hash-pinned review of the scaffold diff by a read-only
+  reviewer: launcher closure, verify-script stage list, pin equality with section 2.7,
+  the lock's `directory = "../"` source record, no core path touched, no network, no
+  credential, no acquisition.
+- [ ] **Step 5 Commit.** `chore(offline-data): scaffold the isolated sub-project environment
+  and launcher` on `project-2-offline-data-implementation`. The mission gate pins this
+  commit as `base_commit` and this revision's commit as `plan_commit`; the controller
+  binds the committed launcher for every later worker dispatch.
+
+**Alternative considered (named for the advisor's decision).** A worker-authored,
+authoring-only Task 0: the worker writes the same files without executing anything, the
+root's full gate for that one task is the core `scripts/verify.ps1` alone, and the
+operator runs the four proofs and commits `offline_data/uv.lock` at the Task 0 to Task 1
+boundary. It keeps the authoring inside the relay, at the cost of a worker writing a
+launcher it cannot run, a reviewed-policy change between Task 0 and Task 1, and an
+operator commit of the lock in any case. This revision recommends the controller-session
+Task 0 above; the advisor's acceptance turn selects one of the two.
+
+### Task 1 - The `ohlcv-csv/1` reader on the Task 0 scaffold
+
+**Objective.** Deliver the strict reader with injected diagnostics, its fixtures and the
+sub-project's boundary guards, on the committed Task 0 scaffold.
+
+**Prerequisites.** Task 0 committed (the mission's base commit) and its proofs recorded;
+`offline_data/.venv` synced by the operator. A missing environment is reported by the
+worker, never provisioned by it.
+
+**Files created.** `offline_data/src/crypto_lab_offline_data/candle_csv.py`,
 `offline_data/src/crypto_lab_offline_data/diagnostics.py`,
 `offline_data/src/crypto_lab_offline_data/providers.py`,
-`offline_data/tests/conftest.py`, `offline_data/tests/unit/test_candle_csv.py`,
+`offline_data/tests/unit/test_candle_csv.py`,
 `offline_data/tests/unit/test_providers.py`,
 `offline_data/tests/safety/test_boundaries.py`,
 `offline_data/tests/fixtures/candles/btcusdt-1m-clean.valid.csv`,
@@ -525,7 +601,8 @@ closure of section 2.7 offline (otherwise boundary P2-B2 is reported and the pla
 `offline_data/tests/fixtures/candles/invalid/empty.csv`,
 `offline_data/tests/fixtures/candles/invalid/header-only.csv`.
 
-**Files modified.** None.
+**Files modified.** `offline_data/README.md` (the `ohlcv-csv/1` section),
+`offline_data/tests/conftest.py` (shared fixtures).
 
 **Interfaces consumed.** `CanonicalDecimal`, `format_decimal`, `require_utc`,
 `Failure`, `Diagnostic`, `DiagnosticSeverity`, `DiagnosticCategory`,
@@ -535,12 +612,11 @@ closure of section 2.7 offline (otherwise boundary P2-B2 is reported and the pla
 `CandleRow` (frozen dataclass: `open_time_utc: datetime`, `open/high/low/close/volume: Decimal`, `line: int`);
 `refusal(code, *, line, value_length, ids, clock) -> Failure`.
 
-- [ ] **Step 0 Bootstrap (no production behaviour; its artifacts are pinned by the Step 1
-  guards).** Create `offline_data/pyproject.toml`, `offline_data/README.md`,
-  `scripts/invoke-offline-uv.ps1`, `scripts/verify-offline.ps1`, `tests/conftest.py`, the
-  fixtures and an empty `crypto_lab_offline_data/__init__.py`; run the four ordered offline
-  proofs of section 2.7 (the first produces `offline_data/uv.lock`). On P2-B2, record the
-  boundary once and continue as authoring only (Global Constraints).
+- [ ] **Step 0 Confirm the base (no execution).** The worktree is at the Task 0 commit;
+  `offline_data/.venv` exists (synced by the operator's Task 0 proofs); the sub-project
+  launcher spelling named in the task prompt is the committed one. Author the fixtures.
+  The worker runs no environment profile; if the environment is missing it reports that
+  and stops (P2-B2 handling is the operator's).
 - [ ] **Step 1 Focused RED.**
 
 | File | Test | Fails because |
@@ -550,12 +626,12 @@ closure of section 2.7 offline (otherwise boundary P2-B2 is reported and the pla
 | `tests/unit/test_candle_csv.py` | `test_size_ceilings_refuse_without_truncation` | module absent |
 | `tests/unit/test_providers.py` | injected ids and clock are used; production ids satisfy the core prefix grammar | module absent |
 | `tests/safety/test_boundaries.py` | import purity of `crypto_lab_offline_data` (module census `candle_csv`, `diagnostics`, `providers` present and no forbidden imports) and the reader writes nothing (`tmp_path` and the working directory unchanged after reading a fixture) | module census absent; GREEN at Step 3 |
-| `tests/safety/test_boundaries.py` | dependency pins, forbidden families, lock version equality, lock source record | guards GREEN by construction after Step 0; proven by a working-tree negative control (a temporarily altered pin or lock line, run RED, reverted, never committed) |
+| `tests/safety/test_boundaries.py` | dependency pins, forbidden families, lock version equality, lock source record | guards GREEN by construction after Task 0; proven by a working-tree negative control (a temporarily altered pin or lock line, run RED, reverted, never committed) |
 
 - [ ] **Step 2** Run the RED set through `invoke-offline-uv.ps1 pytest-focused tests/unit/test_candle_csv.py tests/unit/test_providers.py tests/safety/test_boundaries.py -q`; record the failures.
 - [ ] **Step 3 Minimum GREEN.** Reader, diagnostics, providers.
 - [ ] **Step 4 Focused GREEN.** `invoke-offline-uv.ps1 pytest-focused tests/unit/test_candle_csv.py tests/unit/test_providers.py tests/safety/test_boundaries.py -q` (the launcher's target grammar requires explicit `tests/...` paths, never a bare `tests`).
-- [ ] **Step 5** `verify-offline.ps1` green; the core's `scripts/verify.ps1` green; independent review of R1, R2, R6, the launcher and the boundary tests; commit
+- [ ] **Step 5** `verify-offline.ps1` green; the core's `scripts/verify.ps1` green; independent review of R1, R2, R6 and the boundary tests (the launcher was reviewed in Task 0); commit
   `feat(offline-data): scaffold the isolated sub-project and the ohlcv-csv/1 reader`.
 
 ### Task 2 - Validation, normalization and checksums
@@ -627,14 +703,20 @@ through a command, with goldens and the consumer check.
 
 ## 8. Verification and acceptance
 
-- Per task: `offline_data/scripts/verify-offline.ps1` (lock check, sync, format, lint,
+- Task 0 (controller session): the four offline proofs of section 2.7, then
+  `offline_data/scripts/verify-offline.ps1` green and the core `scripts/verify.ps1` green,
+  run by the operator alone on the host and recorded in the mission checkpoint with the
+  commit, the proofs' outputs and the reviewer's verdict; the per-task relay gate below
+  applies from Task 1.
+- Per worker task: `offline_data/scripts/verify-offline.ps1` (lock check, sync, format, lint,
   strict types, tests with branch coverage >= 98.61 percent, whitespace) green, then the
   core's `scripts/verify.ps1` green, each run alone on the host (the controller serializes
   heavy runs; the core verifier's format and lint stages traverse the sub-project and the
   repository's completion rule requires the full core verifier before completion is
   claimed).
 - Per task: one independent review of the task diff; corrective rounds are incremental.
-- Acceptance of the slice: all three tasks accepted and published on
+- Acceptance of the slice: Task 0 committed and reviewed, all three worker tasks accepted
+  and published on
   `project-2-offline-data-implementation`; goldens committed; README documents the
   supported format, the limitations and the two reporting boundaries.
 
