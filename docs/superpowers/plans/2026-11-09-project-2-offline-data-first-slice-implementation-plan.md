@@ -8,7 +8,8 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 5 (independent review: round 1 REQUEST_CHANGES on sha256 `44174509...`,
+**Status.** Revision 6 (round 5 REQUEST_CHANGES on `e2686a74...`: the Task 1 boundary row,
+folded in here; independent review: round 1 REQUEST_CHANGES on sha256 `44174509...`,
 round 2 APPROVE on `6804539e...`, re-pinned APPROVE on `b34034a4...`, round 4
 REQUEST_CHANGES on `4ddc6b4f...` (P2-B2 bounding and the boundary-test RED row, folded in
 here); advisor acceptance turn on `b34034a4...`: REJECTED with four binding conditions,
@@ -305,7 +306,8 @@ families by name in the sub-project lock; forbids any `socket`, `urllib`, `http`
 records `crypto-trading-lab` with a `directory = "../"` source; asserts every package
 version recorded in `offline_data/uv.lock` equals the section 2.7 list (so the
 `constraint-dependencies` under `[tool.uv]` are proven honoured, like the path source);
-and asserts no file is written outside the caller's output directory.
+and asserts the reader writes nothing. The command's `--output` confinement is asserted
+in Task 3's `tests/unit/test_cli.py` (Task 3 Step 1, the `--output` handling of section 6).
 
 ### 2.7 Toolchain gates and the exact pinned closure
 
@@ -547,7 +549,7 @@ closure of section 2.7 offline (otherwise boundary P2-B2 is reported and the pla
 | `tests/unit/test_candle_csv.py` | one test per invalid fixture asserting a `Failure` whose diagnostic carries the code, line and value length and never the value | module absent |
 | `tests/unit/test_candle_csv.py` | `test_size_ceilings_refuse_without_truncation` | module absent |
 | `tests/unit/test_providers.py` | injected ids and clock are used; production ids satisfy the core prefix grammar | module absent |
-| `tests/safety/test_boundaries.py` | import purity of `crypto_lab_offline_data` and no writes outside the output directory | package body and command absent (GREEN at Step 3 and Task 3) |
+| `tests/safety/test_boundaries.py` | import purity of `crypto_lab_offline_data` (module census `candle_csv`, `diagnostics`, `providers` present and no forbidden imports) and the reader writes nothing (`tmp_path` and the working directory unchanged after reading a fixture) | module census absent; GREEN at Step 3 |
 | `tests/safety/test_boundaries.py` | dependency pins, forbidden families, lock version equality, lock source record | guards GREEN by construction after Step 0; proven by a working-tree negative control (a temporarily altered pin or lock line, run RED, reverted, never committed) |
 
 - [ ] **Step 2** Run the RED set through `invoke-offline-uv.ps1 pytest-focused tests/unit/test_candle_csv.py tests/unit/test_providers.py tests/safety/test_boundaries.py -q`; record the failures.
