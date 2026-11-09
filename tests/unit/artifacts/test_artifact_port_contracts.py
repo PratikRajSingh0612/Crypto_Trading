@@ -40,6 +40,7 @@ from crypto_lab.artifacts.ownership import RunArtifactOwner
 from crypto_lab.artifacts.ports import (
     Answer,
     AuditFact,
+    CanonicalEvidenceQualifier,
     CommandRootPaths,
     FinalizationAuditor,
     PurposeRegistrar,
@@ -914,6 +915,31 @@ def test_answer_view_admits_both_facts_implementations(
 # CommandRootPaths (plan 4.1): the kind-governed projection refuses every
 # shape the Stage 7 record would refuse
 # --------------------------------------------------------------------------
+
+
+def test_only_the_production_registrar_answers_the_canonical_contract(
+    tmp_path: Path,
+) -> None:
+    """The canonical evidence ruling of 2026-11-09 rides on the registrar
+    boundary: the Task 6 memory registrar satisfies ``PurposeRegistrar`` alone,
+    so a finalizer over it keeps the whole-content token-shape scan, while the
+    production ``ResultRegistrar`` also satisfies ``CanonicalEvidenceQualifier``
+    -- the one member the finalizer and the reconciler consult for the plan 4.6
+    contract, without a change to the registrar protocol or the reconciler."""
+    memory = MemoryFinalizationHarness(tmp_path).registrar
+    assert isinstance(memory, PurposeRegistrar)
+    assert not isinstance(memory, CanonicalEvidenceQualifier)
+    root = tmp_path / "p"
+    root.mkdir()
+    production = FinalizationFixture.open(
+        root, clock=FixedClock(INSTANT), production=True
+    )
+    try:
+        registrar = production.registrar
+        assert isinstance(registrar, PurposeRegistrar)
+        assert isinstance(registrar, CanonicalEvidenceQualifier)
+    finally:
+        production.close()
 
 
 def test_command_root_paths_refuse_every_foreign_shape(tmp_path: Path) -> None:

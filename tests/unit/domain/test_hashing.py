@@ -16,6 +16,7 @@ from crypto_lab.domain.hashing import (
     finalization_id_for,
     finalization_identity,
     profile_hash,
+    run_manifest_id_for,
     sha256_bytes,
 )
 from crypto_lab.domain.identifiers import validate_prefixed_uuid4
@@ -82,15 +83,68 @@ _STAGE9_TASK1_PROFILE_TAIL = (
 )
 #: Stage 9 plan section 3.2: Task 2 appends the audit details profile (17 -> 18).
 _STAGE9_TASK2_PROFILE_TAIL = (HashingProfile.AUDIT_EVENT_DETAILS_V1,)
+#: Stage 9 plan section 3.2: Task 7 appends the two run-manifest profiles (18 -> 20).
+_STAGE9_TASK7_PROFILE_TAIL = (
+    HashingProfile.RUN_MANIFEST_V1,
+    HashingProfile.RUN_MANIFEST_IDENTITY_V1,
+)
 
 
 def test_stage_nine_profiles_are_named_and_ordered() -> None:
     members = tuple(HashingProfile)
-    assert len(members) == 18
+    assert len(members) == 20
     assert members[12:17] == _STAGE9_TASK1_PROFILE_TAIL
-    assert members[17:] == _STAGE9_TASK2_PROFILE_TAIL
+    assert members[17:18] == _STAGE9_TASK2_PROFILE_TAIL
+    assert members[18:] == _STAGE9_TASK7_PROFILE_TAIL
     assert HashingProfile.AUDIT_EVENT_DETAILS_V1.value == "audit-event-details/v1"
-    assert members[-6:] == _STAGE9_TASK1_PROFILE_TAIL + _STAGE9_TASK2_PROFILE_TAIL
+    assert HashingProfile.RUN_MANIFEST_V1.value == "run-manifest/v1"
+    assert HashingProfile.RUN_MANIFEST_IDENTITY_V1.value == "run-manifest-identity/v1"
+    assert (
+        members[-8:]
+        == _STAGE9_TASK1_PROFILE_TAIL
+        + _STAGE9_TASK2_PROFILE_TAIL
+        + _STAGE9_TASK7_PROFILE_TAIL
+    )
+
+
+#: Stage 9 plan section 3.2 / reading 17 (Task 7): the run-manifest identity vector,
+#: pinned beside the derivation it is recomputed from (``assert x == G, x``).
+_RUN_MANIFEST_ID_GOLDEN = "rmf_eaf8116c-3866-4dd8-af61-1c69f4c7753f"
+_OTHER_INVOCATION = "inv_2e6f2a4c-4b3d-4f2e-8a1b-0c9d8e7f6a5b"
+
+
+def test_run_manifest_identity_is_uuid4_shaped_and_stable() -> None:
+    manifest_id = run_manifest_id_for(_RUN, _INVOCATION)
+    assert manifest_id == _RUN_MANIFEST_ID_GOLDEN, manifest_id
+    validate_prefixed_uuid4(manifest_id, "rmf_")
+    assert run_manifest_id_for(_RUN, _INVOCATION) == manifest_id
+    assert run_manifest_id_for(_RUN, _OTHER_INVOCATION) != manifest_id
+    # The identity profile is its own hash domain: the same payload under the
+    # manifest content profile is another digest.
+    payload: dict[str, JsonValue] = {"run_id": _RUN, "run_invocation_id": _INVOCATION}
+    assert manifest_id == (
+        "rmf_"
+        + _uuid4_of(profile_hash(HashingProfile.RUN_MANIFEST_IDENTITY_V1, payload))
+    )
+    content_digest = _uuid4_of(profile_hash(HashingProfile.RUN_MANIFEST_V1, payload))
+    assert content_digest != manifest_id[4:]
+    with pytest.raises(TypeError, match="built-in strings"):
+        run_manifest_id_for(cast(str, b"run"), _INVOCATION)
+    with pytest.raises(ValueError, match="inv_"):
+        run_manifest_id_for(_RUN, _RUN)
+    with pytest.raises(ValueError, match="run_"):
+        run_manifest_id_for(_INVOCATION, _INVOCATION)
+
+
+def _uuid4_of(digest: str) -> str:
+    digits = list(digest[:32])
+    digits[12] = "4"
+    digits[16] = "89ab"[int(digits[16], 16) % 4]
+    grouped = "".join(digits)
+    return (
+        f"{grouped[:8]}-{grouped[8:12]}-{grouped[12:16]}-"
+        f"{grouped[16:20]}-{grouped[20:]}"
+    )
 
 
 _CANDIDATE = "cand_1e6f2a4c-4b3d-4f2e-8a1b-0c9d8e7f6a5b"

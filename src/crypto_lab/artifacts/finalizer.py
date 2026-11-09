@@ -16,11 +16,19 @@ The protocol, phase by phase:
    lease is taken over under the same ``finalization_id`` through
    ``resume_journal``, below); every path confined, a candidate whose path
    fails is ``QUARANTINED`` in a short transaction.
-1. Validate and hash, no transaction: ``CANDIDATE -> VALIDATING`` per candidate
-   in a short transaction, then ``validate_candidate`` -- size, media, schema,
-   the exact-byte token scan for ``RESULT`` with the material from
-   ``token_material(invocation_id)``, the token-shape scan for text evidence,
-   the streamed digest -- with the planned moves fixed here (19.2 step 4). A
+1. Validate and hash, no transaction: the attempt token material resolved first
+   -- the caller's transient material or ``token_material(invocation_id)``,
+   required for ``RESULT``, optional for ``RUN``-owned evidence, never for an
+   owner without a run -- and validated against the authoritative run and
+   invocation (the material's run, the run's stored ``attempt_token_hash``, the
+   invocation's run) in one short read transaction closed before any hash; then
+   ``CANDIDATE -> VALIDATING`` per candidate in a short transaction, then
+   ``validate_candidate`` -- size, media, schema, the exact-byte token scan for
+   either purpose whenever material is available, the canonical qualification
+   of ``CORE`` evidence through the registrar that also answers
+   ``CanonicalEvidenceQualifier`` (the ruling of 2026-11-09; a registrar without
+   it leaves every text evidence under the whole-content token-shape scan), the
+   streamed digest -- with the planned moves fixed here (19.2 step 4). A
    failure quarantines the candidate (``CORRUPT`` for a size or hash mismatch)
    and, for a leaked raw token, every ``RESULT`` candidate of the request.
 2. T1 ``PREPARED``: ``RESULT`` checks the active attempt facts and snapshots the
@@ -95,9 +103,11 @@ non-artifact codes minted here (``PROCESS.CANCELLED``,
 with their reviewed postures as ``artifacts/store.py`` restates its two, and
 every audit fact goes through the injected ``FinalizationAuditor`` (plan 4.1
 port module docstring). The raw attempt token reaches this module only as the
-``AttemptTokenMaterial`` the injected ``token_material`` callable answers, lives
-in the call frame of one ``finalize`` and is never an attribute of the
-finalizer, a journal field, a diagnostic or an audit detail. ``finalize`` is a
+``AttemptTokenMaterial`` the injected ``token_material`` callable answers or the
+caller's frame hands ``finalize`` for that one call, lives in the call frame of
+one ``finalize`` and is never an attribute of the finalizer, a journal field, a
+diagnostic or an audit detail (the ``ARTIFACT_VALIDATED`` fact records only
+whether an exact scan ran). ``finalize`` is a
 coroutine without an ``asyncio`` import: ``cooperative_checkpoint`` is an
 awaitable whose ``__await__`` yields exactly once, awaited after every probe
 point beside the cancellation poll, so the coroutine has genuine suspension
@@ -169,6 +179,7 @@ from crypto_lab.artifacts.paths import (
 )
 from crypto_lab.artifacts.ports import (
     AuditFact,
+    CanonicalEvidenceQualifier,
     CommandRootPaths,
     CommandRootsLookup,
     FinalizationAuditor,
@@ -216,6 +227,7 @@ from crypto_lab.domain.hashing import (
     HashingProfile,
     _uuid4_shaped,
     artifact_id_for,
+    attempt_token_hash,
     finalization_id_for,
     profile_hash,
 )
@@ -781,6 +793,12 @@ class CoreArtifactFinalizer:
         self._store = store
         self._probe = probe
         self._registrar = registrar
+        #: The canonical evidence ruling of 2026-11-09: a registrar that also
+        #: answers the plan 4.6 contract qualifies ``CORE`` evidence; any other
+        #: registrar leaves every text evidence under the whole-content scan.
+        self._canonical: CanonicalEvidenceQualifier | None = (
+            registrar if isinstance(registrar, CanonicalEvidenceQualifier) else None
+        )
         self._auditor = auditor
         self._command_roots = command_roots
         self._token_material = token_material
@@ -792,9 +810,16 @@ class CoreArtifactFinalizer:
     # -- the coroutine ----------------------------------------------------------
 
     async def finalize(
-        self, request: FinalizationRequest, cancellation: CancellationToken
+        self,
+        request: FinalizationRequest,
+        cancellation: CancellationToken,
+        *,
+        token_material: AttemptTokenMaterial | MISSING = MISSING,  # type: ignore[valid-type]
     ) -> Result[FinalizationResult]:
-        """Specification 8.2 and plan 4.3: one purpose-tagged finalization."""
+        """Specification 8.2 and plan 4.3: one purpose-tagged finalization.
+        ``token_material`` is the caller's transient material for this call
+        (plan 4.4's conclusion, before the root's raw bytes are closed); absent,
+        the ``token_material`` lookup answers."""
         now = self._clock.now_utc()
         if not isinstance(
             request, ResultFinalizationRequest | EvidenceFinalizationRequest
@@ -806,6 +831,16 @@ class CoreArtifactFinalizer:
                         "finalize consumes a ResultFinalizationRequest or an "
                         "EvidenceFinalizationRequest"
                     ),
+                    now_utc=now,
+                )
+            )
+        if token_material is not MISSING and not isinstance(
+            token_material, AttemptTokenMaterial
+        ):
+            return _failure_of(
+                _restated_diagnostic(
+                    CORE_INVARIANT_VIOLATION,
+                    message="token_material must be AttemptTokenMaterial or absent",
                     now_utc=now,
                 )
             )
@@ -824,7 +859,7 @@ class CoreArtifactFinalizer:
         await cooperative_checkpoint()
         if cancellation.is_cancellation_requested():
             return self._cancelled(scope)
-        validated = self._validate_phase(work)
+        validated = self._validate_phase(work, token_material)
         if validated is not None:
             return validated
         self._probe.before_prepared()
@@ -1240,20 +1275,85 @@ class CoreArtifactFinalizer:
 
     # -- phase 1 -----------------------------------------------------------------
 
-    def _validate_phase(self, work: _Work) -> Failure | None:
-        """Plan 4.3 phase 1 over every candidate, no transaction across hashing."""
-        scope = work.scope
-        now = self._clock.now_utc()
-        token: AttemptTokenMaterial | MISSING = MISSING  # type: ignore[valid-type]
-        if scope.is_result:
-            material = self._token_material(str(scope.invocation_id))
-            if not isinstance(material, AttemptTokenMaterial):
+    def _resolve_material(
+        self,
+        scope: _Scope,
+        supplied: AttemptTokenMaterial | MISSING,  # type: ignore[valid-type]
+    ) -> AttemptTokenMaterial | Failure | None:
+        """The ruling of 2026-11-09: the material for the phase-1 exact scan --
+        the caller's transient material, else the lookup's answer -- validated
+        against the authoritative run and invocation before use: it names the
+        owner's run and hashes to the run's stored ``attempt_token_hash``; for
+        evidence the invocation it was answered for must belong to that run too
+        (a ``RESULT`` request's run-command invocation is verified by the T1 lease
+        check itself). Required for ``RESULT`` (the invariant when absent);
+        optional for ``RUN``-owned evidence with an invocation (``None`` is a
+        token-free validation, never reported as an exact scan); never admitted
+        for an owner without a run. The reads are one short transaction, closed
+        before any candidate is opened."""
+        owner = scope.owner
+        if not isinstance(owner, RunArtifactOwner) or not isinstance(
+            scope.invocation_id, str
+        ):
+            if isinstance(supplied, AttemptTokenMaterial):
+                return self._invariant(
+                    scope,
+                    "a finalization of an owner without a run and an invocation "
+                    "takes no attempt token material",
+                )
+            return None
+        invocation_id = scope.invocation_id
+        material = (
+            supplied
+            if isinstance(supplied, AttemptTokenMaterial)
+            else self._token_material(invocation_id)
+        )
+        if not isinstance(material, AttemptTokenMaterial):
+            if scope.is_result:
                 return self._invariant(
                     scope,
                     "a RESULT finalization requires the attempt token material of "
                     "its invocation",
                 )
-            token = material
+            return None
+        mismatch = (
+            f"the attempt token material answered for invocation {invocation_id} "
+            "is not the run's"
+        )
+        if material.run_id != owner.run_id:
+            return self._invariant(scope, mismatch)
+        with self._transaction() as transaction:
+            run = transaction.engine_runs.get(owner.run_id)
+            if isinstance(run, Failure):
+                return run
+            if (
+                attempt_token_hash(material.attempt_token)
+                != run.value.attempt_token_hash
+            ):
+                return self._invariant(scope, mismatch)
+            if scope.is_result:
+                return material
+            invocation = transaction.command_invocations.get(invocation_id)
+            if isinstance(invocation, Failure):
+                return invocation
+            if invocation.value.run_id != owner.run_id:
+                return self._invariant(scope, mismatch)
+        return material
+
+    def _validate_phase(
+        self,
+        work: _Work,
+        supplied: AttemptTokenMaterial | MISSING,  # type: ignore[valid-type]
+    ) -> Failure | None:
+        """Plan 4.3 phase 1 over every candidate, no transaction across hashing."""
+        scope = work.scope
+        now = self._clock.now_utc()
+        resolved = self._resolve_material(scope, supplied)
+        if isinstance(resolved, Failure):
+            return resolved
+        token: AttemptTokenMaterial | MISSING = (  # type: ignore[valid-type]
+            resolved if resolved is not None else MISSING
+        )
         validations: dict[str, CandidateValidation] = {}
         for candidate_id in scope.candidate_ids:
             candidate = work.candidates[candidate_id]
@@ -1349,10 +1449,11 @@ class CoreArtifactFinalizer:
             candidate,
             work.confined[candidate.candidate_artifact_id],
             hasher=self._hasher,
-            token=token if work.scope.is_result else MISSING,
+            token=token,
             ceilings=self._ceilings,
             now_utc=now,
             media_type=media,
+            canonical=self._canonical if self._canonical is not None else MISSING,
         )
 
     def _fail_candidate(
@@ -1513,13 +1614,20 @@ class CoreArtifactFinalizer:
             prepared = transaction.finalization_journal.prepare(entry)
             if isinstance(prepared, Failure):
                 return prepared
-            for _candidate_id in scope.candidate_ids:
+            for candidate_id in scope.candidate_ids:
+                validated = work.validated[candidate_id]
                 audited = self._audit(
                     transaction,
                     scope,
                     "ARTIFACT_VALIDATED",
                     "SUCCEEDED",
-                    {"purpose": scope.purpose.value},
+                    {
+                        "purpose": scope.purpose.value,
+                        # The ruling of 2026-11-09: a token-free validation is
+                        # never represented as a successful exact scan.
+                        "exact_scan": validated.exact_token_scanned,
+                        "canonical": validated.canonical,
+                    },
                 )
                 if isinstance(audited, Failure):
                     return audited

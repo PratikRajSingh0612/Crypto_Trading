@@ -4,7 +4,8 @@ The plan names six facts: no ``crypto_lab`` module imports ``sqlalchemy``,
 ``sqlite3``, ``alembic``, ``subprocess``, ``os.environ``, ``random``, ``secrets``,
 ``time`` or ``datetime.now``; no Stage 5 module reads the filesystem or the
 environment at import time; ``crypto_lab.experiments`` and ``crypto_lab.adapters``
-import none of the packages the section 27.1 table permits but Stage 5 excludes;
+import none of the out-of-scope packages (the section 27.1 edges Stage 5 excluded
+and, since Stage 9 Task 7, the two packages the table forbids outright);
 ``tests/doubles`` is imported by no ``crypto_lab`` module; and no traversal logic
 exists in any ``DiagnosticReader`` implementation. Every scan here is static and
 AST-based, and every scan carries a planted-violation control, because a guard
@@ -39,11 +40,15 @@ Declared readings, so nothing is inferred silently:
   and none calls ``open`` -- while the behavioural half is already discharged by
   the fresh-import probe over ``PACKAGE_MODULES`` in
   ``tests/unit/test_package_layout.py``.
-- The out-of-scope set is ``process_supervision``, ``artifacts``, ``datasets``,
+- The out-of-scope set was ``process_supervision``, ``artifacts``, ``datasets``,
   ``audit`` and ``strategy``: every package the dependency table permits the
-  application layer that Stage 5 nevertheless does not touch. The architecture
-  guard's ``experiments`` allowlist already excludes them, so both guards trip
-  together; the separation the plan describes is recorded rather than real.
+  application layer that Stage 5 nevertheless did not touch. Stage 9 plan
+  section 2.6 (Task 7) removed ``artifacts`` and ``audit`` when ``experiments``
+  took those two permitted edges and added ``persistence`` and ``cli``, the two
+  packages the table forbids the application layer outright, so the scan keeps a
+  non-empty refusal set. The architecture guard's ``experiments`` allowlist
+  excludes the same packages, so both guards trip together; the separation the
+  plan describes is recorded rather than real.
 - A ``DiagnosticReader`` implementation is located structurally: any class under
   ``src/crypto_lab`` or ``tests`` that defines both ``get`` and ``get_many`` and is
   not the ``Protocol`` itself. "Traversal" is any attribute read of
@@ -136,12 +141,16 @@ _FILESYSTEM_AND_ENVIRONMENT_ROOTS: Final = frozenset(
     {"os", "pathlib", "importlib", "io", "sys", "shutil", "tempfile", "glob"}
 )
 _TEST_DOUBLE_ROOTS: Final = frozenset({"doubles", "tests"})
+#: Stage 9 plan section 2.6 (Task 7): ``artifacts`` and ``audit`` left this set
+#: when ``experiments`` took the two edges section 27.1 permits it; ``persistence``
+#: and ``cli`` joined it so the scan keeps a non-empty refusal set of packages the
+#: application layer must never import.
 _OUT_OF_SCOPE_PACKAGES: Final[tuple[str, ...]] = (
     "crypto_lab.process_supervision",
-    "crypto_lab.artifacts",
     "crypto_lab.datasets",
-    "crypto_lab.audit",
     "crypto_lab.strategy",
+    "crypto_lab.persistence",
+    "crypto_lab.cli",
 )
 _STAGE5_APPLICATION_PACKAGES: Final[tuple[str, ...]] = ("experiments", "adapters")
 _READER_METHODS: Final = frozenset({"get", "get_many"})
@@ -694,9 +703,12 @@ def test_the_test_double_scan_ignores_docstring_text() -> None:
     ("source", "expected"),
     [
         ("from crypto_lab.datasets import models\n", "crypto_lab.datasets"),
-        ("import crypto_lab.artifacts.ownership\n", "crypto_lab.artifacts.ownership"),
+        (
+            "import crypto_lab.persistence.database\n",
+            "crypto_lab.persistence.database",
+        ),
         ("from ..process_supervision import x\n", "crypto_lab.process_supervision"),
-        ("from crypto_lab import audit\n", "crypto_lab.audit"),
+        ("from crypto_lab import cli\n", "crypto_lab.cli"),
         (
             "from crypto_lab.strategy.models import StrategySpec\n",
             "crypto_lab.strategy",
@@ -712,10 +724,14 @@ def test_the_out_of_scope_scan_detects_each_shape(source: str, expected: str) ->
 
 
 def test_the_out_of_scope_scan_allows_the_stage_five_edges() -> None:
+    # Stage 9 plan section 2.6 (Task 7): the two artifact and audit edges the
+    # application layer now takes are permitted edges of this scan as well.
     source = (
         "from crypto_lab.adapters.ports import CommandInvocationRepository\n"
         "from crypto_lab.domain.base import CanonicalModel\n"
         "from .ports import UnitOfWork\n"
+        "from crypto_lab.artifacts.ports import PurposeRegistrar\n"
+        "from crypto_lab.audit.models import AuditEvent\n"
     )
     assert (
         _out_of_scope_violations(

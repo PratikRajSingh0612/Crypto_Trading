@@ -38,7 +38,22 @@ as domain-typed structural twins rather than imported:
 The ten probe points of ``FinalizationProbe`` are plan 4.3's; ``NoProbe`` is the
 production instance. ``ArtifactFinalizer.finalize`` is a coroutine whose only
 suspension points are the ``cooperative_checkpoint`` awaits of
-``artifacts/finalizer.py`` (no ``asyncio`` import anywhere in the package).
+``artifacts/finalizer.py`` (no ``asyncio`` import anywhere in the package). Its
+keyword ``token_material`` is the transient attempt token material a caller
+already holds in its frame (the conclusion of plan 4.4, before the raw bytes of
+the root are closed); it is consumed by the phase-1 scan of one call and never
+retained -- the canonical request shapes carry no token.
+
+The canonical evidence ruling of 2026-11-09 (``docs/decisions/2026-11-09-stage9-
+canonical-evidence-validation-clarification.md``) adds one more structural twin:
+``CanonicalEvidenceQualifier`` is the producer side of the plan 4.6 contract --
+whether the bytes of a ``CORE`` ``EVIDENCE`` candidate are exactly the approved
+producer's canonical output agreeing with the authoritative facts, and which of
+its strings remain uncontrolled. The production ``PurposeRegistrar`` of the
+``experiments`` composition satisfies it beside the registrar protocol, so the
+finalizer -- and the reconciler, which builds its finalizer from the registrar it
+is handed -- consults it through the registrar boundary; a registrar without it
+leaves every text evidence under the whole-content token-shape scan.
 """
 
 from __future__ import annotations
@@ -707,6 +722,46 @@ class PurposeRegistrar(Protocol):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class CanonicalQualification:
+    """The producer-side verdict over one ``CORE`` ``EVIDENCE`` candidate's records
+    (the canonical evidence ruling of 2026-11-09): the bytes are exactly the
+    approved producer's canonical output and agree with the authoritative facts
+    for the candidate, its owner and its correlation. ``records`` counts the
+    documents qualified (one for a JSON document, one per line of JSON Lines);
+    ``uncontrolled_strings`` are the strings of those records that no closed
+    grammar governs -- free text, adapter-chosen identifiers, dynamic mapping keys
+    -- which the validation still holds to the field-level token-shape rule. A
+    qualification is never a verdict on the raw token: the exact-byte scan runs
+    over the candidate regardless."""
+
+    records: int
+    uncontrolled_strings: tuple[str, ...]
+
+
+@runtime_checkable
+class CanonicalEvidenceQualifier(Protocol):
+    """The plan 4.6 canonical contract, answered by the composition that owns the
+    producers (plan 2.3: ``experiments``, the one layer that may import the
+    adapter and experiment records beside ``artifacts``).
+
+    ``qualify_evidence`` receives the candidate and its already well-formed
+    records (strict JSON, split by the validation) and answers ``Success(MISSING)``
+    when no canonical contract governs the candidate or the records are not the
+    producer's model (the whole-content protection then stands),
+    ``Success(CanonicalQualification)`` when the records are the model, re-serialize
+    to the very bytes and agree with the authoritative facts, and a ``Failure`` --
+    ``ARTIFACT.VALIDATION_FAILED`` for content that is the model but disagrees
+    with the facts, a ``PERSISTENCE.*`` code for facts that could not be read --
+    which the validation records at its ``SCHEMA`` stage. A media type, a kind
+    label, the ``CORE`` flag or a valid parse alone never qualifies.
+    """
+
+    def qualify_evidence(
+        self, candidate: CandidateArtifact, records: tuple[bytes, ...]
+    ) -> Result[CanonicalQualification | MISSING]: ...  # type: ignore[valid-type]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class CandidateObservationFacts:
     """One candidate's independently observed digest and size (29.3)."""
 
@@ -860,10 +915,21 @@ class NoProbe:
 
 @runtime_checkable
 class ArtifactFinalizer(Protocol):
-    """Specification 8.2: finalize one purpose-tagged request idempotently."""
+    """Specification 8.2: finalize one purpose-tagged request idempotently.
+
+    ``token_material`` is optional transient material the caller's frame already
+    holds (plan 4.4's conclusion before the root's raw bytes are closed); absent,
+    the finalizer consults its ``TokenMaterialLookup``. Either source is validated
+    against the authoritative run and invocation before use and lives in the call
+    frame of the one ``finalize`` alone.
+    """
 
     async def finalize(
-        self, request: FinalizationRequest, cancellation: CancellationToken
+        self,
+        request: FinalizationRequest,
+        cancellation: CancellationToken,
+        *,
+        token_material: AttemptTokenMaterial | MISSING = MISSING,  # type: ignore[valid-type]
     ) -> Result[FinalizationResult]: ...
 
 
@@ -878,6 +944,8 @@ __all__ = (
     "AuditOutcomeName",
     "CandidateArtifactRepository",
     "CandidateObservationFacts",
+    "CanonicalEvidenceQualifier",
+    "CanonicalQualification",
     "CommandInvocationRecords",
     "CommandRootPaths",
     "CommandRootsLookup",

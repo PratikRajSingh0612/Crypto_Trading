@@ -530,16 +530,16 @@ def test_the_two_stage_five_hashing_profiles_exist_and_reach_no_schema() -> None
 
     The test name is historical and kept. Stage 6 plan section 4 adds four
     members in Task 1 (8 -> 12). Stage 9 plan section 3.2 adds five more
-    members in its own Task 1 (12 -> 17) and one in Task 2 (17 -> 18), and plan
-    section 2.6 requires all ten value strings introduced since Stage 6 to join
-    this render scan for the same reason.
+    members in its own Task 1 (12 -> 17), one in Task 2 (17 -> 18) and two in
+    Task 7 (18 -> 20), and plan section 2.6 requires all twelve value strings
+    introduced since Stage 6 to join this render scan for the same reason.
     """
     assert HashingProfile.EXPERIMENT_CONFIGURATION_V1.value == (
         "experiment-configuration/v1"
     )
     assert HashingProfile.EXPERIMENT_SPEC_V1.value == "experiment-spec/v1"
-    assert len(HashingProfile) == 18
-    assert len({member.value for member in HashingProfile}) == 18
+    assert len(HashingProfile) == 20
+    assert len({member.value for member in HashingProfile}) == 20
     for path, contents in render_schema_files().items():
         assert b"HashingProfile" not in contents, path
         assert b"experiment-configuration/v1" not in contents, path
@@ -554,6 +554,8 @@ def test_the_two_stage_five_hashing_profiles_exist_and_reach_no_schema() -> None
         assert b"finalization-identity/v1" not in contents, path
         assert b"core-candidate-identity/v1" not in contents, path
         assert b"audit-event-details/v1" not in contents, path
+        assert b"run-manifest/v1" not in contents, path
+        assert b"run-manifest-identity/v1" not in contents, path
 
 
 # --- Ambient-source guard -----------------------------------------------------

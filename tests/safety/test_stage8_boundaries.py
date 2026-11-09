@@ -855,10 +855,11 @@ def test_the_stage_eight_source_files_are_exactly_the_fifteen_plan_paths(
     # artifact contract modules of Stage 9 Task 1, the five audit modules and
     # the metric module of Stage 9 Task 2, the four path, hashing, validation
     # and store modules of Stage 9 Task 4, the four persistence increments of
-    # Stage 9 Task 5 and the three port, finalizer and recovery modules of
-    # Stage 9 Task 6 (Stage 9 plan section 2.6, the Task-3-excluded branch).
-    assert len(_ALLOWED_SOURCE_FILES) == 132
-    assert len(_source_files(repository_root)) == 132
+    # Stage 9 Task 5, the three port, finalizer and recovery modules of Stage 9
+    # Task 6 and the three run-manifest, finalization and comparison modules of
+    # Stage 9 Task 7 (Stage 9 plan section 2.6, the Task-3-excluded branch).
+    assert len(_ALLOWED_SOURCE_FILES) == 135
+    assert len(_source_files(repository_root)) == 135
     assert set(_STAGE9_PERSISTENCE_FILES) <= _ALLOWED_SOURCE_FILES
     assert set(_STAGE9_PERSISTENCE_FILES).isdisjoint(STAGE8_SOURCE_FILES)
     on_disk = {
@@ -975,7 +976,8 @@ def test_persistence_names_no_raw_token_bare_identifier_or_deferred_name(
     # Task 2: 22 -> 19 (`AuditEvent`, `AuditSink`, `MetricValue`). Task 4: 19 -> 18
     # (`ContentHasher`) on the Task-3-excluded branch. Task 6: 18 -> 15
     # (`ArtifactFinalizer`, `ArtifactRepository`, `CandidateArtifactRepository`).
-    assert len(_DEFERRED_DEFINITIONS) == 15
+    # Task 7: 15 -> 13 (`RunManifest`, `ComparisonEligibilityService`).
+    assert len(_DEFERRED_DEFINITIONS) == 13
 
 
 def test_diagnostic_ids_are_written_only_through_the_whole_row_encode(
@@ -1051,11 +1053,12 @@ def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
     # deferred names -> 19, registry and files -> 46, profiles -> 18; Task 4
     # (Task-3-excluded branch): paths -> 125, import roots 29 -> 30 (`os`),
     # deferred names -> 18; Task 5: paths -> 129, exemption pairs 13 -> 17; Task 6:
-    # paths -> 132, deferred names -> 15, subprocess importers 12 -> 13; the rest
-    # is unchanged.
-    assert len(_ALLOWED_SOURCE_FILES) == 132
+    # paths -> 132, deferred names -> 15, subprocess importers 12 -> 13; Task 7:
+    # paths -> 135, deferred names -> 13, registry and files -> 48, profiles -> 20;
+    # the rest is unchanged.
+    assert len(_ALLOWED_SOURCE_FILES) == 135
     assert len(_ALLOWED_IMPORT_ROOTS) == 30
-    assert len(_DEFERRED_DEFINITIONS) == 15
+    assert len(_DEFERRED_DEFINITIONS) == 13
     assert len(_INFRASTRUCTURE_EXEMPTIONS) == 17
     assert len(_EXPECTED_READER_IMPLEMENTATIONS) == 5
     assert len(_SUBPROCESS_IMPORTERS) == 13
@@ -1064,9 +1067,9 @@ def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
     assert len(_EXPECTED_OPERATIONS) == 21
     assert len(_EXPECTED_VERIFICATION_PROFILES) == 10
     assert len(_verifier_step_lines()) == 11
-    assert len(SCHEMA_DEFINITIONS) == 46
-    assert len(sorted((repository_root / "schemas").rglob("*.schema.json"))) == 46
-    assert len(HashingProfile) == 18
+    assert len(SCHEMA_DEFINITIONS) == 48
+    assert len(sorted((repository_root / "schemas").rglob("*.schema.json"))) == 48
+    assert len(HashingProfile) == 20
 
 
 # --------------------------------------------------------------------------
@@ -1229,9 +1232,11 @@ def test_the_bare_identifier_scan_allows_the_aliased_import() -> None:
 
 
 def test_the_deferred_name_scan_detects_a_definition() -> None:
+    # Stage 9 Task 7 released `RunManifest`; the planted control names a still-
+    # deferred class so the scan's positive stays load-bearing.
     assert _deferred_name_violations(
-        ast.parse("class RunManifest:\n    pass\n"), "p"
-    ) == ["p: defines deferred name RunManifest"]
+        ast.parse("class CanonicalOrder:\n    pass\n"), "p"
+    ) == ["p: defines deferred name CanonicalOrder"]
     assert (
         _deferred_name_violations(ast.parse("class SqliteThing:\n    pass\n"), "p")
         == []

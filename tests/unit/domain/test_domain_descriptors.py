@@ -235,10 +235,12 @@ def test_the_protocol_descriptor_schemas_are_byte_identical_after_relocation(
     # appended the eight protocol entries, taking it to thirty-five, and Stage 9
     # Task 1 appended the eight artifact entries, taking it to forty-three, and
     # Stage 9 Task 2 appended the two audit entries and the metric entry, taking
-    # it to forty-six. The two protocol digests pinned above are what this test
-    # actually guards, and they are unchanged -- the count is updated rather than
-    # relaxed so the guard stays exact.
-    assert len(rendered) == 46
+    # it to forty-six, and Stage 9 Task 7 appended the run manifest and the
+    # normalized result provenance, taking it to forty-eight. The two protocol
+    # digests pinned above are what this test actually guards, and they are
+    # unchanged -- the count is updated rather than relaxed so the guard stays
+    # exact.
+    assert len(rendered) == 48
 
 
 def test_a_descriptor_built_through_either_import_path_is_the_same_record() -> None:

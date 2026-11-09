@@ -17,6 +17,7 @@ from crypto_lab.domain.identifiers import (
     InvocationId,
     RequestId,
     RunId,
+    RunManifestId,
     Sha256,
     validate_prefixed_uuid4,
 )
@@ -48,6 +49,10 @@ class HashingProfile(StrEnum):
     CORE_CANDIDATE_IDENTITY_V1 = "core-candidate-identity/v1"
     # Stage 9 plan section 3.2: the Task 2 audit profile over an event's details.
     AUDIT_EVENT_DETAILS_V1 = "audit-event-details/v1"
+    # Stage 9 plan section 3.2: the two Task 7 run-manifest profiles -- the
+    # manifest's self-hash with that field omitted and its derived identity.
+    RUN_MANIFEST_V1 = "run-manifest/v1"
+    RUN_MANIFEST_IDENTITY_V1 = "run-manifest-identity/v1"
 
 
 class CanonicalHashEnvelope(CanonicalModel):
@@ -290,3 +295,25 @@ def finalization_id_for(identity_hash: Sha256) -> FinalizationId:
     """Derive the ``fin_`` identity of one finalization from its identity hash."""
     _validate_sha256_hex(identity_hash, "finalization identity hash")
     return f"fin_{_uuid4_shaped(identity_hash)}"
+
+
+def run_manifest_id_for(
+    run_id: RunId, run_invocation_id: InvocationId
+) -> RunManifestId:
+    """Derive the ``rmf_`` identity of one run's core run manifest.
+
+    Stage 9 plan section 3.2 and reading 17: ``rmf_`` +
+    ``_uuid4_shaped(profile_hash(...))`` under ``RUN_MANIFEST_IDENTITY_V1`` over
+    the run and its run-command invocation, so a replay of the same registration
+    derives the same identity (specification 29.6) and no identity source draws it.
+    """
+    if type(run_id) is not str or type(run_invocation_id) is not str:
+        raise TypeError("run manifest identity inputs must be built-in strings")
+    validate_prefixed_uuid4(run_id, "run_")
+    validate_prefixed_uuid4(run_invocation_id, "inv_")
+    payload: dict[str, JsonValue] = {
+        "run_id": run_id,
+        "run_invocation_id": run_invocation_id,
+    }
+    digest = profile_hash(HashingProfile.RUN_MANIFEST_IDENTITY_V1, payload)
+    return f"rmf_{_uuid4_shaped(digest)}"

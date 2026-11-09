@@ -1,19 +1,22 @@
-"""Stage 9 Task 6, plan 5.3: the twelve reconciliation rows Task 6 owns
-(RV-5..RV-18 less RV-12 and RV-13, which are Task 5's; RV-1..RV-4 are Task 7's),
-the leased raw-byte survival and close, and the terminal-attempt rule, over the
-SQLite ``FinalizationFixture`` (requirement rows R29.2-04, R29.2-05, R14.7-05,
-R14.7-06, R14.7-07, R15.6-02, R17.3-02, R17.3-03, R19.1-20, R29.1-04,
-R29.2-01..03, R29.5-02, T28.3-06 cleanup half).
+"""Stage 9 Task 6 and Task 7, plan 5.3: the reconciliation rows RV-1..RV-18
+less RV-12 and RV-13 (Task 5's), the leased raw-byte survival and close, and
+the terminal-attempt rule, over the SQLite ``FinalizationFixture`` (requirement
+rows R29.2-04, R29.2-05, R14.7-05, R14.7-06, R14.7-07, R15.6-02, R17.3-02,
+R17.3-03, R19.1-20, R29.1-04, R29.2-01..03, R29.5-02, T28.3-06; Task 7:
+R15.6-01, R29.3-01..05, R29.3-08..10, R17.3-01, R30.3-01).
 
 Every planted state is a state the committed state machines reach or, where
 the row says "planted raw", a row the Stage 9 repositories admit but the
 production operations never write before the moment reconciliation sees it.
+RV-1..RV-4 run over the production recovery validator and registrar
+(``production``); the Task 6 rows keep the memory doubles.
 """
 
 from __future__ import annotations
 
 import _winapi
 import hashlib
+import json
 import os
 from collections.abc import Iterator
 from datetime import datetime, timedelta
@@ -22,6 +25,9 @@ from pathlib import Path
 import pytest
 from pydantic.experimental.missing_sentinel import MISSING
 
+from crypto_lab.adapters.diagnostics import PROTOCOL_IDENTITY_OR_SEQUENCE_VIOLATION
+from crypto_lab.adapters.limits import MAX_RESULT_MANIFEST_BYTES
+from crypto_lab.adapters.manifests import SanitizedAdapterResultManifest
 from crypto_lab.artifacts.diagnostics import (
     ARTIFACT_FINALIZATION_TIMED_OUT,
     ARTIFACT_MOVE_FAILED,
@@ -60,6 +66,11 @@ from crypto_lab.domain.command_invocation import CommandInvocationRecord
 from crypto_lab.domain.hashing import _uuid4_shaped, sha256_bytes
 from crypto_lab.domain.lifecycle import CommandInvocationState, CommandKind
 from crypto_lab.domain.results import Failure, Result, Success
+from crypto_lab.experiments.finalization import (
+    protocol_capture_evidence,
+    sanitized_result_manifest_evidence,
+)
+from crypto_lab.experiments.run_manifest import RunManifest, run_manifest_hash
 from crypto_lab.persistence.diagnostics import (
     CONCURRENCY_CONFLICT,
     WRITE_FAILED,
@@ -67,6 +78,7 @@ from crypto_lab.persistence.diagnostics import (
 )
 from doubles.artifacts import (
     EVIDENCE_FILES,
+    FIXTURE_TOKEN,
     INVOCATION_CORRELATION,
     RESULT_FILES,
     RESULT_TIMEOUT_SECONDS,
@@ -87,6 +99,7 @@ from doubles.artifacts import (
 from doubles.experiments import (
     EXPERIMENT_ID,
     INSTANT,
+    INVOCATION_ID,
     OTHER_INVOCATION_ID,
     RUN_ID,
     UUID_D,
@@ -149,7 +162,11 @@ def _projections(fixture: FinalizationFixture) -> tuple[Path, ...]:
 
 
 def _ok[T](result: Result[T]) -> T:
-    assert isinstance(result, Success), result
+    assert isinstance(result, Success), (
+        "; ".join(f"{item.error_code}: {item.message}" for item in result.diagnostics)
+        if isinstance(result, Failure)
+        else repr(result)
+    )
     return result.value
 
 
@@ -178,6 +195,199 @@ def fixture(tmp_path: Path) -> Iterator[FinalizationFixture]:
         opened.close()
 
 
+@pytest.fixture
+def production(tmp_path: Path) -> Iterator[FinalizationFixture]:
+    """Task 7: the production registrar, validator and auditor over SQLite."""
+    opened = FinalizationFixture.open(
+        tmp_path, clock=FixedClock(INSTANT), production=True
+    )
+    try:
+        yield opened
+    finally:
+        opened.close()
+
+
+# --------------------------------------------------------------------------
+# Task 7: RV-1 .. RV-4 over the production recovery validator
+# --------------------------------------------------------------------------
+
+#: A fixture token of the same grammar as the planted one, never the same bytes.
+_ALTERED_TOKEN = "B" * 32
+
+
+def _cp1_state(fixture: FinalizationFixture, plan: ResultPlan) -> None:
+    """The CP-1 durable state: candidates ``VALIDATING``, no journal, the run
+    ``RUNNING`` without a deadline, the temporary manifest and ``request.json``
+    surviving under the root."""
+    with pytest.raises(FinalizationCrash):
+        fixture.finalize_result(plan, probe=CrashingProbe("before_prepared"))
+    before = fixture.durable()
+    assert before.journal == ()
+    assert all(state == "VALIDATING" for state in before.candidate_states.values())
+    assert before.run_state == "RUNNING"
+    assert before.run_deadline is None
+    assert plan.roots.request_path.is_file()
+    assert isinstance(plan.roots.result_path, Path)
+    assert plan.roots.result_path.is_file()
+
+
+def _assert_recovery_failed_run(
+    fixture: FinalizationFixture, plan: ResultPlan, code: str
+) -> None:
+    """17.3 after a failed 29.3 check: the run ``FAILED`` under the check's
+    diagnostic (``RUN_FAILED`` by name), every candidate ``QUARANTINED`` under the
+    same commit, no reference, no manifest, the root's raw bytes closed."""
+    after = fixture.durable()
+    assert after.run_state == "FAILED"
+    assert after.run is not None
+    primary = after.run.primary_terminal_diagnostic_id
+    assert any(
+        diagnostic.diagnostic_id == primary and diagnostic.error_code == code
+        for diagnostic in after.diagnostics
+    )
+    assert all(state == "QUARANTINED" for state in after.candidate_states.values())
+    assert after.journal == ()
+    assert after.refs == ()
+    assert after.run_manifests == ()
+    assert after.object_blobs == ()
+    assert after.audit_actions.count("RUN_FAILED") == 1
+    assert after.audit_actions.count("RECONCILIATION_CANDIDATE_QUARANTINED") == 2
+    assert after.audit_actions.count("RETENTION_DELETED") == 1
+    assert "RUN_SUCCEEDED" not in after.audit_actions
+    assert not plan.roots.request_path.exists()
+    assert isinstance(plan.roots.result_path, Path)
+    assert not plan.roots.result_path.exists()
+    _assert_consistent(fixture)
+
+
+def test_rv1(production: FinalizationFixture) -> None:
+    """RV-1 (29.3): the CP-1 state with a valid temporary manifest and a
+    surviving ``request.json`` recovers to full RESULT success. The sanitized
+    row was never written before the crash, so the validator regenerates an
+    identical sanitized manifest from the surviving bytes and the ledger
+    (T28.3-06) and the registrar writes its row; ``run_manifest_hash`` is
+    verified separately after registration (29.3:2182)."""
+    plan = production.plant_production_result(sanitized_row=False)
+    assert production.harness.count("sanitized_adapter_result_manifests") == 0
+    _cp1_state(production, plan)
+    production.reopen()
+    report = _ok(production.recover())
+    assert (report.resumed, report.registered, report.quarantined) == (1, 1, 0)
+    after = production.durable()
+    assert after.journal_state == "REGISTERED"
+    assert after.run_state == "SUCCEEDED"
+    assert after.run_revision == plan.run.revision + 2
+    assert len(after.refs) == 2
+    assert all(state == "FINALIZING" for state in after.candidate_states.values())
+    (row,) = after.run_manifests
+    manifest = RunManifest.model_validate_json(row.manifest_json)
+    assert run_manifest_hash(manifest) == row.run_manifest_hash
+    assert manifest.sanitized_adapter_result_manifest_hash == (
+        plan.sanitized.sanitized_adapter_result_manifest_hash
+    )
+    assert manifest.metrics[0].metric_name == "total-return"
+    # The regenerated sanitized manifest is byte-identical to the one the Stage 6
+    # verdict would have produced, and its row now exists once.
+    assert production.harness.count("sanitized_adapter_result_manifests") == 1
+    transaction = production.begin()
+    try:
+        stored = _ok(
+            transaction.sanitized_manifests.get(
+                plan.sanitized.sanitized_adapter_result_manifest_hash
+            )
+        )
+    finally:
+        transaction.rollback()
+    assert not isinstance(stored, type(MISSING))
+    assert (
+        SanitizedAdapterResultManifest.model_validate_json(stored.manifest_json)
+        == plan.sanitized
+    )
+    assert not plan.roots.request_path.exists()
+    assert after.audit_actions.count("RUN_SUCCEEDED") == 1
+    assert "RUN_FAILED" not in after.audit_actions
+    _assert_consistent(production)
+
+
+def test_rv2(production: FinalizationFixture) -> None:
+    """RV-2: the CP-1 state with the temporary manifest deleted is
+    ``ARTIFACT.RESULT_MANIFEST_INVALID``: run ``FAILED`` (``RUN_FAILED`` by name),
+    candidates ``QUARANTINED`` (17.3); nothing is repaired."""
+    plan = production.plant_result_prestate()
+    _cp1_state(production, plan)
+    assert isinstance(plan.roots.result_path, Path)
+    plan.roots.result_path.unlink()
+    production.reopen()
+    report = _ok(production.recover())
+    assert (report.quarantined, report.registered, report.resumed) == (2, 0, 0)
+    assert "RUN_FAILED" in production.durable().audit_actions
+    _assert_recovery_failed_run(production, plan, ARTIFACT_RESULT_MANIFEST_INVALID)
+    after = production.durable()
+    primary = [
+        diagnostic
+        for diagnostic in after.diagnostics
+        if diagnostic.error_code == ARTIFACT_RESULT_MANIFEST_INVALID
+    ]
+    assert len(primary) == 1
+    assert "absent" in primary[0].message
+
+
+def test_rv3(production: FinalizationFixture) -> None:
+    """RV-3: a temporary manifest above the 16 MiB ceiling is refused as RV-2,
+    before any decoding."""
+    plan = production.plant_result_prestate()
+    _cp1_state(production, plan)
+    assert isinstance(plan.roots.result_path, Path)
+    plan.roots.result_path.write_bytes(b"{" + b" " * MAX_RESULT_MANIFEST_BYTES + b"}")
+    production.reopen()
+    report = _ok(production.recover())
+    assert (report.quarantined, report.registered) == (2, 0)
+    _assert_recovery_failed_run(production, plan, ARTIFACT_RESULT_MANIFEST_INVALID)
+    after = production.durable()
+    (primary,) = [
+        diagnostic
+        for diagnostic in after.diagnostics
+        if diagnostic.error_code == ARTIFACT_RESULT_MANIFEST_INVALID
+    ]
+    assert "ceiling" in primary.message
+
+
+def test_rv4(production: FinalizationFixture) -> None:
+    """RV-4: ``request.json`` carrying an altered token of the same grammar is
+    ``PROTOCOL.IDENTITY_OR_SEQUENCE_VIOLATION`` -- the surviving material is
+    hashed and compared with the durable hash, never loaded into a record: the
+    altered token and the real one appear in no diagnostic and no audit row."""
+    plan = production.plant_result_prestate()
+    _cp1_state(production, plan)
+    altered = {
+        "schema_version": "1.0.0",
+        "run_id": RUN_ID,
+        "attempt_token": _ALTERED_TOKEN,
+    }
+    plan.roots.request_path.write_bytes(json.dumps(altered).encode("utf-8"))
+    production.reopen()
+    report = _ok(production.recover())
+    assert (report.quarantined, report.registered) == (2, 0)
+    _assert_recovery_failed_run(
+        production, plan, PROTOCOL_IDENTITY_OR_SEQUENCE_VIOLATION
+    )
+    after = production.durable()
+    recorded = [
+        canonical_json_bytes(item).decode("utf-8")
+        for item in (*after.diagnostics, *after.audit_events, *after.candidates)
+    ]
+    assert recorded
+    for text in recorded:
+        assert _ALTERED_TOKEN not in text
+        assert FIXTURE_TOKEN not in text
+    (primary,) = [
+        diagnostic
+        for diagnostic in after.diagnostics
+        if diagnostic.error_code == PROTOCOL_IDENTITY_OR_SEQUENCE_VIOLATION
+    ]
+    assert "identity" in primary.message
+
+
 def _hold_open_without_sharing(path: Path) -> int:
     """Open ``path`` with share mode 0 (the Stage 7 share-lock fixture)."""
     return _winapi.CreateFile(
@@ -204,6 +414,63 @@ def _cleaned_up(invocation: CommandInvocationRecord) -> CommandInvocationRecord:
     return CommandInvocationRecord.model_validate(
         {key: value for key, value in payload.items() if value is not MISSING}
     )
+
+
+def test_recovery_qualifies_staged_canonical_evidence(
+    production: FinalizationFixture,
+) -> None:
+    """The recovery clause of the canonical evidence ruling of 2026-11-09:
+    canonical core evidence a conclusion left staged -- the sanitized manifest
+    and the protocol capture of a run whose verdict already failed it -- is
+    recovered through the reconciler's own finalizer, which consults the
+    production registrar's canonical contract against the stored row and the
+    ledger, so the digest-bearing records register as canonical evidence; the
+    terminal run row is untouched and its token-bearing root is swept (RV-8)."""
+    plan = production.plant_production_result()
+    failed = production.fail_run_by_verdict()
+    manifest = _ok(
+        sanitized_result_manifest_evidence(
+            plan.sanitized,
+            RUN_OWNER,
+            store=production.roots.store,
+            unit_of_work=production.unit_of_work(),
+            clock=production.clock,
+        )
+    )
+    capture = _ok(
+        protocol_capture_evidence(
+            plan.events,
+            RUN_OWNER,
+            INVOCATION_ID,
+            store=production.roots.store,
+            unit_of_work=production.unit_of_work(),
+            clock=production.clock,
+        )
+    )
+    report = _ok(production.recover())
+    assert report.registered >= 1
+    after = production.durable()
+    assert after.run_state == "FAILED"
+    assert after.run_revision == failed.revision
+    evidence = [ref for ref in after.refs if ref.finalization_purpose is _F.EVIDENCE]
+    assert {ref.source_candidate_artifact_id for ref in evidence} == {
+        manifest.candidate_artifact_id,
+        capture.candidate_artifact_id,
+    }
+    assert {ref.artifact_kind for ref in evidence} == {
+        "sanitized-adapter-result-manifest",
+        "protocol-capture",
+    }
+    validated = [
+        dict(event.details)
+        for event in after.audit_events
+        if event.action.value == "ARTIFACT_VALIDATED"
+    ]
+    assert len(validated) == 2
+    assert all(details["canonical"] is True for details in validated)
+    assert all(details["purpose"] == "EVIDENCE" for details in validated)
+    assert not plan.roots.request_path.exists()
+    assert after.run_manifests == ()
 
 
 # --------------------------------------------------------------------------
@@ -415,7 +682,7 @@ def test_rv9_open_journal_protects_its_moved_blobs(
     fixture.advance_clock(RESULT_LEASE_SECONDS + 1)
     fixture.reopen()
     report = _ok(fixture.recover())
-    assert fixture.registrar.result_calls == 1
+    assert fixture.memory_registrar.result_calls == 1
     assert report.quarantined == 1
     after = fixture.durable()
     assert after.journal_state == "MOVED"
@@ -769,7 +1036,7 @@ def test_rv9_same_digest_orphan_is_quarantined_while_the_open_journal_blob_stays
     fixture.reopen()
     report = _ok(fixture.recover())
     assert (report.deferred, report.resumed, report.quarantined) == (1, 0, 1)
-    assert fixture.registrar.result_calls == 0
+    assert fixture.memory_registrar.result_calls == 0
     assert not misplaced.exists()
     assert canonical.read_bytes() == payload
     after = fixture.durable()
@@ -860,7 +1127,7 @@ def test_rv9_case_renamed_shard_keeps_an_open_journal_blob(
     report = _ok(fixture.recover())
     assert (report.deferred, report.resumed, report.quarantined) == (1, 0, 0)
     assert report.changes == 0
-    assert fixture.registrar.result_calls == 0
+    assert fixture.memory_registrar.result_calls == 0
     assert observed.read_bytes() == payload
     after = fixture.durable()
     assert after.journal == moved.journal
@@ -1536,7 +1803,7 @@ def test_terminal_write_fault_leaves_the_failed_check_retryable_after_reopen(
     another reopen changes nothing."""
     plan = fixture.plant_result_prestate()
     refusal = _planted_refusal()
-    fixture.validator.plant(refusal)
+    fixture.memory_validator.plant(refusal)
     before = fixture.durable()
     if fault == "run-write":
         with cursor_fault(fixture.database, monkeypatch) as armed:
@@ -1739,7 +2006,7 @@ def _assert_timed_out_before_revalidation(
     assert "FINALIZATION_ABANDONED" not in after.audit_actions
     assert after.audit_actions.count("FINALIZATION_LEASE_ACQUIRED") == 1
     assert after.audit_actions.count("ARTIFACT_QUARANTINED") == 2
-    assert fixture.registrar.result_calls == 0
+    assert fixture.memory_registrar.result_calls == 0
     # The remaining bytes: whatever the journal still reaches is quarantined
     # under the finalization's entry; nothing is left where a reader could take
     # it for finalized content.
@@ -1883,5 +2150,5 @@ def test_rv15_prepared_timeout_losing_the_run_swap_preserves_the_winner(
     ]
     assert len(fin_entry.files) == 2
     assert not plan.roots.request_path.exists()
-    assert fixture.registrar.result_calls == 0
+    assert fixture.memory_registrar.result_calls == 0
     assert after.audit_actions.count("RUN_FAILED") == 0

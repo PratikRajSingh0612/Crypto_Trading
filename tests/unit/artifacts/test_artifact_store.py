@@ -2034,8 +2034,11 @@ def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
     Task 5 (the same branch table, "Tasks 4-7 running sizes" 125, 129, 132, 135)
     moved the two census sizes 125 -> 129 with its four persistence modules; Task
     6 moved them 129 -> 132 with its port, finalizer and recovery modules and the
-    deferred names 18 -> 15 with the three port names it defines; the roots and
-    the Task 4 module slice stay pinned exactly.
+    deferred names 18 -> 15 with the three port names it defines; Task 7 moved
+    them 132 -> 135 with its run-manifest, finalization and comparison modules
+    and the deferred names 15 -> 13 by releasing ``RunManifest`` and
+    ``ComparisonEligibilityService``; the roots and the Task 4 module slice stay
+    pinned exactly.
     """
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert {
@@ -2044,13 +2047,13 @@ def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
         "artifacts/validation.py",
         "artifacts/store.py",
     } <= allowed
-    assert len(allowed) == 132
+    assert len(allowed) == 135
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "os" in roots
     assert len(roots) == 30
     deferred = _literal(_STAGE3_GUARD, "_DEFERRED_DEFINITIONS")
     assert "ContentHasher" not in deferred
-    assert len(deferred) == 15
+    assert len(deferred) == 13
     modules = _literal(_PACKAGE_LAYOUT, "PACKAGE_MODULES")
     anchor = modules.index("crypto_lab.artifacts.diagnostics") + 1
     assert tuple(modules[anchor : anchor + 4]) == (
@@ -2059,4 +2062,4 @@ def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
         "crypto_lab.artifacts.validation",
         "crypto_lab.artifacts.store",
     )
-    assert len(modules) == 132
+    assert len(modules) == 135

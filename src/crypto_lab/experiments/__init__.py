@@ -16,9 +16,15 @@ reconciliation to the run and invocation records through the same ports. Stage 7
 Task 5 (Stage 7 plan sections 3.6 and 5) adds ``Stage5InvocationLifecycle``, the
 application-layer implementation of the supervision lifecycle port over the merged
 operations, with its ``DiagnosticRecorder`` port, the transient ``RequestMaterial``
-and the pure ``semantic_outcome_request_for``. Concrete port implementations live in
-Stage 8's ``persistence`` package; Stages 5 to 7 exercise the ports through
-test-resident doubles only.
+and the pure ``semantic_outcome_request_for``. Stage 9 Task 7 (Stage 9 plan
+sections 4.4, 4.6 and Task 7) adds the core ``RunManifest`` and
+``NormalizedResultProvenance`` contracts, the ``ComparisonEligibilityService`` over
+two manifests, and the application integration of artifact finalization: the
+post-success replay wrapper, ``conclude_command`` and ``conclude_describe``, the
+candidate observation and registration, the seven core evidence producers, the
+production registrars and the result recovery validator. Concrete port
+implementations live in Stage 8's ``persistence`` package; Stages 5 to 7 exercise
+the ports through test-resident doubles only.
 """
 
 from crypto_lab.experiments.aggregation import (
@@ -26,6 +32,10 @@ from crypto_lab.experiments.aggregation import (
     VERDICT_OF_TERMINAL_STATE,
     aggregate_experiment,
     build_aggregation_input,
+)
+from crypto_lab.experiments.comparison import (
+    ComparisonEligibilityService,
+    comparison_input_for,
 )
 from crypto_lab.experiments.diagnostics import (
     CONCURRENCY_CONFLICT,
@@ -49,6 +59,34 @@ from crypto_lab.experiments.experiment_service import (
     replace_experiment_spec,
     run_operation,
     transition_experiment,
+)
+from crypto_lab.experiments.finalization import (
+    AuditFactRecorder,
+    CommandConclusion,
+    ConclusionConfig,
+    ConclusionTransaction,
+    ConclusionUnitOfWork,
+    EvidenceRegistrar,
+    OwnerRegistry,
+    ResultRecoveryValidator,
+    ResultRegistrar,
+    conclude_command,
+    conclude_describe,
+    declared_candidate_paths,
+    descriptor_evidence,
+    diagnostic_report_evidence,
+    evidence_request_for,
+    fail_run_for_refusal,
+    finalize_evidence,
+    input_snapshot_evidence,
+    observe_candidates,
+    protocol_capture_evidence,
+    register_result_candidates,
+    sanitized_result_manifest_evidence,
+    semantic_outcome_or_replay,
+    stage_core_evidence,
+    stderr_evidence,
+    validation_result_evidence,
 )
 from crypto_lab.experiments.invocation_service import (
     COUPLED_TERMINAL_TARGETS,
@@ -99,6 +137,11 @@ from crypto_lab.experiments.retry import (
     resolve_causal_closure,
     successor_is_due,
 )
+from crypto_lab.experiments.run_manifest import (
+    NormalizedResultProvenance,
+    RunManifest,
+    run_manifest_hash,
+)
 from crypto_lab.experiments.run_service import (
     TRANSITION_RUN_OWNED_TARGETS,
     AttemptCreation,
@@ -140,12 +183,19 @@ __all__ = (
     "VERDICT_OF_TERMINAL_STATE",
     "AttemptCreation",
     "AttemptCreationRequest",
+    "AuditFactRecorder",
     "CancelExperimentRequest",
+    "CommandConclusion",
+    "ComparisonEligibilityService",
+    "ConclusionConfig",
+    "ConclusionTransaction",
+    "ConclusionUnitOfWork",
     "CoupledTransitionRequest",
     "DiagnosticPosture",
     "DiagnosticReader",
     "DiagnosticRecorder",
     "EngineRunRepository",
+    "EvidenceRegistrar",
     "ExperimentAggregationRequest",
     "ExperimentCreationRequest",
     "ExperimentQueueRequest",
@@ -159,10 +209,15 @@ __all__ = (
     "LinkedPair",
     "LinkedStartRequest",
     "LostSwap",
+    "NormalizedResultProvenance",
+    "OwnerRegistry",
     "RequestMaterial",
+    "ResultRecoveryValidator",
+    "ResultRegistrar",
     "RetryDecisionInsertOutcome",
     "RetryDecisionRepository",
     "RetryEvaluationRequest",
+    "RunManifest",
     "RunTransitionRequest",
     "RuntimeAvailabilityObservationReader",
     "SemanticOutcome",
@@ -176,25 +231,44 @@ __all__ = (
     "build_aggregation_input",
     "build_retry_evaluation_snapshot",
     "cancel_experiment",
+    "comparison_input_for",
+    "conclude_command",
+    "conclude_describe",
     "create_attempt",
     "create_experiment",
     "create_invocation",
     "create_successor",
+    "declared_candidate_paths",
+    "descriptor_evidence",
+    "diagnostic_report_evidence",
     "enrich_invocation",
     "evaluate_retry",
+    "evidence_request_for",
+    "fail_run_for_refusal",
+    "finalize_evidence",
+    "input_snapshot_evidence",
+    "observe_candidates",
+    "protocol_capture_evidence",
     "queue_experiment",
+    "register_result_candidates",
     "replace_experiment_spec",
     "resolve_causal_closure",
+    "run_manifest_hash",
     "run_operation",
     "run_replacement",
     "run_rule_failure",
+    "sanitized_result_manifest_evidence",
+    "semantic_outcome_or_replay",
     "semantic_outcome_request_for",
     "stage5_diagnostic",
     "stage5_failure",
+    "stage_core_evidence",
     "start_linked_run",
+    "stderr_evidence",
     "successor_is_due",
     "transition_experiment",
     "transition_invocation",
     "transition_invocation_and_run",
     "transition_run",
+    "validation_result_evidence",
 )

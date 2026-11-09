@@ -46,7 +46,7 @@ from typing import IO, Final, Self
 
 import pytest
 
-from crypto_lab.artifacts.finalizer import EVIDENCE_LEASE_SECONDS
+from crypto_lab.artifacts.finalizer import EVIDENCE_LEASE_SECONDS, RESULT_LEASE_SECONDS
 from crypto_lab.domain.results import Result, Success
 from crypto_lab.process_supervision import windows_api
 from crypto_lab.process_supervision.models import (
@@ -55,7 +55,7 @@ from crypto_lab.process_supervision.models import (
     render_creation_identity,
 )
 from doubles.artifacts import sample_evidence_request
-from doubles.experiments import INSTANT, FixedClock
+from doubles.experiments import INSTANT, INVOCATION_ID, RUN_ID, FixedClock
 from persistence_support.artifacts import FinalizationFixture
 
 _TWO_FILES = {
@@ -64,9 +64,10 @@ _TWO_FILES = {
 }
 _TESTS_ROOT: Final = Path(__file__).resolve().parents[2]
 #: The child's one-line program: insert the tests root, open the planted fixture
-#: on the path argument, rebuild the EVIDENCE request from the committed rows and
-#: finalize with a probe that reports ``HELD <pid>`` and blocks at the named point.
-#: No ``def`` and no ``class`` statement: a compound statement would end the line.
+#: on the path argument (the production composition for a ``RESULT`` purpose),
+#: rebuild the EVIDENCE or RESULT request from the committed rows and finalize
+#: with a probe that reports ``HELD <pid>`` and blocks at the named point. No
+#: ``def`` and no ``class`` statement: a compound statement would end the line.
 _CHILD_PROGRAM: Final = (
     "import os, sys, threading; "
     "sys.path.insert(0, sys.argv[3]); "
@@ -82,10 +83,11 @@ _CHILD_PROGRAM: Final = (
     "'after_registered', 'after_close']; "
     "Probe = type('Probe', (), {name: (hold if name == sys.argv[2] else noop) "
     "for name in names}); "
+    "result = sys.argv[4] == 'RESULT'; "
     "fixture = FinalizationFixture.open(Path(sys.argv[1]), "
-    "clock=FixedClock(INSTANT), reuse=True); "
-    "request = fixture.evidence_request_for(RUN_OWNER, "
-    "correlation=INVOCATION_CORRELATION); "
+    "clock=FixedClock(INSTANT), reuse=True, production=result); "
+    "request = fixture.result_request_for(RUN_OWNER) if result else "
+    "fixture.evidence_request_for(RUN_OWNER, correlation=INVOCATION_CORRELATION); "
     "fixture.finalize(request, probe=Probe()); "
     "fixture.close()"
 )
@@ -100,7 +102,9 @@ def _ok[T](result: Result[T]) -> T:
     return result.value
 
 
-def _launch_child(tmp_path: Path, point: str) -> subprocess.Popen[bytes]:
+def _launch_child(
+    tmp_path: Path, point: str, purpose: str = "EVIDENCE"
+) -> subprocess.Popen[bytes]:
     """The committed launch shape: ``sys.executable -I -B -c``, list argv, no shell."""
     return subprocess.Popen(  # noqa: S603 - reviewed list argv, no shell
         [
@@ -112,6 +116,7 @@ def _launch_child(tmp_path: Path, point: str) -> subprocess.Popen[bytes]:
             str(tmp_path),
             point,
             str(_TESTS_ROOT),
+            purpose,
         ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
@@ -126,9 +131,10 @@ class ProcessHolder:
     its retained handle, await it, reap the launcher and prove no descendant
     survives (the Stage 8 interrupted-writer discipline)."""
 
-    def __init__(self, tmp_path: Path, point: str) -> None:
+    def __init__(self, tmp_path: Path, point: str, purpose: str = "EVIDENCE") -> None:
         self._tmp_path = tmp_path
         self._point = point
+        self._purpose = purpose
         self._launched: subprocess.Popen[bytes] | None = None
         self._launcher_handle: int | None = None
         self._launcher_creation: int | None = None
@@ -144,7 +150,7 @@ class ProcessHolder:
 
     def __enter__(self) -> Self:
         try:
-            self._launched = _launch_child(self._tmp_path, self._point)
+            self._launched = _launch_child(self._tmp_path, self._point, self._purpose)
             self.trace.append("launched")
             pid = self._read_readiness()
             self._verify_ownership(pid)
@@ -370,8 +376,24 @@ def planted(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _reopen(tmp_path: Path) -> FinalizationFixture:
-    return FinalizationFixture.open(tmp_path, clock=FixedClock(INSTANT), reuse=True)
+def _reopen(tmp_path: Path, *, production: bool = False) -> FinalizationFixture:
+    return FinalizationFixture.open(
+        tmp_path, clock=FixedClock(INSTANT), reuse=True, production=production
+    )
+
+
+@pytest.fixture
+def planted_result(tmp_path: Path) -> Path:
+    """Task 7: the production RESULT pre-state planted and closed, so the child
+    owns the connection."""
+    fixture = FinalizationFixture.open(
+        tmp_path, clock=FixedClock(INSTANT), production=True
+    )
+    try:
+        fixture.plant_result_prestate()
+    finally:
+        fixture.close()
+    return tmp_path
 
 
 def test_child_killed_after_moved_recovers_evidence_to_registered(
@@ -429,5 +451,66 @@ def test_child_killed_inside_registered_leaves_moved(planted: Path) -> None:
             [candidate.candidate_artifact_id for candidate in after.candidates]
         )
         assert request.finalization_purpose == "EVIDENCE"
+    finally:
+        reopened.close()
+
+
+def test_child_killed_after_moved_recovers_result_to_registered(
+    planted_result: Path,
+) -> None:
+    """Task 7, CP-5 with a real child over the production composition: the child
+    rebuilt the RESULT request from the planted state through the production
+    validator and was killed between T2 and T3; the parent recovers the ``MOVED``
+    journal to ``REGISTERED`` success -- references, run manifest, member links
+    and the run ``SUCCEEDED`` -- once the dead child's lease has expired."""
+    with ProcessHolder(planted_result, "after_moved", "RESULT") as held:
+        assert held.holder_pid is not None
+    assert held.exit_code == _FORCED_EXIT_CODE
+    assert held.launcher_exit is not None
+    assert held.trace[-3:] == ["launcher-reaped", "no-descendant-survives", "closed"]
+    reopened = _reopen(planted_result, production=True)
+    try:
+        before = reopened.durable()
+        assert before.journal_state == "MOVED"
+        assert before.refs == ()
+        assert before.run_manifests == ()
+        assert len(before.object_blobs) == 2
+        assert before.run_state == "RUNNING"
+        assert before.run_revision == 5  # the deadline snapshot of T1
+        assert before.audit_actions[-1] == "FINALIZATION_MOVED"
+        # The dead child's lease is unexpired at the restart: deferred, untouched.
+        assert _ok(reopened.recover()).deferred == 1
+        assert reopened.durable().journal == before.journal
+        reopened.advance_clock(RESULT_LEASE_SECONDS + 1)
+        report = _ok(reopened.recover())
+        assert (report.resumed, report.registered, report.abandoned) == (1, 1, 0)
+        after = reopened.durable()
+        assert after.journal_state == "REGISTERED"
+        assert len(after.refs) == 2
+        assert after.run_state == "SUCCEEDED"
+        assert after.run_revision == 6
+        (manifest,) = after.run_manifests
+        assert manifest.run_id == RUN_ID
+        members = [
+            link
+            for link in after.run_artifacts
+            if link.link_role == "RESULT_MANIFEST_MEMBER"
+        ]
+        assert len(members) == 2
+        # The deferred pass left its summary row; the resuming pass took the
+        # lease over, registered through the production registrar and closed.
+        assert after.audit_actions[-6:] == (
+            "FINALIZATION_LEASE_ACQUIRED",
+            "RUN_MANIFEST_REGISTERED",
+            "RUN_SUCCEEDED",
+            "FINALIZATION_REGISTERED",
+            "RETENTION_DELETED",
+            "RECONCILIATION_FINALIZATION_RESUMED",
+        )
+        request_path = reopened.roots.runtime_root / INVOCATION_ID / "request.json"
+        assert not request_path.exists()
+        report_after = reopened.database.consistency_report()
+        assert report_after.dangling_diagnostic_references == 0
+        assert report_after.success_without_manifest == 0
     finally:
         reopened.close()

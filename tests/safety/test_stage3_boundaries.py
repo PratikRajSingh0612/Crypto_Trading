@@ -98,12 +98,15 @@ _ALLOWED_SOURCE_FILES = {
     "domain/versioning.py",
     "experiments/__init__.py",
     "experiments/aggregation.py",
+    "experiments/comparison.py",
     "experiments/diagnostics.py",
     "experiments/experiment_service.py",
+    "experiments/finalization.py",
     "experiments/invocation_service.py",
     "experiments/ports.py",
     "experiments/requests.py",
     "experiments/retry.py",
+    "experiments/run_manifest.py",
     "experiments/run_service.py",
     "experiments/semantic_outcome.py",
     "experiments/supervision_lifecycle.py",
@@ -204,7 +207,6 @@ _PROHIBITED_CONTROL_LITERAL = "PYDANTIC_DISABLE_PLUGINS"
 _DEFERRED_DEFINITIONS = {
     "CanonicalFill",
     "CanonicalOrder",
-    "ComparisonEligibilityService",
     "EquityPoint",
     "Fee",
     "OrderSide",
@@ -213,7 +215,6 @@ _DEFERRED_DEFINITIONS = {
     "PositionSnapshot",
     "PositionEffect",
     "Result",
-    "RunManifest",
     "ingest_dataset",
     "normalize_dataset",
     "place_order",
@@ -742,13 +743,15 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
     released `ArtifactFinalizer`, `ArtifactRepository` and
     `CandidateArtifactRepository` (`artifacts/ports.py`), giving 15, and swapped
     its two released members of the mutation list for still-deferred names so
-    seven live cases remain (the excluded branch never shrinks the list).
+    seven live cases remain (the excluded branch never shrinks the list); Task 7
+    released `RunManifest` (`experiments/run_manifest.py`) and
+    `ComparisonEligibilityService` (`experiments/comparison.py`), giving 13, and
+    swapped its two released members of the mutation list the same way.
     """
-    assert len(_DEFERRED_DEFINITIONS) == 15
+    assert len(_DEFERRED_DEFINITIONS) == 13
     assert _DEFERRED_DEFINITIONS == {
         "CanonicalFill",
         "CanonicalOrder",
-        "ComparisonEligibilityService",
         "EquityPoint",
         "Fee",
         "OrderSide",
@@ -757,7 +760,6 @@ def test_the_deferred_definition_set_is_exactly_the_reviewed_sixty_five() -> Non
         "PositionSnapshot",
         "PositionEffect",
         "Result",
-        "RunManifest",
         "ingest_dataset",
         "normalize_dataset",
         "place_order",
@@ -790,13 +792,17 @@ def test_each_normative_deferred_symbol_is_detected_by_the_stage3_guard(
         # `AdapterResultManifest`) and swapped in `MetricValue` and `AuditEvent`;
         # Task 2 released those two and swapped in still-deferred names so seven
         # live cases remain; Task 6 released `ArtifactRepository` and swapped in
-        # a still-deferred name (the excluded branch keeps seven live cases).
-        "ComparisonEligibilityService",
+        # a still-deferred name (the excluded branch keeps seven live cases);
+        # Task 7 released `ComparisonEligibilityService` and swapped in `Result`,
+        # the type-alias name reading 22 keeps deferred as a class definition.
+        "Result",
         "CanonicalFill",
         "CanonicalOrder",
         # Stage 6 plan section 2.6: Task 2 released `EngineRunRequest` and
-        # swapped in a still-deferred name so seven live cases remain.
-        "RunManifest",
+        # swapped in a still-deferred name so seven live cases remain; Stage 9
+        # Task 7 released `RunManifest` and swapped in a still-deferred function
+        # name (the `def` plant shape) so seven live cases remain.
+        "normalize_dataset",
         "PortfolioSnapshot",
         # Stage 9 plan section 2.6: Task 1 released `ArtifactRef` (the name Stage 6
         # Task 4 had swapped in for `RunEvent`) and swapped in `ContentHasher`;
@@ -834,8 +840,9 @@ def test_representative_later_stage_type_mutations_are_blocked(name: str) -> Non
 #: "Deferred-definition guard"); this positive replaces them. Of the four names
 #: of that literal Task 1 did not release, Task 6 released ``ArtifactFinalizer``,
 #: ``ArtifactRepository`` and ``CandidateArtifactRepository`` (``artifacts/ports.py``,
-#: its own positive below) and ``RunManifest`` stays in ``_DEFERRED_DEFINITIONS``
-#: and undefined under ``src`` until Task 7.
+#: its own positive below) and Task 7 released ``RunManifest``
+#: (``experiments/run_manifest.py``, its own positive below), so no name of that
+#: literal stays deferred and ``_STAGE9_STILL_DEFERRED_FINALIZATION_NAMES`` is empty.
 _STAGE9_TASK1_RELEASED_DEFINITIONS = {
     "ArtifactFinalizationPurpose": "artifacts/models.py",
     "ArtifactOwnerKind": "artifacts/models.py",
@@ -849,7 +856,7 @@ _STAGE9_TASK1_RELEASED_DEFINITIONS = {
     "EvidenceFinalizationRequest": "artifacts/requests.py",
     "ResultFinalizationRequest": "artifacts/requests.py",
 }
-_STAGE9_STILL_DEFERRED_FINALIZATION_NAMES = ("RunManifest",)
+_STAGE9_STILL_DEFERRED_FINALIZATION_NAMES: tuple[str, ...] = ()
 
 
 def test_each_stage_nine_task_one_name_is_defined_exactly_once_in_its_module(
@@ -1005,6 +1012,53 @@ def test_each_stage_nine_task_six_name_is_defined_exactly_once_in_its_module(
     }
 
 
+#: Stage 9 plan section 2.6 (released-names table), Task 7: the core run manifest
+#: and the comparison service, each in exactly its module; the finalization
+#: module Task 7 adds defines none of the deferred names.
+_STAGE9_TASK7_RELEASED_DEFINITIONS = {
+    "RunManifest": "experiments/run_manifest.py",
+    "ComparisonEligibilityService": "experiments/comparison.py",
+}
+_STAGE9_TASK7_SOURCE_FILES = (
+    "experiments/run_manifest.py",
+    "experiments/finalization.py",
+    "experiments/comparison.py",
+)
+
+
+def test_each_stage_nine_task_seven_name_is_defined_exactly_once_in_its_module(
+    repository_root: Path,
+) -> None:
+    """Task 7's positive, the same shape as the earlier tasks' (plan 2.6)."""
+    assert len(_STAGE9_TASK7_RELEASED_DEFINITIONS) == 2
+    assert set(_STAGE9_TASK7_RELEASED_DEFINITIONS).isdisjoint(_DEFERRED_DEFINITIONS)
+    for earlier in (
+        _STAGE9_TASK1_RELEASED_DEFINITIONS,
+        _STAGE9_TASK2_RELEASED_DEFINITIONS,
+        _STAGE9_TASK4_RELEASED_DEFINITIONS,
+        _STAGE9_TASK6_RELEASED_DEFINITIONS,
+    ):
+        assert set(_STAGE9_TASK7_RELEASED_DEFINITIONS).isdisjoint(earlier)
+    assert _STAGE9_STILL_DEFERRED_FINALIZATION_NAMES == ()
+    assert set(_STAGE9_TASK7_SOURCE_FILES) <= _ALLOWED_SOURCE_FILES
+    source_root = repository_root / "src/crypto_lab"
+    definers: dict[str, list[str]] = {
+        name: [] for name in _STAGE9_TASK7_RELEASED_DEFINITIONS
+    }
+    for path in _source_files(repository_root):
+        relative = path.relative_to(source_root).as_posix()
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef)
+                and node.name in definers
+            ):
+                definers[node.name].append(relative)
+    assert definers == {
+        name: [module] for name, module in _STAGE9_TASK7_RELEASED_DEFINITIONS.items()
+    }
+
+
 def test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctly() -> (
     None
 ):
@@ -1013,9 +1067,10 @@ def test_schema_registry_is_closed_and_protocol_descriptors_are_located_correctl
     )
     identifiers = tuple(definition.schema_id for definition in SCHEMA_DEFINITIONS)
     # Stage 6 plan section 2.6: Task 9 appended the eight protocol entries; Stage 9
-    # plan section 2.6: Task 1 appended the eight artifact entries (35 -> 43) and
-    # Task 2 the two audit entries and the metric entry (43 -> 46).
-    assert len(paths) == 46
+    # plan section 2.6: Task 1 appended the eight artifact entries (35 -> 43),
+    # Task 2 the two audit entries and the metric entry (43 -> 46) and Task 7 the
+    # run manifest and the normalized result provenance (46 -> 48).
+    assert len(paths) == 48
     assert len(paths) == len(set(paths))
     assert len(identifiers) == len(set(identifiers))
     assert "protocol/engine-descriptor-v1.schema.json" in paths

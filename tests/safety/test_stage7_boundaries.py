@@ -673,7 +673,8 @@ def test_process_supervision_and_experiments_keep_the_dependency_direction(
         )
         scanned += 1
     assert violations == []
-    assert scanned == 12 + 11
+    # Stage 9 plan section 2.6 (Task 7): the three application-integration modules.
+    assert scanned == 12 + 14
 
 
 def test_the_word_sandbox_appears_only_in_the_package_docstring_negative_sentence(

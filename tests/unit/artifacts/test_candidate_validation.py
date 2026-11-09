@@ -31,6 +31,7 @@ from crypto_lab.artifacts.diagnostics import (
     ARTIFACT_MOVE_FAILED,
     ARTIFACT_VALIDATION_FAILED,
     SECURITY_SENSITIVE_MATERIAL_LEAKAGE,
+    artifact_failure,
 )
 from crypto_lab.artifacts.hashing import HashScan, StreamingContentHasher
 from crypto_lab.artifacts.models import (
@@ -52,6 +53,7 @@ from crypto_lab.artifacts.paths import (
     confine_candidate_path,
     recheck_confined_path,
 )
+from crypto_lab.artifacts.ports import CanonicalQualification
 from crypto_lab.artifacts.validation import (
     ADMITTED_MEDIA_TYPES,
     DEFAULT_CEILINGS,
@@ -73,7 +75,8 @@ from crypto_lab.domain.hashing import (
     candidate_artifact_id_for,
     core_candidate_artifact_id_for,
 )
-from crypto_lab.domain.results import Failure, Success
+from crypto_lab.domain.results import Failure, Result, Success
+from crypto_lab.persistence.diagnostics import WRITE_FAILED, persistence_failure
 from doubles.experiments import (
     ATTEMPT_TOKEN,
     EXPERIMENT_ID,
@@ -81,6 +84,7 @@ from doubles.experiments import (
     INVOCATION_ID,
     OTHER_RUN_ID,
     RUN_ID,
+    FixedClock,
 )
 
 NOW = datetime(2026, 8, 10, 1, 2, 3, tzinfo=UTC)
@@ -88,6 +92,7 @@ NATIVE_PATH = "results/native.bin"
 NATIVE_MEDIA = "application/octet-stream"
 JSON_PATH = "results/normalized.json"
 JSON_MEDIA = "application/json"
+NDJSON_MEDIA = "application/x-ndjson"
 TEXT_MEDIA = "text/plain"
 STDERR_RELATIVE = "stderr.txt"
 RUN_OWNER = RunArtifactOwner(
@@ -371,6 +376,9 @@ def test_adapter_output_cannot_request_paths_or_imports(tmp_path: Path) -> None:
         "finalized_relative_path",
         "identity",
         "observations",
+        # The ruling of 2026-11-09: two booleans, never a token or a document.
+        "exact_token_scanned",
+        "canonical",
     }
     assert ("SCHEMA", "PASSED") in stages(validate(candidate, confined))
     assert not (tmp_path / "escape.bin").exists()
@@ -554,8 +562,10 @@ def test_the_token_contract_is_checked_before_any_io(
     monkeypatch.setattr(Path, "open", refuse_open)
     with pytest.raises(ValueError, match="RESULT candidate requires the attempt token"):
         validate(adapter, confined, token=MISSING)
-    with pytest.raises(ValueError, match="EVIDENCE candidate takes no attempt token"):
-        validate(evidence, evidence_confined, token=TOKEN)
+    # The ruling of 2026-11-09: an EVIDENCE candidate admits its own run's
+    # material; another run's is refused before any open, as for RESULT.
+    with pytest.raises(ValueError, match="token belongs to another run"):
+        validate(evidence, evidence_confined, token=FOREIGN_TOKEN)
     with pytest.raises(ValueError, match="token belongs to another run"):
         validate(adapter, confined, token=FOREIGN_TOKEN)
     with pytest.raises(ValueError, match="confined path is not the candidate"):
@@ -1133,3 +1143,390 @@ def test_ceilings_are_validated_values() -> None:
         ValidationCeilings(max_bytes=4.0, max_parse_bytes=2)  # type: ignore[arg-type]
     with pytest.raises(dataclasses.FrozenInstanceError):
         DEFAULT_CEILINGS.max_bytes = 1  # type: ignore[misc]
+
+
+# --- The canonical evidence ruling of 2026-11-09 --------------------------------------
+#
+# Plan 4.6 producers write canonical JSON and JSON Lines whose identifiers and
+# digests are 32+ character url-safe runs, so the Task 4 whole-content token-shape
+# scan refused every one of them. The ruling (docs/decisions/2026-11-09-stage9-
+# canonical-evidence-validation-clarification.md) lets a producer-side qualifier
+# establish the canonical contract; the validation then holds only the qualified
+# records' uncontrolled strings to the shape rule, keeps the whole-content scan
+# for everything unqualified, and scans every candidate of either purpose for the
+# exact raw token whenever its material is available.
+
+
+class _StubQualifier:
+    """A ``CanonicalEvidenceQualifier`` double answering one fixed verdict and
+    recording every call (the candidate identity and the records handed over)."""
+
+    def __init__(self, answer: Result[Any]) -> None:
+        self.answer = answer
+        self.calls: list[tuple[str, tuple[bytes, ...]]] = []
+
+    def qualify_evidence(
+        self, candidate: CandidateArtifact, records: tuple[bytes, ...]
+    ) -> Result[Any]:
+        self.calls.append((candidate.candidate_artifact_id, records))
+        return self.answer
+
+
+def _qualified(*uncontrolled: str, records: int = 1) -> Success[Any]:
+    return Success[Any](
+        outcome="SUCCESS",
+        value=CanonicalQualification(
+            records=records, uncontrolled_strings=tuple(uncontrolled)
+        ),
+    )
+
+
+def _not_canonical() -> Success[Any]:
+    nothing: Any = MISSING
+    return Success[Any](outcome="SUCCESS", value=nothing)
+
+
+def _escaped(text: str) -> str:
+    """Every character as a JSON ``\\uXXXX`` escape: the decoded string is
+    ``text`` while the bytes carry no run of its characters."""
+    return "".join(f"\\u{ord(char):04x}" for char in text)
+
+
+def _digest_document(**fields: str) -> bytes:
+    payload: dict[str, str] = {"content_hash": DIGEST_SHAPED, **fields}
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def test_evidence_scans_the_exact_token_whenever_material_is_supplied(
+    tmp_path: Path,
+) -> None:
+    """The ruling: available material is passed through the one scanner for
+    either purpose, binary evidence included, and the refusal names the raw
+    token, not a shape; the boundary carry still finds a token split across
+    chunks; a candidate scanned without material is never reported as exactly
+    scanned."""
+    root = tmp_path / "evidence"
+    leaking = b"engine stderr " + ATTEMPT_TOKEN.encode("utf-8") + b"\n"
+    text = core_candidate()
+    refused = validate(text, stage_candidate(root, text, leaking), token=TOKEN)
+    message = failed_with(refused, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE)
+    assert "raw attempt token" in message
+    assert ATTEMPT_TOKEN not in message
+    binary = core_candidate(relative_path="capture.bin", kind="protocol.capture")
+    staged = stage_candidate(
+        root, binary, b"\x00\x01" + ATTEMPT_TOKEN.encode("utf-8") + b"\xff\xfe"
+    )
+    refused = validate(binary, staged, token=TOKEN, media_type=NATIVE_MEDIA)
+    message = failed_with(refused, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE)
+    assert "raw attempt token" in message
+    # A digest in binary evidence is still not a token: the shape rule does not
+    # run over binary content and the exact scan finds nothing.
+    digest_binary = stage_candidate(root, binary, DIGEST_SHAPED.encode("ascii"))
+    scanned = succeeded(
+        validate(binary, digest_binary, token=TOKEN, media_type=NATIVE_MEDIA)
+    )
+    assert scanned.exact_token_scanned is True
+    straddling = validate(
+        text,
+        stage_candidate(root, text, leaking),
+        token=TOKEN,
+        hasher=StreamingContentHasher(chunk_size=7),
+    )
+    assert "raw attempt token" in failed_with(
+        straddling, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE
+    )
+    clean = b"plain stderr text\n"
+    with_material = succeeded(
+        validate(text, stage_candidate(root, text, clean), token=TOKEN)
+    )
+    assert with_material.exact_token_scanned is True
+    assert with_material.canonical is False
+    without_material = succeeded(validate(text, stage_candidate(root, text, clean)))
+    assert without_material.exact_token_scanned is False
+    assert without_material.canonical is False
+
+
+def test_evidence_material_is_admitted_only_for_the_owner_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another run's material, or any material for an owner without a run, is a
+    caller defect refused before any open."""
+    data = b"plain\n"
+    evidence = core_candidate()
+    confined = stage_candidate(tmp_path / "run", evidence, data)
+    system = core_candidate(owner=SYSTEM_OWNER)
+    system_confined = stage_candidate(tmp_path / "system", system, data)
+
+    def refuse_open(*args: object, **kwargs: object) -> None:
+        raise AssertionError("a contract refusal opened a file")
+
+    monkeypatch.setattr(Path, "open", refuse_open)
+    with pytest.raises(ValueError, match="token belongs to another run"):
+        validate(evidence, confined, token=FOREIGN_TOKEN)
+    with pytest.raises(ValueError, match="takes no attempt token"):
+        validate(system, system_confined, token=TOKEN)
+
+
+def test_an_escaped_token_in_a_decoded_document_is_found(tmp_path: Path) -> None:
+    """The ruling: alternate JSON escaping must not hide a known token. A
+    document already decoded for its schema check is inspected string by
+    string -- keys included -- against the material, for either purpose."""
+    escaped = ('{"note": "' + _escaped(ATTEMPT_TOKEN) + '"}').encode("ascii")
+    assert ATTEMPT_TOKEN.encode("utf-8") not in escaped
+    assert json.loads(escaped)["note"] == ATTEMPT_TOKEN
+    result_json = adapter_candidate(escaped, relative_path=JSON_PATH, media=JSON_MEDIA)
+    refused = validate(result_json, stage_candidate(tmp_path, result_json, escaped))
+    message = failed_with(refused, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE)
+    assert "raw attempt token" in message
+    assert ATTEMPT_TOKEN not in message
+    root = tmp_path / "evidence"
+    evidence = core_candidate(
+        relative_path="descriptor.json", kind="adapter.descriptor"
+    )
+    staged = stage_candidate(root, evidence, escaped)
+    refused = validate(evidence, staged, token=TOKEN, media_type=JSON_MEDIA)
+    assert "raw attempt token" in failed_with(
+        refused, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE
+    )
+    deep = _escaped("x" + ATTEMPT_TOKEN)
+    keyed = f'{{"{_escaped(ATTEMPT_TOKEN)}": [{{"deep": "{deep}"}}]}}'.encode("ascii")
+    refused = validate(
+        evidence,
+        stage_candidate(root, evidence, keyed),
+        token=TOKEN,
+        media_type=JSON_MEDIA,
+    )
+    assert "raw attempt token" in failed_with(
+        refused, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE
+    )
+    # Without material the escapes are no token-shaped run either: only the
+    # material makes the decoded match possible, which is why the ruling has it
+    # passed through whenever it is available.
+    succeeded(
+        validate(
+            evidence, stage_candidate(root, evidence, escaped), media_type=JSON_MEDIA
+        )
+    )
+
+
+def test_qualified_records_skip_the_whole_content_scan_but_not_their_fields(
+    tmp_path: Path,
+) -> None:
+    """A qualified document's digest is legitimate canonical metadata; the same
+    digest reported by the qualifier as an uncontrolled string is token-shaped
+    material; without a contract the whole-content protection stands; a RESULT
+    candidate never reaches the qualifier; and the exact raw token inside a
+    qualified record is still refused."""
+    document = _digest_document(message="plain words")
+    root = tmp_path / "evidence"
+    evidence = core_candidate(
+        relative_path="sanitized-manifest.json", kind="sanitized.manifest"
+    )
+    staged = stage_candidate(root, evidence, document)
+    qualifier = _StubQualifier(_qualified("plain words"))
+    validated = succeeded(
+        validate(evidence, staged, media_type=JSON_MEDIA, canonical=qualifier)
+    )
+    assert validated.canonical is True
+    assert validated.exact_token_scanned is False
+    assert qualifier.calls == [(evidence.candidate_artifact_id, (document,))]
+    again = validate(evidence, staged, media_type=JSON_MEDIA, canonical=qualifier)
+    assert stages(again) == (
+        ("PATH", "PASSED"),
+        ("SIZE", "PASSED"),
+        ("MEDIA", "PASSED"),
+        ("SCHEMA", "PASSED"),
+        ("REDACTION", "PASSED"),
+        ("HASH", "PASSED"),
+    )
+    reported = _StubQualifier(_qualified("plain words", DIGEST_SHAPED))
+    refused = validate(evidence, staged, media_type=JSON_MEDIA, canonical=reported)
+    message = failed_with(refused, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE)
+    assert "uncontrolled" in message
+    assert DIGEST_SHAPED not in message
+    keyed = _StubQualifier(_qualified("Q" * 32))
+    refused = validate(evidence, staged, media_type=JSON_MEDIA, canonical=keyed)
+    assert "uncontrolled" in failed_with(
+        refused, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE
+    )
+    absent = _StubQualifier(_not_canonical())
+    refused = validate(evidence, staged, media_type=JSON_MEDIA, canonical=absent)
+    assert "token-shaped" in failed_with(
+        refused, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE
+    )
+    result_json = adapter_candidate(document, relative_path=JSON_PATH, media=JSON_MEDIA)
+    untouched = _StubQualifier(_qualified())
+    succeeded(
+        validate(
+            result_json,
+            stage_candidate(tmp_path, result_json, document),
+            canonical=untouched,
+        )
+    )
+    assert untouched.calls == []
+    leaking = _digest_document(note=ATTEMPT_TOKEN)
+    refused = validate(
+        evidence,
+        stage_candidate(root, evidence, leaking),
+        token=TOKEN,
+        media_type=JSON_MEDIA,
+        canonical=_StubQualifier(_qualified("free note")),
+    )
+    message = failed_with(refused, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE)
+    assert "raw attempt token" in message
+    assert ATTEMPT_TOKEN not in message
+
+
+def test_a_qualifier_refusal_is_recorded_at_schema_with_its_posture(
+    tmp_path: Path,
+) -> None:
+    """Content that is the model but disagrees with the authoritative facts is
+    ``ARTIFACT.VALIDATION_FAILED`` at ``SCHEMA`` (a quarantine, never CORRUPT);
+    facts that could not be read are the storage posture at the same stage."""
+    document = _digest_document()
+    evidence = core_candidate(
+        relative_path="sanitized-manifest.json", kind="sanitized.manifest"
+    )
+    staged = stage_candidate(tmp_path / "evidence", evidence, document)
+    disagreeing = _StubQualifier(
+        artifact_failure(
+            ARTIFACT_VALIDATION_FAILED,
+            message="the sanitized row disagrees with the staged bytes",
+            now_utc=NOW,
+        )
+    )
+    refused = validate(evidence, staged, media_type=JSON_MEDIA, canonical=disagreeing)
+    message = failed_with(refused, "SCHEMA", ARTIFACT_VALIDATION_FAILED)
+    assert "disagrees" in message
+    assert stages(refused) == (
+        ("PATH", "PASSED"),
+        ("SIZE", "PASSED"),
+        ("MEDIA", "PASSED"),
+        ("SCHEMA", "FAILED"),
+    )
+    failure = refused.result
+    assert isinstance(failure, Failure)
+    assert failure.diagnostics[0].run_id == RUN_ID
+    unreadable = _StubQualifier(
+        persistence_failure(
+            WRITE_FAILED,
+            message="the row store is unavailable",
+            clock=FixedClock(INSTANT),
+        )
+    )
+    refused = validate(evidence, staged, media_type=JSON_MEDIA, canonical=unreadable)
+    message = failed_with(refused, "SCHEMA", ARTIFACT_MOVE_FAILED)
+    assert "could not be read" in message
+    assert "unavailable" not in message
+
+
+def test_json_lines_records_are_split_and_each_must_be_well_formed(
+    tmp_path: Path,
+) -> None:
+    """The ruling: every JSON Lines record is validated. The lines reach the
+    qualifier as separate records; a missing final newline, an empty line or a
+    line that is not one strict document is refused at ``SCHEMA`` before the
+    qualifier is asked; without a qualifier the lines are never read."""
+    first = json.dumps({"event_id": DIGEST_SHAPED, "phase": "warmup"}).encode()
+    second = json.dumps({"phase": "settle", "sequence": 2}).encode()
+    root = tmp_path / "evidence"
+    evidence = core_candidate(
+        relative_path="protocol-capture.jsonl", kind="protocol.capture"
+    )
+    qualifier = _StubQualifier(_qualified("warmup", "settle", records=2))
+    staged = stage_candidate(root, evidence, first + b"\n" + second + b"\n")
+    validated = succeeded(
+        validate(evidence, staged, media_type=NDJSON_MEDIA, canonical=qualifier)
+    )
+    assert validated.canonical is True
+    assert qualifier.calls == [(evidence.candidate_artifact_id, (first, second))]
+    passed = validate(evidence, staged, media_type=NDJSON_MEDIA, canonical=qualifier)
+    assert ("SCHEMA", "PASSED") in stages(passed)
+    for broken, reason in (
+        (first + b"\n" + second, "newline"),
+        (first + b"\n\n" + second + b"\n", "empty record"),
+        (first + b"\n{not json\n", "well-formed"),
+        (first + b'\n{"a": 1, "a": 2}\n', "well-formed"),
+        (first + b"\n" + b'"\xed\xa0\x80"\n', "well-formed"),
+        (b"", "no record"),
+    ):
+        probe = _StubQualifier(_qualified())
+        refused = validate(
+            evidence,
+            stage_candidate(root, evidence, broken),
+            media_type=NDJSON_MEDIA,
+            canonical=probe,
+        )
+        message = failed_with(refused, "SCHEMA", ARTIFACT_VALIDATION_FAILED)
+        assert reason in message, (broken, message)
+        assert probe.calls == []
+    unqualified = validate(
+        evidence,
+        stage_candidate(root, evidence, first + b"\n" + second + b"\n"),
+        media_type=NDJSON_MEDIA,
+    )
+    assert "token-shaped" in failed_with(
+        unqualified, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE
+    )
+    assert ("SCHEMA", "PASSED") not in stages(unqualified)
+
+
+def test_text_evidence_is_offered_for_qualification_only_as_a_json_document(
+    tmp_path: Path,
+) -> None:
+    """Plan 4.6's stderr producer writes free text or one structured fallback
+    record. Free text is never offered; a well-formed document is; a document
+    the qualifier does not recognise falls back to the whole-content rule; a
+    candidate above the parse ceiling is not read for qualification at all."""
+    root = tmp_path / "evidence"
+    evidence = core_candidate()
+    free = _StubQualifier(_qualified())
+    succeeded(
+        validate(
+            evidence,
+            stage_candidate(root, evidence, b"plain stderr text\n"),
+            canonical=free,
+        )
+    )
+    assert free.calls == []
+    record = json.dumps(
+        {"retained_byte_count": 12, "source_hash": DIGEST_SHAPED, "truncated": False},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    structured = _StubQualifier(_qualified())
+    validated = succeeded(
+        validate(
+            evidence, stage_candidate(root, evidence, record), canonical=structured
+        )
+    )
+    assert validated.canonical is True
+    assert structured.calls == [(evidence.candidate_artifact_id, (record,))]
+    fallback = _StubQualifier(_not_canonical())
+    refused = validate(
+        evidence, stage_candidate(root, evidence, record), canonical=fallback
+    )
+    assert "token-shaped" in failed_with(
+        refused, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE
+    )
+    assert fallback.calls == [(evidence.candidate_artifact_id, (record,))]
+    malformed = _StubQualifier(_qualified())
+    succeeded(
+        validate(
+            evidence,
+            stage_candidate(root, evidence, b'{"unterminated": \n'),
+            canonical=malformed,
+        )
+    )
+    assert malformed.calls == []
+    bounded = _StubQualifier(_qualified())
+    refused = validate(
+        evidence,
+        stage_candidate(root, evidence, record),
+        canonical=bounded,
+        ceilings=ValidationCeilings(max_bytes=MAX_CANDIDATE_BYTES, max_parse_bytes=8),
+    )
+    assert bounded.calls == []
+    assert "token-shaped" in failed_with(
+        refused, "REDACTION", SECURITY_SENSITIVE_MATERIAL_LEAKAGE
+    )

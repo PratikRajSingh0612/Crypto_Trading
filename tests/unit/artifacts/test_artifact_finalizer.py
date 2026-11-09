@@ -29,6 +29,7 @@ from crypto_lab.artifacts.diagnostics import (
     ARTIFACT_PATH_BOUNDARY_VIOLATION,
     ARTIFACT_VALIDATION_FAILED,
     SECURITY_SENSITIVE_MATERIAL_LEAKAGE,
+    artifact_failure,
 )
 from crypto_lab.artifacts.finalizer import (
     EVIDENCE_LEASE_SECONDS,
@@ -53,7 +54,11 @@ from crypto_lab.artifacts.models import (
 )
 from crypto_lab.artifacts.ownership import ArtifactOwnerRef
 from crypto_lab.artifacts.paths import ConfinedPath
-from crypto_lab.artifacts.ports import CommandRootPaths, NoProbe
+from crypto_lab.artifacts.ports import (
+    CanonicalQualification,
+    CommandRootPaths,
+    NoProbe,
+)
 from crypto_lab.artifacts.requests import EvidenceCorrelation
 from crypto_lab.artifacts.store import MoveOutcome
 from crypto_lab.domain.canonical_json import canonical_json_bytes
@@ -2317,10 +2322,16 @@ def test_lease_refused_when_the_invocation_is_not_the_active_run_command(
     )
 
 
+#: The row reads of the T1 lease check, counted from the start of ``finalize``:
+#: the phase-1 association read of the ruling of 2026-11-09 (the run row, before
+#: any swap; a RESULT reads no invocation there) precedes the memory lease
+#: repository's own run read and the check's run read, so the check's run read is
+#: the third ``engine_runs.get`` and its invocation read the first
+#: ``command_invocations.get``.
 @pytest.mark.parametrize(
     ("owner", "method", "call"),
     [
-        pytest.param(MemoryEngineRunRecords, "get", 2, id="run"),
+        pytest.param(MemoryEngineRunRecords, "get", 3, id="run"),
         pytest.param(MemoryCommandInvocationRecords, "get", 1, id="invocation"),
     ],
 )
@@ -3377,3 +3388,271 @@ def test_reconciler_run_write_faults_leave_the_abandonment_for_the_next_pass(
     assert "FINALIZATION_ABANDONED" not in after.audit_actions
     assert "RUN_FAILED" not in after.audit_actions
     assert len(after.object_blobs) == 2
+
+
+# --------------------------------------------------------------------------
+# The canonical evidence ruling of 2026-11-09: available material is scanned
+# exactly for either purpose once its association is validated, a token-free
+# validation is never reported as an exact scan, and the canonical contract is
+# consulted only through a registrar that also answers it
+# --------------------------------------------------------------------------
+
+_CANONICAL_DOCUMENT: Final = (
+    b'{"content_hash":"' + b"7" * 64 + b'","message":"plain words"}'
+)
+_CANONICAL_KIND: Final = "sanitized-adapter-result-manifest"
+
+
+def _audit_details(durable: DurableState, action: str) -> list[dict[str, Any]]:
+    return [
+        dict(event.details)
+        for event in durable.audit_events
+        if event.action.value == action
+    ]
+
+
+def _plant_run_evidence(
+    harness: MemoryFinalizationHarness,
+    files: dict[str, bytes],
+    *,
+    artifact_kind: str = "stderr-capture",
+) -> tuple[tuple[str, ...], Any]:
+    """RUN-owned core evidence under the invocation correlation, as rows and
+    staged bytes, with the request over exactly those candidates."""
+    candidates = plant_core_evidence(
+        harness.roots.store,
+        owner=RUN_OWNER,
+        correlation=INVOCATION_CORRELATION,
+        files=files,
+        artifact_kind=artifact_kind,
+    )
+    for candidate in candidates:
+        harness.store_data.candidates[candidate.candidate_artifact_id] = candidate
+    ids = tuple(candidate.candidate_artifact_id for candidate in candidates)
+    request = sample_evidence_request(
+        list(ids), owner=RUN_OWNER, correlation=INVOCATION_CORRELATION
+    )
+    return ids, request
+
+
+class _QualifyingRegistrar:
+    """The memory registrar beside one fixed canonical verdict: the shape of the
+    production registrar, which answers ``CanonicalEvidenceQualifier`` too."""
+
+    def __init__(self, inner: Any, answer: Result[Any]) -> None:
+        self._inner = inner
+        self.answer = answer
+        self.qualified: list[tuple[str, tuple[bytes, ...]]] = []
+
+    def register_result(
+        self, transaction: Any, journal: Any, refs: Any, facts: Any
+    ) -> Any:
+        return self._inner.register_result(transaction, journal, refs, facts)
+
+    def register_evidence(self, transaction: Any, journal: Any, refs: Any) -> Any:
+        return self._inner.register_evidence(transaction, journal, refs)
+
+    def qualify_evidence(
+        self, candidate: Any, records: tuple[bytes, ...]
+    ) -> Result[Any]:
+        self.qualified.append((candidate.candidate_artifact_id, records))
+        return self.answer
+
+
+def _qualified_answer(*uncontrolled: str) -> Success[Any]:
+    return Success[Any](
+        outcome="SUCCESS",
+        value=CanonicalQualification(
+            records=1, uncontrolled_strings=tuple(uncontrolled)
+        ),
+    )
+
+
+def _finalizer_over(
+    harness: MemoryFinalizationHarness, registrar: Any
+) -> CoreArtifactFinalizer:
+    return CoreArtifactFinalizer(
+        harness.unit_of_work.begin,
+        harness.clock,
+        harness.hasher,
+        harness.roots.store,
+        RecordingProbe(),
+        registrar,
+        harness.auditor,
+        command_roots=harness.command_roots,
+        token_material=harness.token_material,
+    )
+
+
+def test_evidence_material_from_the_lookup_is_scanned_exactly(
+    harness: MemoryFinalizationHarness,
+) -> None:
+    """A run root under the harness lets the lookup answer the attempt's
+    material, so RUN-owned evidence is scanned for the exact raw token -- the
+    refusal names the token, not a shape, and audits the leakage -- while a
+    clean sibling registers with its validation audited as an exact scan."""
+    harness.plant_result_prestate()
+    leaking = b"adapter wrote " + FIXTURE_TOKEN.encode("ascii") + b"\n"
+    (leaking_id,), request = _plant_run_evidence(harness, {"stderr.txt": leaking})
+    refused = harness.finalize(request)
+    assert _code(refused) == SECURITY_SENSITIVE_MATERIAL_LEAKAGE
+    assert "raw attempt token" in _message(refused)
+    assert FIXTURE_TOKEN not in _message(refused)
+    durable = harness.durable()
+    assert durable.candidate_states[leaking_id] == "QUARANTINED"
+    assert "ARTIFACT_LEAKAGE_DETECTED" in durable.audit_actions
+    (clean_id,), clean = _plant_run_evidence(
+        harness, {"protocol.txt": b"clean protocol text\n"}
+    )
+    assert clean_id != leaking_id
+    registered = _ok(harness.finalize(clean))
+    assert registered.journal_state == "REGISTERED"
+    assert _audit_details(harness.durable(), "ARTIFACT_VALIDATED") == [
+        {"purpose": "EVIDENCE", "exact_scan": True, "canonical": False}
+    ]
+
+
+def test_material_that_is_not_the_runs_is_refused_before_any_swap(
+    harness: MemoryFinalizationHarness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ruling: material is validated against the authoritative run and
+    invocation -- the stored attempt token hash included -- before use, for a
+    RESULT request, for RUN-owned evidence and for a caller-supplied transient
+    material alike; a mismatch is the invariant and nothing is written."""
+    result = harness.plant_result_prestate()
+    before = harness.durable()
+    wrong_hash = AttemptTokenMaterial(run_id=RUN_ID, attempt_token="B" * 32)
+    foreign = AttemptTokenMaterial(run_id=OTHER_RUN_ID, attempt_token=FIXTURE_TOKEN)
+    monkeypatch.setattr(harness, "token_material", lambda invocation_id: wrong_hash)
+    refused = harness.finalize(result.request)
+    assert _code(refused) == INVARIANT_VIOLATION
+    assert "attempt token material" in _message(refused)
+    assert "B" * 32 not in _message(refused)
+    assert harness.durable() == before
+    monkeypatch.setattr(harness, "token_material", lambda invocation_id: foreign)
+    refused = harness.finalize(result.request)
+    assert _code(refused) == INVARIANT_VIOLATION
+    assert harness.durable() == before
+    evidence = harness.plant_evidence_prestate()
+    before = harness.durable()
+    refused = harness.finalize(evidence.request)
+    assert _code(refused) == INVARIANT_VIOLATION
+    assert "attempt token material" in _message(refused)
+    assert harness.durable() == before
+    monkeypatch.setattr(harness, "token_material", lambda invocation_id: MISSING)
+    supplied = run_coroutine(
+        harness.finalizer().finalize(
+            evidence.request, FlagCancellationToken(), token_material=wrong_hash
+        )
+    )
+    assert _code(supplied) == INVARIANT_VIOLATION
+    assert harness.durable() == before
+
+
+def test_evidence_without_material_is_token_free_and_never_reported_exact(
+    harness: MemoryFinalizationHarness,
+) -> None:
+    """No run root: the lookup answers nothing, the evidence registers on the
+    whole-content rule alone and its validation is audited as not exactly
+    scanned (the ruling: missing material is never a successful exact scan)."""
+    evidence = harness.plant_evidence_prestate()
+    assert not isinstance(harness.token_material(INVOCATION_ID), AttemptTokenMaterial)
+    registered = _ok(harness.finalize(evidence.request))
+    assert registered.journal_state == "REGISTERED"
+    assert _audit_details(harness.durable(), "ARTIFACT_VALIDATED") == [
+        {"purpose": "EVIDENCE", "exact_scan": False, "canonical": False}
+    ]
+
+
+def test_finalize_scans_evidence_with_the_callers_transient_material(
+    harness: MemoryFinalizationHarness,
+) -> None:
+    """The ruling: material a caller's frame already holds reaches the phase-1
+    scan of that one call -- the lookup answers nothing here -- and never
+    becomes an attribute of the finalizer."""
+    leaking = b"leak " + FIXTURE_TOKEN.encode("ascii") + b"\n"
+    evidence = harness.plant_evidence_prestate(files={"stderr.txt": leaking})
+    assert not isinstance(harness.token_material(INVOCATION_ID), AttemptTokenMaterial)
+    finalizer = harness.finalizer()
+    material = AttemptTokenMaterial(run_id=RUN_ID, attempt_token=FIXTURE_TOKEN)
+    refused = run_coroutine(
+        finalizer.finalize(
+            evidence.request, FlagCancellationToken(), token_material=material
+        )
+    )
+    assert _code(refused) == SECURITY_SENSITIVE_MATERIAL_LEAKAGE
+    assert "raw attempt token" in _message(refused)
+    for name, value in vars(finalizer).items():
+        assert not isinstance(value, AttemptTokenMaterial), name
+
+
+def test_canonical_json_is_refused_without_a_qualifying_registrar(
+    harness: MemoryFinalizationHarness,
+) -> None:
+    """The Task 6 memory registrar answers no canonical contract, so plan 4.6
+    bytes -- a digest-bearing canonical JSON document -- stay under the
+    whole-content scan and are refused as token-shaped, exactly as before."""
+    harness.plant_run()
+    (candidate_id,), request = _plant_run_evidence(
+        harness, {"a.json": _CANONICAL_DOCUMENT}, artifact_kind=_CANONICAL_KIND
+    )
+    refused = harness.finalize(request)
+    assert _code(refused) == SECURITY_SENSITIVE_MATERIAL_LEAKAGE
+    assert "token-shaped" in _message(refused)
+    assert harness.durable().candidate_states[candidate_id] == "QUARANTINED"
+
+
+def test_a_qualifying_registrar_admits_canonical_json_and_audits_it(
+    harness: MemoryFinalizationHarness,
+) -> None:
+    """The same bytes register when the registrar also answers the canonical
+    contract -- the finalizer hands it the candidate and the one record -- and
+    the validation is audited as canonical and not exactly scanned."""
+    harness.plant_run()
+    (candidate_id,), request = _plant_run_evidence(
+        harness, {"b.json": _CANONICAL_DOCUMENT}, artifact_kind=_CANONICAL_KIND
+    )
+    qualifying = _QualifyingRegistrar(
+        harness.registrar, _qualified_answer("plain words")
+    )
+    finalizer = _finalizer_over(harness, qualifying)
+    registered = _ok(
+        run_coroutine(finalizer.finalize(request, FlagCancellationToken()))
+    )
+    assert registered.journal_state == "REGISTERED"
+    assert qualifying.qualified == [(candidate_id, (_CANONICAL_DOCUMENT,))]
+    durable = harness.durable()
+    assert len(durable.refs) == 1
+    assert _audit_details(durable, "ARTIFACT_VALIDATED") == [
+        {"purpose": "EVIDENCE", "exact_scan": False, "canonical": True}
+    ]
+
+
+def test_a_registrar_that_refuses_the_contract_quarantines_at_schema(
+    harness: MemoryFinalizationHarness,
+) -> None:
+    """Content that is the model but disagrees with the authoritative facts is
+    refused at ``SCHEMA`` with the qualifier's reason: a quarantine, never a
+    CORRUPT classification, no journal and no blob."""
+    harness.plant_run()
+    (candidate_id,), request = _plant_run_evidence(
+        harness, {"c.json": _CANONICAL_DOCUMENT}, artifact_kind=_CANONICAL_KIND
+    )
+    refusing = _QualifyingRegistrar(
+        harness.registrar,
+        artifact_failure(
+            ARTIFACT_VALIDATION_FAILED,
+            message="the sanitized row disagrees with the staged bytes",
+            now_utc=INSTANT,
+        ),
+    )
+    finalizer = _finalizer_over(harness, refusing)
+    refused = run_coroutine(finalizer.finalize(request, FlagCancellationToken()))
+    assert _code(refused) == ARTIFACT_VALIDATION_FAILED
+    assert "disagrees" in _message(refused)
+    durable = harness.durable()
+    assert durable.candidate_states == {candidate_id: "QUARANTINED"}
+    (quarantined,) = durable.candidates
+    assert quarantined.validation_observations[-1].stage == "SCHEMA"
+    assert durable.journal == ()
+    assert durable.object_blobs == ()

@@ -111,6 +111,7 @@ from crypto_lab.domain.hashing import (
     finalization_id_for,
     finalization_identity,
     profile_hash,
+    run_manifest_id_for,
     sha256_bytes,
 )
 from crypto_lab.domain.identifiers import (
@@ -367,6 +368,7 @@ __all__ = (
     "retry_decision_semantic_projection",
     "retry_terminal_state_of",
     "run_edge_owner",
+    "run_manifest_id_for",
     "select_fresh_availability_observation",
     "sha256_bytes",
     "slot_reason_code",

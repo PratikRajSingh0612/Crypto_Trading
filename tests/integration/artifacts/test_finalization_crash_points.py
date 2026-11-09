@@ -1,6 +1,7 @@
-"""Stage 9 Task 6, plan 5.1: the seven EVIDENCE crash cells and the six RESULT
-durable-state halves over the SQLite ``FinalizationFixture`` (requirement rows
-R19.2-10, R19.3-07..09, T28.3-07, T28.3-10, T28.3-11, A33.5-01, R23.3.1-18).
+"""Stage 9 Task 6 and Task 7, plan 5.1: the seven EVIDENCE crash cells, the six
+RESULT durable-state halves and the seven RESULT success cells over the SQLite
+``FinalizationFixture`` (requirement rows R19.2-10, R19.3-07..09, T28.3-07,
+T28.3-10, T28.3-11, A33.5-01, R23.3.1-18; Task 7: R29.3-08..10, T28.3-06).
 
 "Crash" is ``CrashingProbe`` in process -- a ``BaseException`` the finalizer's
 ``except Exception`` boundary never absorbs, so the durable state is exactly the
@@ -12,11 +13,12 @@ takes no unexpired lease (the RESULT lease ruling of 2026-11-08), and the pass
 then takes the lease over by one audited compare-and-swap -- the
 ``FINALIZATION_LEASE_ACQUIRED`` row at the point the resume began. The RESULT
 halves assert the state before recovery and drive the failing recovery
-branches of plan 5.1 -- a hash mismatch and a passed deadline -- because RESULT
-success needs the production registrar of Task 7; the memory registrar here
-refuses it by construction. Each cell asserts the six facets of T28.3-12: rows,
-journal, references, run and invocation, audit history equal to durable
-history, and the filesystem.
+branches of plan 5.1 -- a hash mismatch and a passed deadline -- over the Task 6
+memory registrar, which refuses success by construction; the RESULT success
+cells (``test_cp{1..7}_result_success``) run over the production registrar and
+recovery validator (``production``) and recover to ``REGISTERED`` success. Each
+cell asserts the six facets of T28.3-12: rows, journal, references, run and
+invocation, audit history equal to durable history, and the filesystem.
 """
 
 from __future__ import annotations
@@ -38,6 +40,7 @@ from crypto_lab.artifacts.models import ArtifactRef
 from crypto_lab.artifacts.ports import RegistrationUnitOfWork, ResultRegistration
 from crypto_lab.domain.hashing import sha256_bytes
 from crypto_lab.domain.results import Failure, Result, Success
+from crypto_lab.experiments.run_manifest import RunManifest, run_manifest_hash
 from crypto_lab.persistence.diagnostics import WRITE_FAILED, persistence_failure
 from doubles.artifacts import (
     RESULT_FILES,
@@ -90,7 +93,11 @@ _RECOVERED_FROM_MOVED = (
 
 
 def _ok[T](result: Result[T]) -> T:
-    assert isinstance(result, Success), result
+    assert isinstance(result, Success), (
+        "; ".join(f"{item.error_code}: {item.message}" for item in result.diagnostics)
+        if isinstance(result, Failure)
+        else repr(result)
+    )
     return result.value
 
 
@@ -102,6 +109,18 @@ def _code(result: object) -> str:
 @pytest.fixture
 def fixture(tmp_path: Path) -> Iterator[FinalizationFixture]:
     opened = FinalizationFixture.open(tmp_path, clock=FixedClock(INSTANT))
+    try:
+        yield opened
+    finally:
+        opened.close()
+
+
+@pytest.fixture
+def production(tmp_path: Path) -> Iterator[FinalizationFixture]:
+    """Task 7: the production registrar, validator and auditor over SQLite."""
+    opened = FinalizationFixture.open(
+        tmp_path, clock=FixedClock(INSTANT), production=True
+    )
     try:
         yield opened
     finally:
@@ -419,7 +438,7 @@ def test_cp1_result_durable_state(fixture: FinalizationFixture) -> None:
     assert after.audit_actions.count("RECONCILIATION_CANDIDATE_QUARANTINED") == 2
     assert after.audit_actions.count("RETENTION_DELETED") == 1
     assert not plan.roots.request_path.exists()
-    assert fixture.validator.calls[0].token_supplied is True
+    assert fixture.memory_validator.calls[0].token_supplied is True
     _assert_no_dangling(fixture)
 
 
@@ -543,3 +562,243 @@ def test_cp6_result_durable_state(fixture: FinalizationFixture) -> None:
     report = _ok(fixture.recover())
     assert (report.resumed, report.abandoned, report.registered) == (1, 1, 0)
     _assert_result_timed_out(fixture, plan)
+
+
+# --------------------------------------------------------------------------
+# Task 7: the RESULT success cells CP-1 .. CP-7 over the production registrar
+# and recovery validator
+# --------------------------------------------------------------------------
+
+#: The audit tail of a RESULT registration: the registrar's two facts inside
+#: T3, the finalizer's phase-5 fact and the phase-6 close of the raw bytes.
+_SUCCESS_TAIL = (
+    "RUN_MANIFEST_REGISTERED",
+    "RUN_SUCCEEDED",
+    "FINALIZATION_REGISTERED",
+    "RETENTION_DELETED",
+)
+_RESULT_RECOVERED_FROM_STAGING = (
+    *_T1_ACTIONS,
+    "FINALIZATION_MOVED",
+    *_SUCCESS_TAIL,
+    _SUMMARY,
+)
+_RESULT_RECOVERED_FROM_PREPARED = (
+    *_T1_ACTIONS,
+    "FINALIZATION_LEASE_ACQUIRED",
+    "FINALIZATION_MOVED",
+    *_SUCCESS_TAIL,
+    _SUMMARY,
+)
+_RESULT_RECOVERED_FROM_MOVED = (
+    *_T1_ACTIONS,
+    "FINALIZATION_MOVED",
+    "FINALIZATION_LEASE_ACQUIRED",
+    *_SUCCESS_TAIL,
+    _SUMMARY,
+)
+_RESULT_DEADLINE = INSTANT.replace(minute=10)
+
+
+def _expire_result_lease(fixture: FinalizationFixture) -> None:
+    """The RESULT lease (the compiled 300 s) expires inside the 600 s deadline."""
+    fixture.advance_clock(RESULT_LEASE_SECONDS + 1)
+
+
+def _assert_result_success(
+    fixture: FinalizationFixture,
+    plan: ResultPlan,
+    *,
+    audit_actions: tuple[str, ...],
+) -> None:
+    """The six facets of a recovered RESULT success (plan 5.1 after-recovery
+    column): rows, journal, references, run and invocation, audit history equal
+    to durable history, and the filesystem; the run manifest's self-hash is
+    verified separately from its row (29.3:2182)."""
+    after = fixture.durable()
+    assert after.journal_state == "REGISTERED"
+    assert len(after.refs) == 2
+    assert {ref.content_hash for ref in after.refs} == _RESULT_HASHES
+    assert set(after.object_blobs) == _RESULT_HASHES
+    assert after.staging_files == ()
+    assert all(state == "FINALIZING" for state in after.candidate_states.values())
+    assert after.run_state == "SUCCEEDED"
+    assert after.run_revision == plan.run.revision + 2
+    assert after.run_deadline == _RESULT_DEADLINE
+    assert after.invocation is not None
+    assert after.invocation.state.value == "EXITED"
+    assert after.invocation.revision == plan.invocation.revision
+    (row,) = after.run_manifests
+    manifest = RunManifest.model_validate_json(row.manifest_json)
+    assert run_manifest_hash(manifest) == row.run_manifest_hash
+    assert manifest.run_manifest_hash == row.run_manifest_hash
+    assert manifest.run_id == plan.run.run_id
+    assert manifest.run_invocation_id == plan.invocation.invocation_id
+    assert manifest.sanitized_adapter_result_manifest_hash == (
+        plan.request.sanitized_adapter_result_manifest_hash
+    )
+    assert {ref.artifact_id for ref in manifest.artifact_refs} == {
+        ref.artifact_id for ref in after.refs
+    }
+    members = [
+        link
+        for link in after.run_artifacts
+        if link.link_role == "RESULT_MANIFEST_MEMBER"
+    ]
+    assert {link.artifact_id for link in members} == {
+        ref.artifact_id for ref in after.refs
+    }
+    assert all(link.run_manifest_id == row.manifest_id for link in members)
+    assert after.audit_actions == audit_actions
+    assert after.quarantine_entries == ()
+    # The lease closed: the raw-bearing bytes left the command root.
+    assert not plan.roots.request_path.exists()
+    assert isinstance(plan.roots.result_path, Path)
+    assert not plan.roots.result_path.exists()
+    assert not any(name.endswith(".json") for name in after.command_root_files)
+    _assert_no_dangling(fixture)
+
+
+def test_cp1_result_success(production: FinalizationFixture) -> None:
+    plan = production.plant_result_prestate()
+    _crash(production, plan.request, "before_prepared")
+    before = production.durable()
+    _assert_result_prestate(before, plan)
+    assert before.journal == ()
+    assert all(state == "VALIDATING" for state in before.candidate_states.values())
+    assert before.run_deadline is None
+    assert before.audit_actions == ()
+    production.reopen()
+    # Step 6: the production validator validates the temporary manifest under
+    # 29.3 and the attempt resumes from phase 2 with a fresh deadline (reading 2).
+    report = _ok(production.recover())
+    assert (report.resumed, report.registered, report.quarantined) == (1, 1, 0)
+    _assert_result_success(
+        production, plan, audit_actions=_RESULT_RECOVERED_FROM_STAGING
+    )
+
+
+def test_cp2_result_success(production: FinalizationFixture) -> None:
+    plan = production.plant_result_prestate()
+    _crash(production, plan.request, "after_prepared")
+    before = production.durable()
+    _assert_result_prestate(before, plan)
+    assert before.journal_state == "PREPARED"
+    assert before.run_deadline == _RESULT_DEADLINE
+    assert before.audit_actions == _T1_ACTIONS
+    _expire_result_lease(production)
+    production.reopen()
+    report = _ok(production.recover())
+    assert (report.resumed, report.registered) == (1, 1)
+    _assert_result_success(
+        production, plan, audit_actions=_RESULT_RECOVERED_FROM_PREPARED
+    )
+
+
+def test_cp3_result_success(production: FinalizationFixture) -> None:
+    plan = production.plant_result_prestate()
+    _crash(production, plan.request, "after_move", 0)
+    before = production.durable()
+    assert before.journal_state == "PREPARED"
+    assert len(before.object_blobs) == 1
+    # The second candidate is still under the work directory of the root.
+    second = plan.candidates[1].staging_relative_path
+    assert any(name.endswith(second) for name in before.command_root_files)
+    _expire_result_lease(production)
+    production.reopen()
+    report = _ok(production.recover())
+    assert (report.resumed, report.registered) == (1, 1)
+    _assert_result_success(
+        production, plan, audit_actions=_RESULT_RECOVERED_FROM_PREPARED
+    )
+
+
+def test_cp4_result_success(production: FinalizationFixture) -> None:
+    plan = production.plant_result_prestate()
+    _crash(production, plan.request, "before_moved")
+    before = production.durable()
+    assert before.journal_state == "PREPARED"
+    assert set(before.object_blobs) == _RESULT_HASHES
+    assert before.staging_files == ()
+    _expire_result_lease(production)
+    production.reopen()
+    report = _ok(production.recover())
+    assert (report.resumed, report.registered) == (1, 1)
+    _assert_result_success(
+        production, plan, audit_actions=_RESULT_RECOVERED_FROM_PREPARED
+    )
+
+
+def test_cp5_result_success(production: FinalizationFixture) -> None:
+    plan = production.plant_result_prestate()
+    _crash(production, plan.request, "after_moved")
+    before = production.durable()
+    assert before.journal_state == "MOVED"
+    (entry,) = before.journal
+    assert len(entry.observed) == 2
+    assert before.refs == ()
+    assert before.run_manifests == ()
+    assert before.audit_actions == (*_T1_ACTIONS, "FINALIZATION_MOVED")
+    _expire_result_lease(production)
+    production.reopen()
+    report = _ok(production.recover())
+    assert (report.resumed, report.registered) == (1, 1)
+    _assert_result_success(production, plan, audit_actions=_RESULT_RECOVERED_FROM_MOVED)
+
+
+def test_cp6_result_success(production: FinalizationFixture) -> None:
+    plan = production.plant_result_prestate()
+    _crash(production, plan.request, "inside_registered")
+    before = production.durable()
+    # T3 rolled back through the scope's ``finally`` after the production
+    # registrar had staged the references, the manifest, the links and the run
+    # swap: exactly MOVED -- never a reference, a manifest row or a success
+    # without its commit (SQLite atomicity + reading 11).
+    assert before.journal_state == "MOVED"
+    assert before.refs == ()
+    assert before.run_manifests == ()
+    assert before.run_artifacts == ()
+    assert before.run_state == "RUNNING"
+    assert before.run_revision == plan.run.revision + 1
+    assert "RUN_SUCCEEDED" not in before.audit_actions
+    assert "RUN_MANIFEST_REGISTERED" not in before.audit_actions
+    assert production.harness.open_transactions() == ()
+    _expire_result_lease(production)
+    production.reopen()
+    report = _ok(production.recover())
+    assert (report.resumed, report.registered) == (1, 1)
+    _assert_result_success(production, plan, audit_actions=_RESULT_RECOVERED_FROM_MOVED)
+
+
+def test_cp7_result_success(production: FinalizationFixture) -> None:
+    plan = production.plant_result_prestate()
+    _crash(production, plan.request, "after_registered")
+    before = production.durable()
+    assert before.journal_state == "REGISTERED"
+    assert len(before.refs) == 2
+    assert len(before.run_manifests) == 1
+    assert before.run_state == "SUCCEEDED"
+    assert before.audit_actions == (
+        *_T1_ACTIONS,
+        "FINALIZATION_MOVED",
+        *_SUCCESS_TAIL[:-1],
+    )
+    # The phase-6 close never ran: the raw-bearing bytes are still there.
+    assert plan.roots.request_path.is_file()
+    assert isinstance(plan.roots.result_path, Path)
+    assert plan.roots.result_path.is_file()
+    production.reopen()
+    # Step 9 cleanup: the raw bytes of the terminal run's root removed with its
+    # audit fact; nothing else changes.
+    report = _ok(production.recover())
+    assert (report.registered, report.resumed, report.quarantined) == (0, 0, 0)
+    assert report.closed_roots == 1
+    _assert_result_success(
+        production, plan, audit_actions=_RESULT_RECOVERED_FROM_STAGING
+    )
+    second = _ok(production.recover())
+    assert second.changes == 0
+    assert production.durable().audit_actions == (
+        *_RESULT_RECOVERED_FROM_STAGING,
+        _SUMMARY,
+    )

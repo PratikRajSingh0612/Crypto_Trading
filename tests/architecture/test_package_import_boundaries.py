@@ -24,8 +24,11 @@ allowlist is a **Stage 5 scope closure**, deliberately narrower than the section
 27.1 table, which also permits ``strategy``, ``datasets``, ``artifacts``,
 ``process_supervision`` and ``audit``: those are out of Stage 5's scope and are
 asserted absent by ``tests/safety/test_stage5_boundaries.py`` as well, so a later
-stage that adds one of those edges must widen this allowlist explicitly. The
-``adapters`` allowlist is the 27.1 shape: ``domain`` and itself.
+stage that adds one of those edges must widen this allowlist explicitly. Stage 9
+plan section 2.6 (Task 7) widens it with ``artifacts`` and ``audit``, the two
+edges the application integration takes, anchored positively on the imports of
+``experiments/finalization.py``. The ``adapters`` allowlist is the 27.1 shape:
+``domain`` and itself.
 
 Stage 7 Task 2 (Stage 7 plan section 2.6) adds ``process_supervision`` to the same
 scanner. Its allowlist is the plan's **Stage 7 scope closure** -- ``domain``,
@@ -107,12 +110,17 @@ _PROHIBITED_FOR_EXPERIMENTS: tuple[str, ...] = (
     "crypto_lab.cli",
     _COMPOSITION_MODULE,
 )
-#: Stage 5 plan Task 9: the scope closure of ``experiments`` (module docstring).
+#: Stage 5 plan Task 9: the scope closure of ``experiments`` (module docstring),
+#: widened by Stage 9 plan section 2.6 (Task 7) with the two section 27.1 edges
+#: the application integration takes: ``artifacts`` (the finalizer, its ports and
+#: models) and ``audit`` (the event, sink and correlation abstractions).
 _ALLOWED_FOR_EXPERIMENTS: tuple[str, ...] = (
     "crypto_lab.domain",
     "crypto_lab.adapters",
     "crypto_lab.capabilities",
     "crypto_lab.experiments",
+    "crypto_lab.artifacts",
+    "crypto_lab.audit",
 )
 #: Section 27.1: ``adapters`` may depend on canonical domain types alone.
 _ALLOWED_FOR_ADAPTERS: tuple[str, ...] = ("crypto_lab.domain", "crypto_lab.adapters")
@@ -409,11 +417,14 @@ def test_experiments_imports_nothing_from_any_prohibited_package(
 def test_experiments_reaches_only_its_stage_five_allowlist(
     repository_root: Path,
 ) -> None:
-    """The Stage 5 scope closure of the application layer (module docstring).
+    """The Stage 5 scope closure of the application layer (module docstring),
+    widened by Stage 9 Task 7 with the ``artifacts`` and ``audit`` edges.
 
-    Anchored positively on the one cross-package edge Stage 5 actually takes, the
-    ``CommandInvocationRepository`` port that plan section 2.4 places in
-    ``adapters``, so the assertion cannot pass on an empty scan.
+    Anchored positively on the cross-package edges the layer actually takes: the
+    ``CommandInvocationRepository`` port that Stage 5 plan section 2.4 places in
+    ``adapters``, and the finalizer ports and audit models the Stage 9 Task 7
+    ``finalization`` module imports, so the assertion cannot pass on an empty
+    scan and the widening is proven taken rather than merely permitted.
     """
     reached = _allowed_project_imports(
         _package_root(repository_root, _EXPERIMENTS), _EXPERIMENTS
@@ -426,6 +437,21 @@ def test_experiments_reaches_only_its_stage_five_allowlist(
     assert unexpected == ()
     assert "crypto_lab.adapters.ports" in reached
     assert "crypto_lab.domain.base" in reached
+    assert "crypto_lab.artifacts.ports" in reached
+    assert "crypto_lab.audit.models" in reached
+    finalization = _package_root(repository_root, _EXPERIMENTS) / "finalization.py"
+    tree = ast.parse(
+        finalization.read_text(encoding="utf-8"), filename=str(finalization)
+    )
+    imported = {
+        name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import | ast.ImportFrom)
+        for name in _imported_names(node, f"crypto_lab.{_EXPERIMENTS}")
+    }
+    assert "crypto_lab.artifacts.ports" in imported
+    assert "crypto_lab.audit.models" in imported
+    assert not any(_is_within(name, "crypto_lab.persistence") for name in reached)
 
 
 def test_adapters_reaches_only_domain_and_itself(repository_root: Path) -> None:
