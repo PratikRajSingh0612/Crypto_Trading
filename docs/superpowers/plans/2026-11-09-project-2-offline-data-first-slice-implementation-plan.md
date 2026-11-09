@@ -8,7 +8,13 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 10 (the Project 2 advisor decided BLOCKED for P2-T1 on 2026-11-09 at
+**Status.** Revision 11 (round 10 REQUEST_CHANGES on sha256 `7c6f2cfb...`, revision 10: three
+IMPORTANT findings on R7 folded in here: an `OSError` on opening the input also crossed the
+boundary (now the refusal `OFFLINE_DATA.INPUT_PATH`), a `ValueError`-rooted exception would be
+swallowed by the boundary's own conversion (now `RuntimeError`-rooted with a draw-once rule),
+and the exit-3/no-output claim was untestable (now the command draws providers before its
+first write; exit-code table named); three MINOR wording items; revision 10 history: the
+Project 2 advisor decided BLOCKED for P2-T1 on 2026-11-09 at
 21:01Z: sections 2.2 and 5.4 named no failure mechanism for an injected provider whose value
 the core refuses, because no `Failure` can be built without a valid `Diagnostic`; this
 revision adds declared reading R7 and the `ProviderContractError` mechanism in sections 1.6,
@@ -253,15 +259,22 @@ JSON schemas, inside an isolated sub-project environment.
   yields a malformed prefixed identifier or a naive or non-UTC instant is a fault of the
   caller's composition, not of the input: the core's `Diagnostic` cannot be built from it
   (`diagnostic_id` and `timestamp_utc` are validated by the core), so no `Failure` exists to
-  return. The sub-project validates each provider value where it is consumed and raises
-  `ProviderContractError`, a sub-project exception deriving from `ValueError`, defined in
-  `diagnostics.py`, naming the provider method and never carrying the value, from the
-  public functions `refusal` and `read_ohlcv_csv` (Task 1) and `build_dataset_metadata` and
-  `normalize_command` (Task 3; the command maps it to exit code 3 and writes no output). It is
-  the only exception that crosses the sub-project's public boundary; tests pin it with
-  `pytest.raises(ProviderContractError)` and pin that the core `ValidationError` does not
-  escape. This replaces the earlier declared reading that the core `ValidationError`
-  propagates.
+  return. The sub-project draws and validates every provider value once, before any core
+  model is constructed and never inside a `try` body whose handler catches `ValueError` or
+  `ValidationError`, and raises `ProviderContractError`, a sub-project exception deriving
+  from `RuntimeError` (so the boundary's `ValueError` conversion can never swallow it),
+  defined in `diagnostics.py`, naming the provider method and never carrying the value, from
+  the public functions `refusal` and `read_ohlcv_csv` (Task 1), `validate_series` (Task 2) and
+  `build_dataset_metadata` and `normalize_command` (Task 3). The command draws and validates
+  its provider values before its first write and reuses those draws, so a provider fault
+  exits with code 3 and leaves nothing under `--output`. `ProviderContractError` is the only
+  exception that crosses the sub-project's public boundary: a missing, unreadable or
+  unsuitable input path is the refusal `OFFLINE_DATA.INPUT_PATH` (section 5.4), not an
+  `OSError` escaping. Tests pin the exception for a malformed `diag_` id and for a naive
+  instant, pin that neither the core `ValidationError` nor `OSError` escapes, and pin the
+  command's exit codes (0 success, 1 refusal, 2 usage or `--output` error, 3 provider fault).
+  This replaces the P2-T1 attempt's interim reading (the core `ValidationError` propagating)
+  and narrows revision 9's blanket conversion rule in section 2.2 to data-dependent values.
 
 ## 2. Authority, consumed interfaces, readings and reconciliation
 
@@ -291,11 +304,13 @@ The implementer re-reads each consumed module before use and refuses to proceed 
 blob differs from the pinned identity (report the drift; do not adapt silently). Core
 `ValueError` and Pydantic `ValidationError` raised for data-dependent values (anything
 derived from the input) are caught at the sub-project boundary and converted to
-`Failure`; no such exception crosses the sub-project's public functions. The one
-deliberate exception is a composition fault: an injected provider value the core refuses
-makes a `Failure` unconstructible, so it is raised as the sub-project's
-`ProviderContractError` (reading R7, section 1.6), never converted and never surfaced as a
-bare core exception.
+`Failure`; no such exception crosses the sub-project's public functions, and an `OSError`
+on opening or reading the input is converted to the refusal `OFFLINE_DATA.INPUT_PATH`
+(section 5.4). The one deliberate exception is a composition fault: an injected provider
+value the core refuses makes a `Failure` unconstructible, so it is raised as the
+sub-project's `ProviderContractError` (`RuntimeError`-rooted so this conversion cannot
+swallow it; reading R7, section 1.6), never converted and never surfaced as a bare core
+exception.
 
 ### 2.3 Placement decisions
 
@@ -522,7 +537,10 @@ documentation calls it a Parquet partition, and it never enters a persistent reg
   `OFFLINE_DATA.CSV_HEADER`, `OFFLINE_DATA.CSV_ROW_SHAPE`, `OFFLINE_DATA.CSV_TIMESTAMP`,
   `OFFLINE_DATA.CSV_NUMBER`, `OFFLINE_DATA.SIZE_CEILING`, `OFFLINE_DATA.ORDERING`,
   `OFFLINE_DATA.TIMEFRAME_GRID`, `OFFLINE_DATA.PRICE_SANITY`, `OFFLINE_DATA.VOLUME`,
-  `OFFLINE_DATA.EMPTY_SERIES`, `OFFLINE_DATA.OUTPUT_DIRECTORY`; `severity = ERROR`;
+  `OFFLINE_DATA.EMPTY_SERIES`, `OFFLINE_DATA.OUTPUT_DIRECTORY`, `OFFLINE_DATA.INPUT_PATH` (the
+  input path is missing, unreadable, a directory or a reparse point, or the bounded read
+  fails: `line` 0, `value_length` 0, the message names the rule and never the path; raised
+  by `read_ohlcv_csv` and mapped by the command like any refusal); `severity = ERROR`;
   `category` `SCHEMA_VALIDATION`; `source_component = "crypto-lab-offline-data"`;
   `retriable = False`; `message` names the line and rule only; `details` carries
   `{"line": n, "rule": code, "value_length": k}`; `timestamp_utc` from the injected clock.
@@ -698,8 +716,9 @@ worker, never provisioned by it.
 |---|---|---|
 | `tests/unit/test_candle_csv.py` | `test_clean_fixture_reads_sixty_rows_as_decimals_and_utc` | module absent |
 | `tests/unit/test_candle_csv.py` | one test per invalid fixture asserting a `Failure` whose diagnostic carries the code, line and value length and never the value | module absent |
+| `tests/unit/test_candle_csv.py` | a missing path, a directory and an unreadable file are `OFFLINE_DATA.INPUT_PATH` at line 0 with value_length 0, the message never names the path, and no `OSError` escapes | module absent |
 | `tests/unit/test_candle_csv.py` | `test_size_ceilings_refuse_without_truncation` | module absent |
-| `tests/unit/test_providers.py` | injected ids and clock are used; production ids satisfy the core prefix grammar | module absent |
+| `tests/unit/test_providers.py` | injected ids and clock are used; production ids satisfy the core prefix grammar; a malformed `diag_` id and a naive instant raise `ProviderContractError` from `refusal` and `read_ohlcv_csv`; the core `ValidationError` does not escape (R7) | module absent |
 | `tests/safety/test_boundaries.py` | import purity of `crypto_lab_offline_data` (module census `candle_csv`, `diagnostics`, `providers` present and no forbidden imports) and the reader writes nothing (`tmp_path` and the working directory unchanged after reading a fixture) | module census absent; GREEN at Step 3 |
 | `tests/safety/test_boundaries.py` | dependency pins, forbidden families, lock version equality, lock source record | guards GREEN by construction after Task 0; proven by a working-tree negative control (a temporarily altered pin or lock line, run RED, reverted, never committed) |
 
@@ -728,6 +747,7 @@ worker, never provisioned by it.
 `offline_data/README.md`.
 
 **Interfaces produced.** `validate_series(rows, *, timeframe, ids, clock) -> Success[ValidatedSeries] | Failure`
+(provider faults raise `ProviderContractError`, R7)
 (`ValidatedSeries`: rows, `missing_intervals: tuple[TimeInterval, ...]`,
 `duplicate_intervals: tuple[DuplicateInterval, ...]`, `observations: tuple[str, ...]`,
 `start_utc`, `end_utc`, `row_count`); `write_normalized_container(series, path) -> NormalizedContainer`
@@ -764,8 +784,11 @@ through a command, with goldens and the consumer check.
 
 **Interfaces produced.** `build_dataset_metadata(series, container, *, instrument, timeframe, source, ids, clock) -> Success[DatasetBundle] | Failure`
 (`DatasetBundle`: `descriptor`, `partitions`); `normalize_command(argv, *, ids, clock) -> int` writing
-`descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`; exit code 3 and no
-output written on `ProviderContractError` (R7).
+`descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`; exit codes 0 success,
+1 refusal (`Failure`, including `OFFLINE_DATA.INPUT_PATH`), 2 usage or `--output` error, 3
+provider fault (`ProviderContractError`, R7); the command draws and validates every provider
+value before its first write and reuses those draws, so exits 1, 2 and 3 leave nothing under
+`--output`.
 
 - [ ] **Step 1 Focused RED.** Descriptor and partition field mapping (section 5.1, every
   field), the section 5.4 content-hash construction, `validate_dataset_identity` passes,
