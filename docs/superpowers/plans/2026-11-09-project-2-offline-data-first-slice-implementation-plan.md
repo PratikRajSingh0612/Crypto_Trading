@@ -8,7 +8,9 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 8 (round 7 REQUEST_CHANGES on sha256 `09581069...`, revision 7: seven
+**Status.** Revision 9 (round 8 REQUEST_CHANGES on sha256 `0c8b4650...`, revision 8: one
+IMPORTANT, the tense of the authority-record clause, and four MINOR wording items folded in
+here, every round-7 IMPORTANT confirmed closed; round 7 REQUEST_CHANGES on sha256 `09581069...`, revision 7: seven
 IMPORTANT and five MINOR findings folded in here, the Task 0 design confirmed sound and
 executable once fixed; revision 7 history: controller finding of 2026-11-09, 17:00Z: the worker's PreToolUse
 hook admits a launcher only when it is committed at the task's base commit and admits no
@@ -30,8 +32,9 @@ created from accepted `main` at commit `079395bec70f1deda406d0ca14b2d4bf79aaf063
 The implementation branch `project-2-offline-data-implementation` was created from the
 same commit and is fast-forwarded to this plan's accepted revision commit before Task 0;
 Task 0 is its first commit on top of the plan commit, so the mission gate's `plan_commit`
-(this revision) is an ancestor of its `base_commit` (Task 0), which is what the
-controller's gate check requires.
+(this revision) is an ancestor of its `base_commit` (Task 0); the controller's gate check
+requires the plan commit to be known and the base commit to be HEAD or an ancestor of it,
+which this satisfies.
 
 **Prerequisites.** Project 1 Stages 1-8 accepted and merged (`main` 079395be). Stage 9
 is in progress on `project-1-stage-9-implementation` and is NOT a prerequisite of this
@@ -87,7 +90,8 @@ acceptance); `01_MISSION_AND_AUTHORITY.md:5, 26, 33`.
   pinned `offline_data/.venv` exists (no `uv run`, no system Python, no provisional runner)
   and nothing is faked. The owner's clause to continue independently useful parsing and
   validation work then needs the owner's direction on its form (an authoring-only worker
-  dispatch on the plan commit with no execution, or waiting for the resolution); the
+  dispatch on the plan commit, prompt-bound to no execution since the core launcher stays
+  admitted there, or waiting for the resolution); the
   one-time boundary report names that choice and the exact uv message. Workstream A is
   unaffected. No provisional type, refusal record or substitute of any core contract is
   created in any case.
@@ -551,8 +555,9 @@ hash-pinned independent review of the scaffold diff by a read-only reviewer, and
 advisor's acceptance of this revision, which names the scaffold's exact file list and
 proofs, and a separate advisor acceptance turn on the Task 0 commit hash itself (Step 7).
 It is recorded as a delegated acceptance, never as a human review. The owner
-authorization's text is recorded in the Project 2 controller root's
-`config/mission_checkpoint.md`; this plan paraphrases it.
+authorization's text will be recorded verbatim in the Project 2 controller root's
+`config/mission_checkpoint.md` before the first dispatch, alongside the two
+Execution-route prerequisites; this plan paraphrases it.
 
 **Files created.** `offline_data/pyproject.toml` (section 2.3 configuration, section 2.7
 pins), `offline_data/uv.lock` (produced by the first proof), `offline_data/README.md`
@@ -597,8 +602,8 @@ one-line package). No production behaviour, no fixture, no reader.
   (now including `offline_data/uv.lock`) by a read-only reviewer: launcher closure,
   verify-script stage list, pin equality with section 2.7, the lock's `directory = "../"`
   source record and its version equality with the root lock, a token-shape scan over every
-  file including `README.md` and `uv.lock` (no credential shape, no URL other than the
-  package index names the lock records), no core path touched, no network, no
+  file including `README.md` and `uv.lock` (no credential shape; no URL outside the lock's
+  `registry` and distribution `url` fields), no core path touched, no network, no
   acquisition.
 - [ ] **Step 6 Commit.** `chore(offline-data): scaffold the isolated sub-project environment
   and launcher` on `project-2-offline-data-implementation`, authored by the controller
@@ -781,5 +786,5 @@ through a command, with goldens and the consumer check.
 Every revision of this plan is re-hashed and independently re-reviewed before dispatch;
 the mission gate pins the reviewed sha256 and commit. Each task is one commit on the
 implementation branch; rollback is a non-rewriting revert.
-The slice is complete when section 8 holds for all three tasks; the token recorded on
+The slice is complete when section 8 holds for Task 0 and all three worker tasks; the token recorded on
 acceptance is `P2_SLICE1_PLAN_COMPLETE`.
