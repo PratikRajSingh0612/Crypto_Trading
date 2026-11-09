@@ -8,8 +8,10 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 3 (round 1 REQUEST_CHANGES on sha256 `44174509...`; round 2 APPROVE on
-`6804539e...` with four MINOR notes folded in here): for advisor acceptance (owner authorization
+**Status.** Revision 4 (independent review: round 1 REQUEST_CHANGES on sha256 `44174509...`,
+round 2 APPROVE on `6804539e...`, re-pinned APPROVE on `b34034a4...`; advisor acceptance turn
+on `b34034a4...`: REJECTED with four binding conditions, folded in here): for advisor
+acceptance and independent re-review (owner authorization
 "TWO PARALLEL PRODUCT WORKSTREAMS", 2026-11-09, section 3). Not accepted.
 
 **Planning base.** Repository `Crypto_Trading`, branch `project-2-offline-data-plan`
@@ -65,7 +67,13 @@ acceptance); `01_MISSION_AND_AUTHORITY.md:5, 26, 33`.
   complete closure to the exact versions the root `uv.lock` already carries (section
   2.7), so `uv lock --offline` resolves from the local cache the core populated. If the
   offline resolution fails, the exact missing distribution is reported once as
-  acquisition boundary P2-B2 and the plan stops before Task 1 step 3; nothing is acquired.
+  acquisition boundary P2-B2; nothing is acquired. P2-B2 blocks only the operations that
+  need the core distribution in the sub-project environment (the path dependency, the
+  core models, the identity hash, the core `Failure`/`Diagnostic` types): Task 1's scaffold,
+  launcher, fixtures and the reader's grammar and parsing rules, and Task 2's pure
+  validation rules, continue in a provisional stdlib-only environment with a local
+  provisional refusal record that is replaced (not adapted) by the core `Failure` when the
+  environment resolves; Task 3 and every core-contract assertion wait for the resolution.
 - **Parquet boundary (P2-B1).** The specification makes dataset partitions Parquet files
   (specification lines 384, 1309). Parquet emission needs `pyarrow`, which is a prohibited
   family in the core and not approved for acquisition anywhere. This slice emits the
@@ -236,9 +244,11 @@ converted to `Failure`; no exception crosses the sub-project's public functions.
   `[tool.mypy]` (strict, `files = ["src", "tests"]`), `[tool.pytest.ini_options]`
   (`testpaths = ["tests"]`, branch coverage on `crypto_lab_offline_data`,
   `--cov-fail-under=90` mirroring the core's configured floor) and `[tool.coverage]`.
-  The core's `ruff-check-all` (`ruff check .` from the repository root) traverses
-  `offline_data/` and applies this nested configuration by hierarchical discovery; that
-  stage of the core's `verify.ps1` must stay green over the sub-project.
+  The core's `ruff-check-all` (`ruff check .` from the repository root) and
+  `ruff-format-all` (`ruff format --check .`) traverse `offline_data/` and apply this nested
+  configuration by hierarchical discovery; those stages of the core's `verify.ps1` must
+  stay green over the sub-project, and the repository's completion rule (`AGENTS.md`: run
+  `scripts/verify.ps1` before claiming completion) applies to every Project 2 task.
 - The sub-project's own `scripts/invoke-offline-uv.ps1` mirrors the core launcher's
   closed profile set (`lock-check`, `lock-resolve-offline`, `sync`, `pytest-focused`,
   `ruff-format-all`, `ruff-check-all`, `mypy-all`) with the same `--offline`,
@@ -275,7 +285,7 @@ acceptance; a refuted reading stops the task that depends on it.
 **Core guards: no transition.** No path under `src/crypto_lab`, `tests`, `schemas` or
 `scripts` changes, so the Stage 3-9 censuses (source files, import roots, deferred
 names) are untouched and need no reconciliation table. Core stages that reach the
-sub-project: only `ruff-check-all` (section 2.3). Core stages that do not: `mypy-all`
+sub-project: `ruff-format-all` and `ruff-check-all` (section 2.3). Core stages that do not: `mypy-all`
 (`files = src, tests, scripts`), `pytest` (`testpaths = tests`), coverage
 (`source = crypto_lab`), hatch sdist and wheel (explicit lists), schema distribution and
 generation (`schemas/` only), the stage censuses (rooted at `src/crypto_lab`, `tests`,
@@ -311,10 +321,11 @@ work from the local cache:
   `librt==0.15.0`, `hatchling==1.31.0`, `trove-classifiers==2026.6.1.19` (the sub-project
   imports no yaml, so `types-pyyaml` is not carried).
 
-Task 1 step 3 proves, in this order and offline: `lock-resolve-offline` succeeds;
+Task 1 step 0 proves, in this order and offline: `lock-resolve-offline` succeeds;
 `lock-check` passes; `offline_data/uv.lock` records `crypto-trading-lab` with a
 `directory = "../"` source; `sync` builds the core wheel without isolation. Any failure is
-reported once with the exact uv message as P2-B2 and the plan stops there.
+reported once with the exact uv message as P2-B2 and only the dependency-blocked work
+stops (Global Constraints); the independently useful work continues.
 
 ### 2.8 Dependency acquisition gates
 
@@ -479,9 +490,8 @@ models in strict JSON mode and recomputes the hash with the core's function.
 ## 7. Task decomposition
 
 Each task: test-first, one commit, clean worktree, `offline_data/scripts/verify-offline.ps1`
-green before the commit, plus one run of the core's `ruff-check-all` to prove the
-sub-project is clean under the core's lint stage. The sub-project never touches the
-core's paths.
+green and then the core's `scripts/verify.ps1` green (run alone, serialized by the
+controller) before the commit. The sub-project never touches the core's paths.
 
 ### Task 1 - Sub-project scaffold, pinned environment, launcher, verify script and the `ohlcv-csv/1` reader
 
@@ -519,6 +529,12 @@ closure of section 2.7 offline (otherwise boundary P2-B2 is reported and the pla
 `CandleRow` (frozen dataclass: `open_time_utc: datetime`, `open/high/low/close/volume: Decimal`, `line: int`);
 `refusal(code, *, line, value_length, ids, clock) -> Failure`.
 
+- [ ] **Step 0 Bootstrap (no production behaviour).** Create `offline_data/pyproject.toml`,
+  `scripts/invoke-offline-uv.ps1`, `scripts/verify-offline.ps1`, `tests/conftest.py`, the
+  fixtures and an empty `crypto_lab_offline_data/__init__.py`; run the four ordered offline
+  proofs of section 2.7. Nothing here is a behaviour under test; it exists so that step 1
+  can run RED through the launcher. On P2-B2, record the boundary and continue step 1 with
+  the provisional stdlib-only environment (Global Constraints).
 - [ ] **Step 1 Focused RED.**
 
 | File | Test | Fails because |
@@ -529,10 +545,10 @@ closure of section 2.7 offline (otherwise boundary P2-B2 is reported and the pla
 | `tests/unit/test_providers.py` | injected ids and clock are used; production ids satisfy the core prefix grammar | module absent |
 | `tests/safety/test_boundaries.py` | dependency pins, forbidden families, forbidden imports, lock source record, no root writes | sub-project absent |
 
-- [ ] **Step 2** Run the RED set through `invoke-offline-uv.ps1 pytest-focused`; record the failures.
-- [ ] **Step 3 Minimum GREEN.** Scaffold; the four offline proofs of section 2.7 in order; reader, diagnostics, providers.
-- [ ] **Step 4 Focused GREEN.** `invoke-offline-uv.ps1 pytest-focused tests -q`.
-- [ ] **Step 5** `verify-offline.ps1` green; the core's `ruff-check-all` green; independent review of R1, R2, R6, the launcher and the boundary tests; commit
+- [ ] **Step 2** Run the RED set through `invoke-offline-uv.ps1 pytest-focused tests/unit/test_candle_csv.py tests/unit/test_providers.py tests/safety/test_boundaries.py -q`; record the failures.
+- [ ] **Step 3 Minimum GREEN.** Reader, diagnostics, providers.
+- [ ] **Step 4 Focused GREEN.** `invoke-offline-uv.ps1 pytest-focused tests/unit/test_candle_csv.py tests/unit/test_providers.py tests/safety/test_boundaries.py -q` (the launcher's target grammar requires explicit `tests/...` paths, never a bare `tests`).
+- [ ] **Step 5** `verify-offline.ps1` green; the core's `scripts/verify.ps1` green; independent review of R1, R2, R6, the launcher and the boundary tests; commit
   `feat(offline-data): scaffold the isolated sub-project and the ohlcv-csv/1 reader`.
 
 ### Task 2 - Validation, normalization and checksums
@@ -562,8 +578,8 @@ closure of section 2.7 offline (otherwise boundary P2-B2 is reported and the pla
 - [ ] **Step 1 Focused RED.** One test per section 4 row for both valid fixtures and the
   four new invalid fixtures; container byte-exactness and checksum tests; `row_count`
   equals the container's line count; idempotency.
-- [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN.**
-- [ ] **Step 5** `verify-offline.ps1` green; the core's `ruff-check-all` green; review of R4, R5 and the no-fabrication rule; commit
+- [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN** (`pytest-focused tests/unit/test_validation.py tests/unit/test_normalize.py tests/unit/test_candle_csv.py -q`).
+- [ ] **Step 5** `verify-offline.ps1` green; the core's `scripts/verify.ps1` green; review of R4, R5 and the no-fabrication rule; commit
   `feat(offline-data): validate and normalize ohlcv-csv/1 series with explicit gaps and duplicates`.
 
 ### Task 3 - Metadata emission, command entry and goldens
@@ -598,20 +614,19 @@ through a command, with goldens and the consumer check.
   (R4), the emitted JSON re-parses through the core models in strict JSON mode,
   `--output` handling of section 6, a refused input writes nothing, exit codes. The
   golden-equality tests are added after the first GREEN run captures the goldens.
-- [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN.**
-- [ ] **Step 5** `verify-offline.ps1` green; the core's `ruff-check-all` green; review of R3 and the goldens; commit
+- [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN** (`pytest-focused tests/unit/test_metadata.py tests/unit/test_cli.py tests/integration/test_core_contract_roundtrip.py -q`).
+- [ ] **Step 5** `verify-offline.ps1` green; the core's `scripts/verify.ps1` green; review of R3 and the goldens; commit
   `feat(offline-data): emit dataset descriptor and partition metadata with the core identity hash`.
 
 ## 8. Verification and acceptance
 
 - Per task: `offline_data/scripts/verify-offline.ps1` (lock check, sync, format, lint,
-  strict types, tests with branch coverage >= 98.61 percent, whitespace) green, run alone
-  on the host (never concurrently with the core's `verify.ps1`; the controller serializes
-  heavy runs), plus the core's `ruff-check-all` green.
+  strict types, tests with branch coverage >= 98.61 percent, whitespace) green, then the
+  core's `scripts/verify.ps1` green, each run alone on the host (the controller serializes
+  heavy runs; the core verifier's format and lint stages traverse the sub-project and the
+  repository's completion rule requires the full core verifier before completion is
+  claimed).
 - Per task: one independent review of the task diff; corrective rounds are incremental.
-- The core's own `scripts/verify.ps1` is NOT part of this plan's gate because no core
-  path changes; its lint stage is the one stage that traverses the sub-project and is
-  proven per task as above.
 - Acceptance of the slice: all three tasks accepted and published on
   `project-2-offline-data-implementation`; goldens committed; README documents the
   supported format, the limitations and the two reporting boundaries.
@@ -628,6 +643,8 @@ through a command, with goldens and the consumer check.
 
 ## 10. Rollback and completion
 
-Each task is one commit on the implementation branch; rollback is a non-rewriting revert.
+Every revision of this plan is re-hashed and independently re-reviewed before dispatch;
+the mission gate pins the reviewed sha256 and commit. Each task is one commit on the
+implementation branch; rollback is a non-rewriting revert.
 The slice is complete when section 8 holds for all three tasks; the token recorded on
 acceptance is `P2_SLICE1_PLAN_COMPLETE`.
