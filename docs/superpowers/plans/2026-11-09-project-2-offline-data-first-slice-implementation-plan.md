@@ -8,8 +8,8 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 2 (after independent review round 1, verdict REQUEST_CHANGES on
-sha256 `44174509...`): for advisor acceptance and independent review (owner authorization
+**Status.** Revision 3 (round 1 REQUEST_CHANGES on sha256 `44174509...`; round 2 APPROVE on
+`6804539e...` with four MINOR notes folded in here): for advisor acceptance (owner authorization
 "TWO PARALLEL PRODUCT WORKSTREAMS", 2026-11-09, section 3). Not accepted.
 
 **Planning base.** Repository `Crypto_Trading`, branch `project-2-offline-data-plan`
@@ -288,8 +288,10 @@ source) and nothing else; pins the dev group to the exact set of section 2.7; fo
 `pandas`, `pyarrow`, `polars`, `numpy`, `requests`, `httpx` and the other prohibited
 families by name in the sub-project lock; forbids any `socket`, `urllib`, `http`,
 `subprocess` or `os.environ` import in `crypto_lab_offline_data`; asserts the lock
-records `crypto-trading-lab` with a `directory = "../"` source; and asserts no file is
-written outside the caller's output directory.
+records `crypto-trading-lab` with a `directory = "../"` source; asserts every package
+version recorded in `offline_data/uv.lock` equals the section 2.7 list (so the
+`constraint-dependencies` under `[tool.uv]` are proven honoured, like the path source);
+and asserts no file is written outside the caller's output directory.
 
 ### 2.7 Toolchain gates and the exact pinned closure
 
@@ -306,8 +308,8 @@ work from the local cache:
 - dev: `pytest==8.4.2`, `pluggy==1.6.0`, `iniconfig==2.3.0`, `packaging==26.3`,
   `colorama==0.4.6`, `pygments==2.20.0`, `pytest-cov==6.3.0`, `coverage==7.15.4`,
   `ruff==0.16.2`, `mypy==1.20.2`, `mypy-extensions==1.1.0`, `pathspec==1.1.1`,
-  `librt==0.15.0`, `hatchling==1.31.0`, `trove-classifiers==2026.6.1.19`,
-  `types-pyyaml==6.0.12.20260815`.
+  `librt==0.15.0`, `hatchling==1.31.0`, `trove-classifiers==2026.6.1.19` (the sub-project
+  imports no yaml, so `types-pyyaml` is not carried).
 
 Task 1 step 3 proves, in this order and offline: `lock-resolve-offline` succeeds;
 `lock-check` passes; `offline_data/uv.lock` records `crypto-trading-lab` with a
@@ -334,7 +336,9 @@ reporting boundaries, not acquisitions.
   refusal, never a truncation.
 - Empty file, header-only file, wrong header, wrong field count, blank line inside the
   body, non-UTF-8 bytes: refused with a diagnostic naming the one-based line number and
-  the rule, never the offending value (only its length and position are recorded).
+  the rule, never the offending value (only its length and position are recorded). A
+  header-only file is the reader's `OFFLINE_DATA.EMPTY_SERIES` refusal, the same code
+  `validate_series` returns for an empty row tuple, so Task 1 and Task 2 pin one answer.
 - Identity of the raw input: `raw_checksum` is SHA-256 of the exact input bytes.
 
 ## 4. Validation and normalization rules
@@ -432,8 +436,8 @@ documentation calls it a Parquet partition, and it never enters a persistent reg
   `OFFLINE_DATA.CSV_HEADER`, `OFFLINE_DATA.CSV_ROW_SHAPE`, `OFFLINE_DATA.CSV_TIMESTAMP`,
   `OFFLINE_DATA.CSV_NUMBER`, `OFFLINE_DATA.SIZE_CEILING`, `OFFLINE_DATA.ORDERING`,
   `OFFLINE_DATA.TIMEFRAME_GRID`, `OFFLINE_DATA.PRICE_SANITY`, `OFFLINE_DATA.VOLUME`,
-  `OFFLINE_DATA.EMPTY_SERIES`, `OFFLINE_DATA.OUTPUT_DIRECTORY`; `category`
-  `SCHEMA_VALIDATION`; `source_component = "crypto-lab-offline-data"`;
+  `OFFLINE_DATA.EMPTY_SERIES`, `OFFLINE_DATA.OUTPUT_DIRECTORY`; `severity = ERROR`;
+  `category` `SCHEMA_VALIDATION`; `source_component = "crypto-lab-offline-data"`;
   `retriable = False`; `message` names the line and rule only; `details` carries
   `{"line": n, "rule": code, "value_length": k}`; `timestamp_utc` from the injected clock.
 - Content hash: build the descriptor with `content_hash = "0" * 64`, compute
