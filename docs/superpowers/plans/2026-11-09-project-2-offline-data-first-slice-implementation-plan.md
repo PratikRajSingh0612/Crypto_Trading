@@ -8,7 +8,14 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 11 (round 10 REQUEST_CHANGES on sha256 `7c6f2cfb...`, revision 10: three
+**Status.** Revision 12 (round 11 REQUEST_CHANGES on sha256 `ace22812...`, revision 11: two
+IMPORTANT findings folded in here, the exit table's `--output` contradiction (an `--output`
+refusal is `OUTPUT_DIRECTORY`, exit 1; exit 2 is argument parsing only) and the untestable
+"leave nothing under --output" wording with its unstated creation order (now: write nothing,
+pre-existing entries untouched, directory created immediately before the first write after
+the input is validated and the providers drawn); four MINOR items (line 0 defined once in 5.4,
+the INPUT_PATH RED row pins every scoped case, the draw rule reworded, the snapshot providers
+passed to `build_dataset_metadata`); revision 11 history: round 10 REQUEST_CHANGES on sha256 `7c6f2cfb...`, revision 10: three
 IMPORTANT findings on R7 folded in here: an `OSError` on opening the input also crossed the
 boundary (now the refusal `OFFLINE_DATA.INPUT_PATH`), a `ValueError`-rooted exception would be
 swallowed by the boundary's own conversion (now `RuntimeError`-rooted with a draw-once rule),
@@ -259,20 +266,25 @@ JSON schemas, inside an isolated sub-project environment.
   yields a malformed prefixed identifier or a naive or non-UTC instant is a fault of the
   caller's composition, not of the input: the core's `Diagnostic` cannot be built from it
   (`diagnostic_id` and `timestamp_utc` are validated by the core), so no `Failure` exists to
-  return. The sub-project draws and validates every provider value once, before any core
-  model is constructed and never inside a `try` body whose handler catches `ValueError` or
-  `ValidationError`, and raises `ProviderContractError`, a sub-project exception deriving
-  from `RuntimeError` (so the boundary's `ValueError` conversion can never swallow it),
-  defined in `diagnostics.py`, naming the provider method and never carrying the value, from
-  the public functions `refusal` and `read_ohlcv_csv` (Task 1), `validate_series` (Task 2) and
-  `build_dataset_metadata` and `normalize_command` (Task 3). The command draws and validates
-  its provider values before its first write and reuses those draws, so a provider fault
-  exits with code 3 and leaves nothing under `--output`. `ProviderContractError` is the only
-  exception that crosses the sub-project's public boundary: a missing, unreadable or
-  unsuitable input path is the refusal `OFFLINE_DATA.INPUT_PATH` (section 5.4), not an
-  `OSError` escaping. Tests pin the exception for a malformed `diag_` id and for a naive
-  instant, pin that neither the core `ValidationError` nor `OSError` escapes, and pin the
-  command's exit codes (0 success, 1 refusal, 2 usage or `--output` error, 3 provider fault).
+  return. Each provider value is validated when it is drawn, before any core model is
+  constructed from it and never inside a `try` body whose handler catches `ValueError` or
+  `ValidationError`; a refused value raises `ProviderContractError`, a sub-project exception
+  deriving from `RuntimeError` (so the boundary's `ValueError` conversion can never swallow
+  it), defined in `diagnostics.py`, naming the provider method and never carrying the value,
+  from the public functions `refusal` and `read_ohlcv_csv` (Task 1), `validate_series` (Task 2)
+  and `build_dataset_metadata` and `normalize_command` (Task 3). The command draws its provider
+  values after the input is read and validated and before its first write, snapshots them
+  into fixed providers that it passes to `build_dataset_metadata`, draws none after the first
+  write, and creates `--output` immediately before that first write; so a provider fault
+  exits with code 3 having written nothing under `--output` (pre-existing entries untouched).
+  `ProviderContractError` is the only exception that crosses the sub-project's public
+  boundary: a missing, unreadable or unsuitable input path is the refusal
+  `OFFLINE_DATA.INPUT_PATH` (section 5.4), not an `OSError` escaping. Tests pin the exception
+  for a malformed `diag_` id and for a naive instant, pin that neither the core
+  `ValidationError` nor `OSError` escapes, and pin the command's exit codes: 0 success; 1
+  refusal (`Failure`, including `OFFLINE_DATA.INPUT_PATH` and `OFFLINE_DATA.OUTPUT_DIRECTORY`,
+  the latter for an `--output` that is a file, a reparse point or cannot be created); 2
+  argument parsing only; 3 provider fault. Exits 1, 2 and 3 write nothing under `--output`.
   This replaces the P2-T1 attempt's interim reading (the core `ValidationError` propagating)
   and narrows revision 9's blanket conversion rule in section 2.2 to data-dependent values.
 
@@ -435,7 +447,8 @@ reporting boundaries, not acquisitions.
 - Size ceilings: at most 1,048,576 rows and 64 MiB per input; exceeding either is a
   refusal, never a truncation.
 - Empty file, header-only file, wrong header, wrong field count, blank line inside the
-  body, non-UTF-8 bytes: refused with a diagnostic naming the one-based line number and
+  body, non-UTF-8 bytes: refused with a diagnostic naming the one-based line number (0 for a
+  whole-input refusal, section 5.4) and
   the rule, never the offending value (only its length and position are recorded). A
   header-only file is the reader's `OFFLINE_DATA.EMPTY_SERIES` refusal, the same code
   `validate_series` returns for an empty row tuple, so Task 1 and Task 2 pin one answer.
@@ -537,10 +550,13 @@ documentation calls it a Parquet partition, and it never enters a persistent reg
   `OFFLINE_DATA.CSV_HEADER`, `OFFLINE_DATA.CSV_ROW_SHAPE`, `OFFLINE_DATA.CSV_TIMESTAMP`,
   `OFFLINE_DATA.CSV_NUMBER`, `OFFLINE_DATA.SIZE_CEILING`, `OFFLINE_DATA.ORDERING`,
   `OFFLINE_DATA.TIMEFRAME_GRID`, `OFFLINE_DATA.PRICE_SANITY`, `OFFLINE_DATA.VOLUME`,
-  `OFFLINE_DATA.EMPTY_SERIES`, `OFFLINE_DATA.OUTPUT_DIRECTORY`, `OFFLINE_DATA.INPUT_PATH` (the
-  input path is missing, unreadable, a directory or a reparse point, or the bounded read
-  fails: `line` 0, `value_length` 0, the message names the rule and never the path; raised
-  by `read_ohlcv_csv` and mapped by the command like any refusal); `severity = ERROR`;
+  `OFFLINE_DATA.EMPTY_SERIES`, `OFFLINE_DATA.OUTPUT_DIRECTORY` (emitted by `normalize_command`
+  for an `--output` that is a file, a reparse point or cannot be created; exit 1),
+  `OFFLINE_DATA.INPUT_PATH` (the input path is missing, unreadable, a directory or a reparse
+  point, or the bounded read fails: `line` 0, `value_length` 0, the message names the rule and
+  never the path; raised by `read_ohlcv_csv` and mapped by the command like any refusal);
+  `line` 0 denotes a whole-input refusal (`INPUT_PATH`, `SIZE_CEILING` by bytes) and every
+  other refusal names the one-based line; `severity = ERROR`;
   `category` `SCHEMA_VALIDATION`; `source_component = "crypto-lab-offline-data"`;
   `retriable = False`; `message` names the line and rule only; `details` carries
   `{"line": n, "rule": code, "value_length": k}`; `timestamp_utc` from the injected clock.
@@ -716,7 +732,7 @@ worker, never provisioned by it.
 |---|---|---|
 | `tests/unit/test_candle_csv.py` | `test_clean_fixture_reads_sixty_rows_as_decimals_and_utc` | module absent |
 | `tests/unit/test_candle_csv.py` | one test per invalid fixture asserting a `Failure` whose diagnostic carries the code, line and value length and never the value | module absent |
-| `tests/unit/test_candle_csv.py` | a missing path, a directory and an unreadable file are `OFFLINE_DATA.INPUT_PATH` at line 0 with value_length 0, the message never names the path, and no `OSError` escapes | module absent |
+| `tests/unit/test_candle_csv.py` | a missing path, a directory, an unreadable file, a reparse point and a bounded read that fails are `OFFLINE_DATA.INPUT_PATH` at line 0 with value_length 0, the message never names the path, and no `OSError` escapes | module absent |
 | `tests/unit/test_candle_csv.py` | `test_size_ceilings_refuse_without_truncation` | module absent |
 | `tests/unit/test_providers.py` | injected ids and clock are used; production ids satisfy the core prefix grammar; a malformed `diag_` id and a naive instant raise `ProviderContractError` from `refusal` and `read_ohlcv_csv`; the core `ValidationError` does not escape (R7) | module absent |
 | `tests/safety/test_boundaries.py` | import purity of `crypto_lab_offline_data` (module census `candle_csv`, `diagnostics`, `providers` present and no forbidden imports) and the reader writes nothing (`tmp_path` and the working directory unchanged after reading a fixture) | module census absent; GREEN at Step 3 |
@@ -784,11 +800,14 @@ through a command, with goldens and the consumer check.
 
 **Interfaces produced.** `build_dataset_metadata(series, container, *, instrument, timeframe, source, ids, clock) -> Success[DatasetBundle] | Failure`
 (`DatasetBundle`: `descriptor`, `partitions`); `normalize_command(argv, *, ids, clock) -> int` writing
-`descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`; exit codes 0 success,
-1 refusal (`Failure`, including `OFFLINE_DATA.INPUT_PATH`), 2 usage or `--output` error, 3
-provider fault (`ProviderContractError`, R7); the command draws and validates every provider
-value before its first write and reuses those draws, so exits 1, 2 and 3 leave nothing under
-`--output`.
+`descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`; exit codes 0 success;
+1 refusal (`Failure`, including `OFFLINE_DATA.INPUT_PATH` and `OFFLINE_DATA.OUTPUT_DIRECTORY`:
+an `--output` that is a file, a reparse point or cannot be created); 2 argument parsing only;
+3 provider fault (`ProviderContractError`, R7). The command reads and validates the input,
+then draws its provider values once and snapshots them into fixed providers passed to
+`build_dataset_metadata`, creates `--output` immediately before its first write, and draws
+nothing after that write; exits 1, 2 and 3 write nothing under `--output` (pre-existing
+entries untouched).
 
 - [ ] **Step 1 Focused RED.** Descriptor and partition field mapping (section 5.1, every
   field), the section 5.4 content-hash construction, `validate_dataset_identity` passes,
