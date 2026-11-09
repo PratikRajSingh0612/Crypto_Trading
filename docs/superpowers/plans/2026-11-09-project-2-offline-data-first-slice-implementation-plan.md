@@ -8,10 +8,11 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 4 (independent review: round 1 REQUEST_CHANGES on sha256 `44174509...`,
-round 2 APPROVE on `6804539e...`, re-pinned APPROVE on `b34034a4...`; advisor acceptance turn
-on `b34034a4...`: REJECTED with four binding conditions, folded in here): for advisor
-acceptance and independent re-review (owner authorization
+**Status.** Revision 5 (independent review: round 1 REQUEST_CHANGES on sha256 `44174509...`,
+round 2 APPROVE on `6804539e...`, re-pinned APPROVE on `b34034a4...`, round 4
+REQUEST_CHANGES on `4ddc6b4f...` (P2-B2 bounding and the boundary-test RED row, folded in
+here); advisor acceptance turn on `b34034a4...`: REJECTED with four binding conditions,
+folded into revision 4): for advisor acceptance and independent re-review (owner authorization
 "TWO PARALLEL PRODUCT WORKSTREAMS", 2026-11-09, section 3). Not accepted.
 
 **Planning base.** Repository `Crypto_Trading`, branch `project-2-offline-data-plan`
@@ -67,13 +68,16 @@ acceptance); `01_MISSION_AND_AUTHORITY.md:5, 26, 33`.
   complete closure to the exact versions the root `uv.lock` already carries (section
   2.7), so `uv lock --offline` resolves from the local cache the core populated. If the
   offline resolution fails, the exact missing distribution is reported once as
-  acquisition boundary P2-B2; nothing is acquired. P2-B2 blocks only the operations that
-  need the core distribution in the sub-project environment (the path dependency, the
-  core models, the identity hash, the core `Failure`/`Diagnostic` types): Task 1's scaffold,
-  launcher, fixtures and the reader's grammar and parsing rules, and Task 2's pure
-  validation rules, continue in a provisional stdlib-only environment with a local
-  provisional refusal record that is replaced (not adapted) by the core `Failure` when the
-  environment resolves; Task 3 and every core-contract assertion wait for the resolution.
+  acquisition boundary P2-B2; nothing is acquired. P2-B2 blocks every operation that needs
+  the sub-project environment: no interpreter route other than the launcher's pinned
+  `offline_data/.venv` exists (no `uv run`, no system Python, no provisional runner), so
+  while P2-B2 is open the independently useful work is authoring only: the reader,
+  validation and normalization modules, the fixtures and their tests are written in the
+  working tree against the core types named in section 2.2 and are NOT executed. No
+  provisional type, refusal record or substitute of any core contract is created, no task
+  reaches its Step 5 or is committed as complete, and nothing is serialized, emitted or
+  published until the environment resolves and the authored tests run RED then GREEN
+  through the launcher.
 - **Parquet boundary (P2-B1).** The specification makes dataset partitions Parquet files
   (specification lines 384, 1309). Parquet emission needs `pyarrow`, which is a prohibited
   family in the core and not approved for acquisition anywhere. This slice emits the
@@ -321,11 +325,11 @@ work from the local cache:
   `librt==0.15.0`, `hatchling==1.31.0`, `trove-classifiers==2026.6.1.19` (the sub-project
   imports no yaml, so `types-pyyaml` is not carried).
 
-Task 1 step 0 proves, in this order and offline: `lock-resolve-offline` succeeds;
-`lock-check` passes; `offline_data/uv.lock` records `crypto-trading-lab` with a
-`directory = "../"` source; `sync` builds the core wheel without isolation. Any failure is
-reported once with the exact uv message as P2-B2 and only the dependency-blocked work
-stops (Global Constraints); the independently useful work continues.
+Task 1 step 0 proves, in this order and offline: `lock-resolve-offline` succeeds (this
+proof produces `offline_data/uv.lock`); `lock-check` passes; `offline_data/uv.lock` records
+`crypto-trading-lab` with a `directory = "../"` source; `sync` builds the core wheel without
+isolation. Any failure is reported once with the exact uv message as P2-B2; from then on
+only authoring continues (Global Constraints) until the environment resolves.
 
 ### 2.8 Dependency acquisition gates
 
@@ -529,12 +533,12 @@ closure of section 2.7 offline (otherwise boundary P2-B2 is reported and the pla
 `CandleRow` (frozen dataclass: `open_time_utc: datetime`, `open/high/low/close/volume: Decimal`, `line: int`);
 `refusal(code, *, line, value_length, ids, clock) -> Failure`.
 
-- [ ] **Step 0 Bootstrap (no production behaviour).** Create `offline_data/pyproject.toml`,
+- [ ] **Step 0 Bootstrap (no production behaviour; its artifacts are pinned by the Step 1
+  guards).** Create `offline_data/pyproject.toml`, `offline_data/README.md`,
   `scripts/invoke-offline-uv.ps1`, `scripts/verify-offline.ps1`, `tests/conftest.py`, the
   fixtures and an empty `crypto_lab_offline_data/__init__.py`; run the four ordered offline
-  proofs of section 2.7. Nothing here is a behaviour under test; it exists so that step 1
-  can run RED through the launcher. On P2-B2, record the boundary and continue step 1 with
-  the provisional stdlib-only environment (Global Constraints).
+  proofs of section 2.7 (the first produces `offline_data/uv.lock`). On P2-B2, record the
+  boundary once and continue as authoring only (Global Constraints).
 - [ ] **Step 1 Focused RED.**
 
 | File | Test | Fails because |
@@ -543,7 +547,8 @@ closure of section 2.7 offline (otherwise boundary P2-B2 is reported and the pla
 | `tests/unit/test_candle_csv.py` | one test per invalid fixture asserting a `Failure` whose diagnostic carries the code, line and value length and never the value | module absent |
 | `tests/unit/test_candle_csv.py` | `test_size_ceilings_refuse_without_truncation` | module absent |
 | `tests/unit/test_providers.py` | injected ids and clock are used; production ids satisfy the core prefix grammar | module absent |
-| `tests/safety/test_boundaries.py` | dependency pins, forbidden families, forbidden imports, lock source record, no root writes | sub-project absent |
+| `tests/safety/test_boundaries.py` | import purity of `crypto_lab_offline_data` and no writes outside the output directory | package body and command absent (GREEN at Step 3 and Task 3) |
+| `tests/safety/test_boundaries.py` | dependency pins, forbidden families, lock version equality, lock source record | guards GREEN by construction after Step 0; proven by a working-tree negative control (a temporarily altered pin or lock line, run RED, reverted, never committed) |
 
 - [ ] **Step 2** Run the RED set through `invoke-offline-uv.ps1 pytest-focused tests/unit/test_candle_csv.py tests/unit/test_providers.py tests/safety/test_boundaries.py -q`; record the failures.
 - [ ] **Step 3 Minimum GREEN.** Reader, diagnostics, providers.
