@@ -8,7 +8,12 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 9 (round 8 REQUEST_CHANGES on sha256 `0c8b4650...`, revision 8: one
+**Status.** Revision 10 (the Project 2 advisor decided BLOCKED for P2-T1 on 2026-11-09 at
+21:01Z: sections 2.2 and 5.4 named no failure mechanism for an injected provider whose value
+the core refuses, because no `Failure` can be built without a valid `Diagnostic`; this
+revision adds declared reading R7 and the `ProviderContractError` mechanism in sections 1.6,
+2.2, 2.5, 5.4 and the Task 1 and Task 3 interface lists, and changes nothing else; revision 9
+history: round 8 REQUEST_CHANGES on sha256 `0c8b4650...`, revision 8: one
 IMPORTANT, the tense of the authority-record clause, and four MINOR wording items folded in
 here, every round-7 IMPORTANT confirmed closed; round 7 REQUEST_CHANGES on sha256 `09581069...`, revision 7: seven
 IMPORTANT and five MINOR findings folded in here, the Task 0 design confirmed sound and
@@ -244,6 +249,19 @@ JSON schemas, inside an isolated sub-project environment.
   data model". Task 0 proves that the `[tool.uv.sources]` path source is honoured under
   the launcher's `--no-config` controls (section 2.7); if it is not, Task 0 stops as
   P2-B2 with the exact uv message.
+- **R7 Provider faults are composition faults.** An injected `IdProvider` or `Clock` that
+  yields a malformed prefixed identifier or a naive or non-UTC instant is a fault of the
+  caller's composition, not of the input: the core's `Diagnostic` cannot be built from it
+  (`diagnostic_id` and `timestamp_utc` are validated by the core), so no `Failure` exists to
+  return. The sub-project validates each provider value where it is consumed and raises
+  `ProviderContractError`, a sub-project exception deriving from `ValueError`, defined in
+  `diagnostics.py`, naming the provider method and never carrying the value, from the
+  public functions `refusal` and `read_ohlcv_csv` (Task 1) and `build_dataset_metadata` and
+  `normalize_command` (Task 3; the command maps it to exit code 3 and writes no output). It is
+  the only exception that crosses the sub-project's public boundary; tests pin it with
+  `pytest.raises(ProviderContractError)` and pin that the core `ValidationError` does not
+  escape. This replaces the earlier declared reading that the core `ValidationError`
+  propagates.
 
 ## 2. Authority, consumed interfaces, readings and reconciliation
 
@@ -271,8 +289,13 @@ README. Advisor and reviewer output is advisory and cannot override the first th
 
 The implementer re-reads each consumed module before use and refuses to proceed if a
 blob differs from the pinned identity (report the drift; do not adapt silently). Core
-`ValueError` and Pydantic `ValidationError` are caught at the sub-project boundary and
-converted to `Failure`; no exception crosses the sub-project's public functions.
+`ValueError` and Pydantic `ValidationError` raised for data-dependent values (anything
+derived from the input) are caught at the sub-project boundary and converted to
+`Failure`; no such exception crosses the sub-project's public functions. The one
+deliberate exception is a composition fault: an injected provider value the core refuses
+makes a `Failure` unconstructible, so it is raised as the sub-project's
+`ProviderContractError` (reading R7, section 1.6), never converted and never surfaced as a
+bare core exception.
 
 ### 2.3 Placement decisions
 
@@ -324,7 +347,7 @@ is monkeypatched, subclassed with overridden validators, or re-implemented;
 
 ### 2.5 Declared readings of the specification
 
-R1-R6 in section 1.6. The reviewer confirms each against the quoted lines before
+R1-R7 in section 1.6. The reviewer confirms each against the quoted lines before
 acceptance; a refuted reading stops the task that depends on it.
 
 ### 2.6 Closed-world guard reconciliation
@@ -491,9 +514,10 @@ documentation calls it a Parquet partition, and it never enters a persistent reg
 
 - `IdProvider` protocol (sub-project): `dataset_id() -> str`, `partition_id() -> str`,
   `diagnostic_id() -> str`, each validated with the core's `validate_prefixed_uuid4`
-  against its prefix; the production provider mints UUID4; tests inject fixed values.
-- `Clock` protocol (sub-project): `now_utc() -> datetime` (timezone-aware UTC); tests
-  inject a fixed instant.
+  against its prefix (a refused value raises `ProviderContractError`, R7); the production
+  provider mints UUID4; tests inject fixed values.
+- `Clock` protocol (sub-project): `now_utc() -> datetime` (timezone-aware UTC; a naive or
+  non-UTC instant raises `ProviderContractError`, R7); tests inject a fixed instant.
 - Diagnostics: `error_code` from the closed set `OFFLINE_DATA.CSV_ENCODING`,
   `OFFLINE_DATA.CSV_HEADER`, `OFFLINE_DATA.CSV_ROW_SHAPE`, `OFFLINE_DATA.CSV_TIMESTAMP`,
   `OFFLINE_DATA.CSV_NUMBER`, `OFFLINE_DATA.SIZE_CEILING`, `OFFLINE_DATA.ORDERING`,
@@ -660,7 +684,8 @@ worker, never provisioned by it.
 
 **Interfaces produced.** `IdProvider`, `Clock` (section 5.4); `read_ohlcv_csv(path, *, ids, clock, max_rows, max_bytes) -> Success[tuple[CandleRow, ...]] | Failure`;
 `CandleRow` (frozen dataclass: `open_time_utc: datetime`, `open/high/low/close/volume: Decimal`, `line: int`);
-`refusal(code, *, line, value_length, ids, clock) -> Failure`.
+`refusal(code, *, line, value_length, ids, clock) -> Failure`;
+`ProviderContractError` (diagnostics module, R7).
 
 - [ ] **Step 0 Confirm the base (no execution).** The worktree is at the Task 0 commit;
   `offline_data/.venv` exists (synced by the operator's Task 0 proofs); the sub-project
@@ -739,7 +764,8 @@ through a command, with goldens and the consumer check.
 
 **Interfaces produced.** `build_dataset_metadata(series, container, *, instrument, timeframe, source, ids, clock) -> Success[DatasetBundle] | Failure`
 (`DatasetBundle`: `descriptor`, `partitions`); `normalize_command(argv, *, ids, clock) -> int` writing
-`descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`.
+`descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`; exit code 3 and no
+output written on `ProviderContractError` (R7).
 
 - [ ] **Step 1 Focused RED.** Descriptor and partition field mapping (section 5.1, every
   field), the section 5.4 content-hash construction, `validate_dataset_identity` passes,
