@@ -8,7 +8,11 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 14 (round 13 REQUEST_CHANGES on sha256 `b36108cb...`, revision 13: one IMPORTANT
+**Status.** Revision 15 (round 14 REQUEST_CHANGES on sha256 `8de3b56c...`, revision 14: one IMPORTANT
+clause folded in here, a failed write of `descriptor.json` or `partitions.json` by the command now
+converts to `OUTPUT_DIRECTORY` with every created file removed in reverse order, stated in 5.4, 2.2
+and the Task 3 interface, and one MINOR repeat of the removal-failure clause at Task 3; revision 14
+history: round 13 REQUEST_CHANGES on sha256 `b36108cb...`, revision 13: one IMPORTANT
 folded in here, the Task 3 signature could carry neither the raw checksum nor the input name that
 section 5.1 requires and the command sequence never placed `raw_checksum`; five MINOR items: the
 writer's partial-file removal versus "write nothing", an unsupported `--timeframe` foreclosed from
@@ -336,8 +340,8 @@ blob differs from the pinned identity (report the drift; do not adapt silently).
 derived from the input) are caught at the sub-project boundary and converted to
 `Failure`; no such exception crosses the sub-project's public functions; an `OSError`
 on opening or reading the input is converted to the refusal `OFFLINE_DATA.INPUT_PATH`, and
-an `OSError` while creating, writing or removing the container to
-`OFFLINE_DATA.OUTPUT_DIRECTORY` (section 5.4). The one deliberate exception is a composition fault: an injected provider
+an `OSError` while creating, writing or removing the container, `descriptor.json` or
+`partitions.json` to `OFFLINE_DATA.OUTPUT_DIRECTORY` (section 5.4). The one deliberate exception is a composition fault: an injected provider
 value the core refuses makes a `Failure` unconstructible, so it is raised as the
 sub-project's `ProviderContractError` (`RuntimeError`-rooted so this conversion cannot
 swallow it; reading R7, section 1.6), never converted and never surfaced as a bare core
@@ -571,7 +575,9 @@ documentation calls it a Parquet partition, and it never enters a persistent reg
   `OFFLINE_DATA.TIMEFRAME_GRID`, `OFFLINE_DATA.PRICE_SANITY`, `OFFLINE_DATA.VOLUME`,
   `OFFLINE_DATA.EMPTY_SERIES`, `OFFLINE_DATA.OUTPUT_DIRECTORY` (emitted by `normalize_command`
   for an `--output` that is a file, a reparse point or cannot be created, or that already
-  holds `descriptor.json`, `partitions.json` or `part-0000.ndjson`, and by
+  holds `descriptor.json`, `partitions.json` or `part-0000.ndjson`, or when its write of
+  `descriptor.json` or `partitions.json` fails (the command removes every file it created, in
+  reverse order; a removal that itself fails is still this refusal), and by
   `write_normalized_container` when the container path already exists, its directory is
   missing, a reparse point or unwritable, or the write fails: `line` 0, `value_length` 0, the
   message names the rule and never the path; nothing is overwritten; exit 1),
@@ -847,7 +853,8 @@ partition `raw_checksum` of section 5.1; `input_name: str`, the bounded input fi
 `descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`; exit codes 0 success;
 1 refusal (`Failure`, including `OFFLINE_DATA.INPUT_PATH` and `OFFLINE_DATA.OUTPUT_DIRECTORY`:
 an `--output` that is a file, a reparse point or cannot be created, or that already holds any
-of the three outputs; the command never overwrites); 2 argument parsing only (an unsupported
+of the three outputs, or a write of `descriptor.json` or `partitions.json` that fails; the
+command never overwrites); 2 argument parsing only (an unsupported
 `--timeframe` is `validate_series`'s `TIMEFRAME_GRID` refusal, exit 1, never an argparse
 error); 3 provider fault (`ProviderContractError`, R7). The command's sequence: read the
 input (`read_ohlcv_csv`), validate it (`validate_series`), compute `raw_checksum`, draw its
@@ -855,8 +862,9 @@ provider values once and snapshot them into fixed providers (passed to the write
 `build_dataset_metadata`), create `--output` immediately before its first write, write the
 container, build the metadata with `raw` and `input_name`, write `descriptor.json` and
 `partitions.json`; it draws nothing after the first write; exits 1, 2 and 3 leave nothing
-they created under `--output` (a partial container is removed; pre-existing entries
-untouched).
+they created under `--output` (every file the command created is removed in reverse order, a
+partial or completed container included; a removal that itself fails is still the
+`OUTPUT_DIRECTORY` refusal, nothing crossing; pre-existing entries untouched).
 
 - [ ] **Step 1 Focused RED.** Descriptor and partition field mapping (section 5.1, every
   field), the section 5.4 content-hash construction, `validate_dataset_identity` passes,
