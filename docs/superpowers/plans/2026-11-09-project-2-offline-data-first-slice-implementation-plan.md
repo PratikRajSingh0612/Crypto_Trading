@@ -8,7 +8,10 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 17 (round 16 APPROVE on sha256 `d2c67583...`, revision 16, with two MINOR wording
+**Status.** Revision 18 (round 17 APPROVE on sha256 `7083f837...`, revision 17, with one MINOR folded in
+here: the Task 3 Step 1 RED list names one consumed-series `METADATA_FIELD` case beside the argument
+and digest cases, so every class section 5.4 names is a specified, proven case; nothing else changes;
+revision 17 history: round 16 APPROVE on sha256 `d2c67583...`, revision 16, with two MINOR wording
 items folded in here: the `METADATA_FIELD` case list in 5.4 is introduced by "including" and names
 the remaining consumed fields, since the one converting handler covers every recorded field, and
 `INPUT_PATH` names `raw_checksum` beside `read_ohlcv_csv` among its emitters; nothing else changes;
@@ -907,9 +910,11 @@ partial or completed container included; a removal that itself fails is still th
   field), the section 5.4 content-hash construction, `validate_dataset_identity` passes,
   the clean fixture is `VALID` and the gaps-duplicates fixture `VALID_WITH_WARNINGS`
   (R4), the emitted JSON re-parses through the core models in strict JSON mode,
-  the `METADATA_FIELD` refusal for a `source` and an `input_name` at each side of the bounds
-  and for a corrupt digest in a consumed `RawChecksum` and `NormalizedContainer` (code, line 0,
-  `value_length` 0, the value absent from the diagnostic, the draw counts of section 5.4),
+  the `METADATA_FIELD` refusal for a `source` and an `input_name` at each side of the bounds,
+  for a corrupt digest in a consumed `RawChecksum` and `NormalizedContainer`, and for one recorded
+  field of a consumed `ValidatedSeries` the core refuses (for instance a naive `start_utc` or an
+  empty observation) (code, line 0, `value_length` 0, the value absent from the diagnostic, the
+  draw counts of section 5.4),
   `--output` handling of section 6, a refused input writes nothing, exit codes. The
   golden-equality tests are added after the first GREEN run captures the goldens.
 - [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN** (`pytest-focused tests/unit/test_metadata.py tests/unit/test_cli.py tests/integration/test_core_contract_roundtrip.py -q`).
