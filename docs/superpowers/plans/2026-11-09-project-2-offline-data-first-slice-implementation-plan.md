@@ -8,7 +8,14 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 15 (round 14 REQUEST_CHANGES on sha256 `8de3b56c...`, revision 14: one IMPORTANT
+**Status.** Revision 16 (round 15 APPROVE on sha256 `5311b791...`, revision 15; the P2-T3 independent
+review of 2026-11-10 06:59Z then APPROVED the task with one MINOR plan gap, and the live P2 advisor
+decided BLOCKED on it at 07:02Z: `build_dataset_metadata` emitted `OFFLINE_DATA.INPUT_PATH` for a
+core model refusing a value it records, a condition section 5.4 assigned to no code; revision 16
+adds the refusal `OFFLINE_DATA.METADATA_FIELD` to the closed set in 5.4, names it in 2.2 and in the
+Task 3 interface, exit table and RED list, and adds `diagnostics.py` (the one new `RefusalCode`
+member) to Task 3's modified files; nothing else changes; revision 15 history: round 14
+REQUEST_CHANGES on sha256 `8de3b56c...`, revision 14: one IMPORTANT
 clause folded in here, a failed write of `descriptor.json` or `partitions.json` by the command now
 converts to `OUTPUT_DIRECTORY` with every created file removed in reverse order, stated in 5.4, 2.2
 and the Task 3 interface, and one MINOR repeat of the removal-failure clause at Task 3; revision 14
@@ -341,7 +348,10 @@ derived from the input) are caught at the sub-project boundary and converted to
 `Failure`; no such exception crosses the sub-project's public functions; an `OSError`
 on opening or reading the input is converted to the refusal `OFFLINE_DATA.INPUT_PATH`, and
 an `OSError` while creating, writing or removing the container, `descriptor.json` or
-`partitions.json` to `OFFLINE_DATA.OUTPUT_DIRECTORY` (section 5.4). The one deliberate exception is a composition fault: an injected provider
+`partitions.json` to `OFFLINE_DATA.OUTPUT_DIRECTORY`, and a core model refusing a value that
+`build_dataset_metadata` records from its arguments or its consumed products (`source`,
+`input_name`, the digests of a `NormalizedContainer` or `RawChecksum`) to
+`OFFLINE_DATA.METADATA_FIELD` (section 5.4). The one deliberate exception is a composition fault: an injected provider
 value the core refuses makes a `Failure` unconstructible, so it is raised as the
 sub-project's `ProviderContractError` (`RuntimeError`-rooted so this conversion cannot
 swallow it; reading R7, section 1.6), never converted and never surfaced as a bare core
@@ -583,11 +593,24 @@ documentation calls it a Parquet partition, and it never enters a persistent reg
   message names the rule and never the path; nothing is overwritten; exit 1),
   `OFFLINE_DATA.INPUT_PATH` (the input path is missing, unreadable, a directory or a reparse
   point, or the bounded read fails: `line` 0, `value_length` 0, the message names the rule and
-  never the path; raised by `read_ohlcv_csv` and mapped by the command like any refusal);
+  never the path; raised by `read_ohlcv_csv` and mapped by the command like any refusal),
+  `OFFLINE_DATA.METADATA_FIELD` (emitted by `build_dataset_metadata` when a core model refuses a
+  value it records from its arguments or its consumed products: a `source` or `input_name`
+  outside the core's `BoundedText` bounds of 1 to 1024 characters (`datasets/models.py`), or a
+  `content_hash`, `normalized_checksum` or `sha256` of the consumed `NormalizedContainer` or
+  `RawChecksum` that is not the core's `Sha256` form of 64 lowercase hexadecimal characters:
+  `line` 0, `value_length` 0 because the one handler that converts the core's `ValueError`
+  covers every recorded field and does not inspect the core's error, so it attributes no
+  length; the message names the rule and never the value; the `ds_` and `part_` identifiers
+  and the instant are drawn before that handler and the `diag_` identifier after it, so no
+  provider draw sits inside it (R7); never emitted for `INPUT_PATH`'s cases and never replaced
+  by `INPUT_PATH`; not reachable through the command, whose `--source` is bounded at argument
+  parsing, whose `input_name` is the name of the regular file the reader opened and whose digests
+  are the hashing functions' own, and which maps it like any refusal, exit 1);
   `line` 0 denotes a refusal of the whole input or of an argument (`INPUT_PATH`, `SIZE_CEILING`
-  by bytes, `OUTPUT_DIRECTORY`, and `TIMEFRAME_GRID` for an unsupported timeframe argument,
-  whose `value_length` is the argument's length) and every other refusal names the one-based
-  line; `severity = ERROR`;
+  by bytes, `OUTPUT_DIRECTORY`, `METADATA_FIELD`, and `TIMEFRAME_GRID` for an unsupported timeframe
+  argument, whose `value_length` is the argument's length) and every other refusal names the
+  one-based line; `severity = ERROR`;
   `category` `SCHEMA_VALIDATION`; `source_component = "crypto-lab-offline-data"`;
   `retriable = False`; `message` names the line and rule only; `details` carries
   `{"line": n, "rule": code, "value_length": k}`; `timestamp_utc` from the injected clock.
@@ -844,14 +867,20 @@ through a command, with goldens and the consumer check.
 
 **Files modified.** `offline_data/src/crypto_lab_offline_data/__init__.py`,
 `offline_data/README.md`, `offline_data/tests/safety/test_boundaries.py` (census and
-import-root allowlist for the new modules only).
+import-root allowlist for the new modules only),
+`offline_data/src/crypto_lab_offline_data/diagnostics.py` (the one new `RefusalCode` member
+`METADATA_FIELD` of section 5.4 only; `refusal` and every other member unchanged).
 
 **Interfaces produced.** `build_dataset_metadata(series, container, raw, *, instrument, timeframe, source, input_name, ids, clock) -> Success[DatasetBundle] | Failure`
 (`raw: RawChecksum` from Task 2's `raw_checksum`, feeding `source_hash`, `raw_checksums` and the
 partition `raw_checksum` of section 5.1; `input_name: str`, the bounded input file name, feeding
-`source_record`; `DatasetBundle`: `descriptor`, `partitions`); `normalize_command(argv, *, ids, clock) -> int` writing
+`source_record`; `DatasetBundle`: `descriptor`, `partitions`; an unsupported `timeframe` is the
+`TIMEFRAME_GRID` refusal at line 0 before any draw, and a core model refusing a recorded `source`,
+`input_name` or consumed digest is the `OFFLINE_DATA.METADATA_FIELD` refusal of section 5.4, never
+`INPUT_PATH`); `normalize_command(argv, *, ids, clock) -> int` writing
 `descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`; exit codes 0 success;
-1 refusal (`Failure`, including `OFFLINE_DATA.INPUT_PATH` and `OFFLINE_DATA.OUTPUT_DIRECTORY`:
+1 refusal (`Failure`, including `OFFLINE_DATA.INPUT_PATH`, `OFFLINE_DATA.METADATA_FIELD` and
+`OFFLINE_DATA.OUTPUT_DIRECTORY`:
 an `--output` that is a file, a reparse point or cannot be created, or that already holds any
 of the three outputs, or a write of `descriptor.json` or `partitions.json` that fails; the
 command never overwrites); 2 argument parsing only (an unsupported
@@ -870,6 +899,9 @@ partial or completed container included; a removal that itself fails is still th
   field), the section 5.4 content-hash construction, `validate_dataset_identity` passes,
   the clean fixture is `VALID` and the gaps-duplicates fixture `VALID_WITH_WARNINGS`
   (R4), the emitted JSON re-parses through the core models in strict JSON mode,
+  the `METADATA_FIELD` refusal for a `source` and an `input_name` at each side of the bounds
+  and for a corrupt digest in a consumed `RawChecksum` and `NormalizedContainer` (code, line 0,
+  `value_length` 0, the value absent from the diagnostic, the draw counts of section 5.4),
   `--output` handling of section 6, a refused input writes nothing, exit codes. The
   golden-equality tests are added after the first GREEN run captures the goldens.
 - [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN** (`pytest-focused tests/unit/test_metadata.py tests/unit/test_cli.py tests/integration/test_core_contract_roundtrip.py -q`).
