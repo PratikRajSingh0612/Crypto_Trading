@@ -1,13 +1,15 @@
 # Crypto Trading Lab - offline historical candle data (`offline_data`)
 
-**Status:** Project 2, first bounded slice - Task 1 authored to plan revision 12, pending
-acceptance. The Task 0 scaffold is committed. Task 1 of
-`docs/superpowers/plans/2026-11-09-project-2-offline-data-first-slice-implementation-plan.md`
-has authored the `ohlcv-csv/1` reader (`candle_csv`), its refusal diagnostics and the
-provider contract exception (`diagnostics`) and the injected identity and clock providers
-(`providers`), with their tests and fixtures; that work awaits the controller's
-verification, independent review and acceptance. Validation and normalization (Task 2)
-and metadata emission and the command entry (Task 3) do not exist yet.
+**Status:** Project 2, first bounded slice - Task 2 authored to plan revision 15, pending
+acceptance. The Task 0 scaffold and Task 1 are committed. Of
+`docs/superpowers/plans/2026-11-09-project-2-offline-data-first-slice-implementation-plan.md`:
+
+| Task | Delivers | Status |
+|---|---|---|
+| 0 | scaffold, launcher, verify script, pinned lock | committed |
+| 1 | the `ohlcv-csv/1` reader (`candle_csv`), refusal diagnostics and the provider contract exception (`diagnostics`), injected identity and clock providers (`providers`), fixtures, boundary guards | committed |
+| 2 | section 4 validation with explicit missing and duplicate intervals (`validation`), the interim normalized container, its checksums and the raw input checksum (`normalize`), five fixtures, the writer's exclusive-create and partial-file-removal pins in the boundary guards | authored; awaits the controller's verification, independent review and acceptance |
+| 3 | `DatasetDescriptor` and `DatasetPartition` emission, the content hash, the command entry, goldens | not started |
 
 ## Scope
 
@@ -115,8 +117,10 @@ sub-project verifier and the core verifier alone, never concurrently.
   an explicitly labelled interim NDJSON container; nothing names it a Parquet partition;
   every descriptor carries the limitation in `known_limitations` and every partition in
   `quality_observations`; and no interim container is ever registered in a persistent
-  registry. Lifting P2-B1 is a separately authorized acquisition and a later task. No
-  code in this slice emits a container yet.
+  registry. Lifting P2-B1 is a separately authorized acquisition and a later task. Task 2's
+  `normalize.write_normalized_container` emits the interim container described under
+  "Normalized container" below; the descriptor and partition that carry the limitation
+  text are Task 3.
 - **P2-B2 - offline lock resolution.** If `lock-resolve-offline`, `lock-check` or
   `sync` cannot be satisfied from the local uv cache, the exact missing distribution
   and the exact uv message are reported once as P2-B2 and nothing is acquired. P2-B2
@@ -153,7 +157,7 @@ converted or repaired.
   (case, order and field count included). Anything else, including an empty file, is
   `OFFLINE_DATA.CSV_HEADER` at line 1. A file holding only the header is
   `OFFLINE_DATA.EMPTY_SERIES` at line 2, the line at which the first data row was
-  expected; the plan assigns the same code to an empty validated series in Task 2.
+  expected; `validate_series` returns the identical `Failure` for an empty row tuple.
 - **Rows.** Exactly six comma-separated fields, no quoting, no surrounding whitespace.
   Any other field count, including a blank line, is `OFFLINE_DATA.CSV_ROW_SHAPE`.
 - **`open_time_utc`.** `YYYY-MM-DDTHH:MM:SSZ`: seconds precision, literal uppercase
@@ -190,7 +194,7 @@ identifier and timestamp come from the injected `IdProvider` and `Clock` protoco
 
 The reader performs at most one bounded read of the input and writes nothing. Ordering,
 the timeframe grid, missing and duplicate bars, price sanity across fields and the
-normalized form (`format_decimal`) belong to Task 2's validation, not to the reader.
+normalized form (`format_decimal`) belong to the validation below, not to the reader.
 
 **Provider faults (plan reading R7).** An injected provider whose value the core refuses
 (a `diagnostic_id` that is not a lowercase canonical `diag_` UUID4, a `now_utc` that is
@@ -203,10 +207,171 @@ core error, and a refused value raises
 `RuntimeError`, so no `ValueError` conversion at a boundary can swallow it; it names the
 provider method (`method` attribute) and never carries the value, and the core error
 that refused the value is not chained. It is raised by `refusal` and, through it, by
-`read_ohlcv_csv`; the reader draws its providers only when it builds a refusal, so a
-faulty provider is never observed on an accepted input. It is the only exception that
-crosses the sub-project's public boundary: neither the core `ValidationError` nor an
-`OSError` escapes.
+`read_ohlcv_csv`, `validate_series`, `write_normalized_container` and `raw_checksum`; all
+four draw their providers only when they build a refusal, so a faulty provider is never
+observed on an accepted input or a completed write. It is the only exception that
+crosses the sub-project's boundary: neither the core `ValidationError`, nor an
+`OSError`, nor the `ValueError` of a path the platform rejects escapes any of them.
+
+## Validation
+
+`crypto_lab_offline_data.validation.validate_series(rows, *, timeframe, ids, clock)`
+applies the plan's section 4 rules to the rows the reader accepted and returns either a
+`Success[ValidatedSeries]` or one refusal `Failure` built by `refusal`. Every row is
+kept in input order; nothing is interpolated, dropped or de-duplicated.
+
+`ValidatedSeries` carries `rows`, `missing_intervals` (core `TimeInterval` values),
+`duplicate_intervals` (core `DuplicateInterval` values), `observations` (partition
+quality observation texts), `start_utc`, `end_utc` and `row_count`.
+
+Whole-input rules, in order:
+
+- **Timeframe.** Exactly `1m`, `5m`, `15m`, `1h`, `4h` or `1d`
+  (`SUPPORTED_TIMEFRAME_SECONDS`). Any other value, including the core grammar's `1s` and
+  `1w`, is `OFFLINE_DATA.TIMEFRAME_GRID` at line `0` with the argument's length as its
+  `value_length` and never the value. Note for the reviewer: plan revision 15 states this
+  rule explicitly in section 5.4. Line `0` denotes a refusal of the whole input or of an
+  argument (`INPUT_PATH`, `SIZE_CEILING` by bytes, `OUTPUT_DIRECTORY`, and
+  `TIMEFRAME_GRID` for an unsupported timeframe argument, whose `value_length` is the
+  argument's length); every other refusal names the one-based line. The tests pin it.
+- **Empty series.** Zero rows is `OFFLINE_DATA.EMPTY_SERIES` at line `2` with value
+  length `0`: field for field the same `Failure` the reader returns for a header-only
+  file, so Task 1 and Task 2 pin one answer.
+
+Per-row rules, in input order and in this order within a row, so a row that breaks two
+rules is refused by the first. The refusal names the row's one-based line and the length
+of the offending value in its canonical text, never the value:
+
+| Order | Rule | Code | Offending value and recorded length |
+|---|---|---|---|
+| 1 | `open_time_utc` is timezone-aware UTC (a zero-offset `tzinfo` counts as UTC) | `OFFLINE_DATA.CSV_TIMESTAMP` | the open time, `len(isoformat())` (`19` naive, `25` with an offset) |
+| 2 | `open_time_utc` sits on the grid: `(open_time - epoch) % step == 0` | `OFFLINE_DATA.TIMEFRAME_GRID` | the open time, `len(format_utc(...))` (`20`; `27` with microseconds) |
+| 3 | each of `open`, `high`, `low`, `close`, `volume` has a canonical `format_decimal` form (finite, not negative zero, within 256 characters) | `OFFLINE_DATA.CSV_NUMBER` | the value, `len(str(value))` |
+| 4 | `open`, `high`, `low`, `close` are positive, checked in that order | `OFFLINE_DATA.PRICE_SANITY` | the first non-positive price, canonical length |
+| 5 | `high >= low` | `OFFLINE_DATA.PRICE_SANITY` | `high`, canonical length |
+| 6 | `low <= open <= high`, then `low <= close <= high` | `OFFLINE_DATA.PRICE_SANITY` | `open` or `close`, canonical length |
+| 7 | `volume >= 0` | `OFFLINE_DATA.VOLUME` | `volume`, canonical length |
+| 8 | `open_time_utc` does not decrease against the previous row | `OFFLINE_DATA.ORDERING` | the open time, `len(format_utc(...))` |
+
+Rule 3 concerns directly constructed rows only: the reader's grammar admits no such
+value, and the rule exists so that the core `ValueError` behind `format_decimal` is
+converted at this boundary like every other data-dependent core error.
+
+**`CSV_NUMBER` versus `PRICE_SANITY`.** The reader refuses a signed or zero price as
+`OFFLINE_DATA.CSV_NUMBER` (section 3: the number grammar has no sign, and a price must be
+positive), so a fixture such as `invalid/negative-price.csv` never reaches the validator;
+its test pins the reader's refusal at line `3` with value length `9`. The validator's
+`PRICE_SANITY` rule covers what the reader cannot see, the relationship between the four
+prices of one row (`invalid/high-below-low.csv` passes the reader and is refused at line
+`3` with value length `8`, the length of `high`) and, for directly constructed rows, the
+positivity rules; the `VOLUME` rule is exercised with directly constructed rows for the
+same reason.
+
+Quality facts, recorded and never repaired:
+
+- **Duplicates.** Equal consecutive open times form one group; every row of the group
+  is kept and one `DuplicateInterval(start_utc=open_time, end_utc=open_time + step,
+  duplicate_count=n)` with `n >= 2` is recorded. The rows of a group are compared as
+  `Decimal` values (`42000.50` and `42000.5` agree, as their normalized lines do); when
+  any row of any group differs from its group's first row, `observations` carries the
+  one text `DIFFERING_DUPLICATE_OBSERVATION`, which names no value.
+- **Missing bars.** A jump of more than one step from a group's open time to the next
+  present open time records `TimeInterval(start_utc=open_time + step, end_utc=next open
+  time)`: from the first missing open time to the next present one, half-open.
+- **Interval (reading R5).** `start_utc` is the first open time and `end_utc` the last
+  open time plus one step.
+- **Row count.** `row_count` is the number of rows kept, duplicates included, so it
+  equals the container's line count; the distinct count follows from
+  `duplicate_intervals`.
+
+Both interval tuples are in time order and unique, as the core descriptor requires. The
+validation status (reading R4) is decided by Task 3 from these facts: no missing and no
+duplicate interval is `VALID`; either is `VALID_WITH_WARNINGS`; a refusal emits nothing.
+
+The committed `btcusdt-1m-gaps-duplicates.valid.csv` holds 60 rows and 58 distinct open
+times from `2024-01-01T00:00:00Z` to `2024-01-01T01:00:00Z`: minutes 20 to 22 are missing
+(`TimeInterval` from `00:20` to `00:23`), minute 30 appears twice with identical values
+and minute 45 twice with a differing close and volume (two `DuplicateInterval` records
+with `duplicate_count` 2 and one observation); `end_utc` is `2024-01-01T01:01:00Z`.
+
+## Normalized container (interim, P2-B1)
+
+`crypto_lab_offline_data.normalize.write_normalized_container(series, path, *, ids, clock)`
+writes the plan's section 5.2 container `normalized-ndjson/0.1.0` (`CONTAINER_FORMAT`; row
+schema `column_schema_version` `0.1.0`, `COLUMN_SCHEMA_VERSION`) and returns a
+`Success[NormalizedContainer]` carrying `bytes_written`, `content_hash`,
+`normalized_checksum` and `row_count`, or one refusal `Failure` built by `refusal`.
+
+- One line per kept row, in input order, duplicates included, so `row_count` equals an
+  independent line count.
+- Each line is the core's canonical JSON of the row: sorted keys `close`, `high`, `low`,
+  `open`, `open_time_utc`, `volume`; compact separators; UTF-8; the five numbers as
+  `format_decimal` strings (`42000.00` becomes `42000`, `100.0` becomes `100`); the open
+  time in the core UTC form `YYYY-MM-DDTHH:MM:SSZ`. The first line of the clean fixture's
+  container:
+
+  ```text
+  {"close":"42000.5","high":"42001","low":"41999","open":"42000","open_time_utc":"2024-01-01T00:00:00Z","volume":"100"}
+  ```
+
+- Every line ends with `\n`, so the file ends with a final newline and holds no `\r`.
+- `normalized_checksum` and `content_hash` are both the lowercase SHA-256 hex digest of
+  the whole container's bytes (plan section 1.5: equal by construction in this slice).
+- Writing the same validated series into two fresh directories yields identical bytes,
+  checksums and `NormalizedContainer` values; a second write into the same directory is
+  the refusal below, never a replacement.
+
+The writer is the one place in the package that writes, and the boundary guards pin it
+to exactly one `path.open("xb")`, one `write` call and one `path.unlink()` on the same
+path inside `write_normalized_container`:
+
+- It writes exactly one file, the caller's explicit `path`, through an exclusive create,
+  and never overwrites or follows. Before it opens anything it inspects the entry at
+  `path` itself without following it (`lstat`, never `exists()` or a resolution through
+  a link): any existing entry there (a file, a directory, or a reparse point whether or
+  not its target exists) is refused on its own attributes and never replaced, followed
+  or removed. A dangling junction or symbolic link at `path` is therefore refused before
+  the create could follow it, so its missing target is never created, inside or outside
+  the output directory. Only the platform's "no such entry" answer lets the create
+  proceed; an inspection of the entry that fails for any other reason is the same
+  refusal with nothing opened.
+- It creates no directory, and it inspects the destination's directory without
+  following it, before the destination's own entry and before it opens anything: a
+  missing directory, a directory that is itself a reparse point (a junction or symbolic
+  link, refused on its own attributes), a directory that is a file, or one in which the
+  exclusive create is denied is refused with nothing opened or created. A regular
+  directory reached through a junction in an ancestor is not itself a reparse point and
+  is used, the reader's rule for its input. The command of Task 3 creates its `--output`
+  directory immediately before this write.
+- Every such case, and a path the platform rejects outright (an embedded NUL), is the
+  refusal `OFFLINE_DATA.OUTPUT_DIRECTORY` at line `0` with value length `0`; the path and
+  its file name never enter the diagnostic, and no `OSError` or path `ValueError`
+  escapes the writer. The writer draws its providers only for that refusal. A
+  pre-existing `part-0000.ndjson` under `--output` is therefore this refusal rather than
+  a replacement.
+- The writer owns the destination only once the exclusive create has returned. If the
+  write, or the close that completes it, then fails, the partial file it created is
+  removed before anything else happens and the same refusal is returned; a removal that
+  itself fails still returns that refusal, with nothing crossing. A failure before the
+  create owns nothing, so a pre-existing entry is never removed.
+
+## Raw checksum
+
+`crypto_lab_offline_data.normalize.raw_checksum(path, *, max_bytes, ids, clock)` returns a
+`Success[RawChecksum]` carrying `sha256`, the lowercase SHA-256 hex digest of the input's
+exact bytes, and `byte_count`, or one refusal `Failure`. It is the pipeline's one
+deliberate second read of the input: the reader's single bounded read yields rows, not
+bytes, and the raw text's exact digits (`42000.00`, `100.0`) survive only through this
+digest, since the container carries the normalized form. It reuses the reader's
+bounded-read helper by import, so its refusals are the reader's: a negative `max_bytes`
+is `OFFLINE_DATA.SIZE_CEILING` at line `0` with value length `0`, returned before the
+path is inspected; a missing path, a directory, an unreadable file, a reparse point, a
+failing read or a path the platform rejects is `OFFLINE_DATA.INPUT_PATH` at line `0` with
+value length `0`, the path never recorded; an input over the ceiling is
+`OFFLINE_DATA.SIZE_CEILING` at line `0` with value length `max_bytes + 1`. `max_bytes` has
+no default: the caller passes the ceiling it gave the reader, so both reads of one input
+are bounded alike. Task 3 records the digest as the descriptor's `source_hash` and
+`raw_checksums` entry and the partition's `raw_checksum`.
 
 ## Safety scope
 

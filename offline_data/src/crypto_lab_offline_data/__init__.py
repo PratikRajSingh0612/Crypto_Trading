@@ -1,3 +1,12 @@
-"""Offline historical candle data: the first bounded slice of Project 2."""
+"""Offline historical candle data: the first bounded slice of Project 2.
+
+The package reads one local ``ohlcv-csv/1`` input (``candle_csv``), validates
+it under the plan's section 4 rules with explicit missing and duplicate
+intervals (``validation``), writes the interim normalized container with its
+SHA-256 checksums and digests the raw input bytes (``normalize``); refusals are
+the core diagnostics of ``diagnostics`` and every identifier and instant comes
+from the injected providers of ``providers``. The package imports nothing at
+this level so that importing it performs no work.
+"""
 
 __version__ = "0.1.0"

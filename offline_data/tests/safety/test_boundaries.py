@@ -1,9 +1,17 @@
 """Closed-world guards of the ``offline_data`` sub-project (plan section 2.6).
 
-Two guard families live here. The source guards pin the Task 1 package census,
-the import roots the package may use, the absence of environment, network and
-process reach, import-time purity and the reader's no-write rule, and they prove
-at run time that reading a fixture changes neither its bytes nor any directory.
+Two guard families live here. The source guards pin the Task 1 and Task 2
+package census, the import roots the package may use, the absence of
+environment, network and process reach, import-time purity and the no-write
+rule: no module writes except ``normalize.py``, whose one admitted write is the
+exclusive create of the container destination inside
+``write_normalized_container`` and whose one admitted removal is of the partial
+file that create produced, on the same path, when the write fails (the plan's
+Task 2 file map admits this file for the exclusive-create pin; the removal pin
+follows the Task 2 interface, which has the writer remove a partial file it
+created when the write fails). They prove at run time that reading a fixture
+changes neither its bytes nor any directory and that writing a container
+creates exactly the caller's destination and nothing else.
 The dependency guards pin the runtime dependency, the dev group, the constraint
 set and the build requirement to plan section 2.7, every version recorded in
 ``uv.lock`` to the same list, the lock's ``directory = "../"`` record of the core
@@ -29,7 +37,14 @@ from typing import Any
 import pytest
 
 PACKAGE = "crypto_lab_offline_data"
-EXPECTED_MODULES = ("__init__.py", "candle_csv.py", "diagnostics.py", "providers.py")
+EXPECTED_MODULES = (
+    "__init__.py",
+    "candle_csv.py",
+    "diagnostics.py",
+    "normalize.py",
+    "providers.py",
+    "validation.py",
+)
 ALLOWED_IMPORT_ROOTS = {
     PACKAGE,
     "__future__",
@@ -38,6 +53,7 @@ ALLOWED_IMPORT_ROOTS = {
     "datetime",
     "decimal",
     "enum",
+    "hashlib",
     "pathlib",
     "re",
     "typing",
@@ -93,6 +109,16 @@ WRITE_ATTRIBUTES = {
     "write_text",
 }
 READ_ONLY_OPEN_MODE = "rb"
+#: The one module that may write, the one function in it that may, the one
+#: open mode it may use (exclusive create, reached only after the writer has
+#: inspected the destination's own entry without following it, so an existing
+#: entry, a dangling reparse point included, is refused before the create
+#: could follow it) and the one removal it may make: of the partial file that
+#: create produced, on the same receiver, when the write fails.
+WRITER_MODULE = "normalize.py"
+WRITER_FUNCTION = "write_normalized_container"
+WRITER_OPEN_MODE = "xb"
+WRITER_REMOVAL = "unlink"
 
 EXPECTED_RUNTIME_DEPENDENCIES = ["crypto-trading-lab"]
 EXPECTED_SOURCES = {"crypto-trading-lab": {"path": "../", "editable": False}}
@@ -374,6 +400,109 @@ def _write_call_violations(tree: ast.AST, relative_path: str) -> list[str]:
     return violations
 
 
+def _writer_function_span(tree: ast.Module) -> range | None:
+    """The line span of the one top-level ``WRITER_FUNCTION``, else ``None``."""
+    definitions = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == WRITER_FUNCTION
+    ]
+    if len(definitions) != 1 or definitions[0].end_lineno is None:
+        return None
+    return range(definitions[0].lineno, definitions[0].end_lineno + 1)
+
+
+def _writer_module_violations(tree: ast.Module, relative_path: str) -> list[str]:
+    """Write calls the writer module may not make.
+
+    Outside ``WRITER_FUNCTION`` the module is held to the same rule as every
+    other module. Inside it exactly one ``<path>.open("xb")`` (the ``Path``
+    method, one positional argument, no keyword), exactly one ``.write`` call
+    and exactly one ``<path>.unlink()`` on the receiver of that open (no
+    argument, no keyword: the removal of the partial file the exclusive create
+    produced, when the write fails) are admitted; a different mode, the
+    built-in ``open``, a second open, write or removal, a removal of another
+    receiver, with an argument or with ``missing_ok``, or any other
+    write-shaped call is a violation.
+    """
+    span = _writer_function_span(tree)
+    if span is None:
+        return [f"{relative_path}: {WRITER_FUNCTION} must be defined exactly once"]
+    violations: list[str] = []
+    writes = 0
+    opened: list[str | None] = []
+    removed: list[str | None] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        callee: str | None
+        receiver: str | None = None
+        if isinstance(node.func, ast.Attribute):
+            callee = node.func.attr
+            receiver = _qualified_name(node.func.value)
+        else:
+            callee = _qualified_name(node.func)
+        inside = node.lineno in span
+        if callee == "open":
+            modes = [arg.value for arg in node.args if isinstance(arg, ast.Constant)]
+            exact = (
+                isinstance(node.func, ast.Attribute)
+                and len(node.args) == 1
+                and modes == [WRITER_OPEN_MODE]
+                and not node.keywords
+            )
+            if inside and exact:
+                opened.append(receiver)
+            else:
+                violations.append(
+                    f"{relative_path}:{node.lineno}: "
+                    f"open is not the writer's exclusive open('{WRITER_OPEN_MODE}')"
+                )
+        elif callee == "write":
+            if inside:
+                writes += 1
+            else:
+                violations.append(
+                    f"{relative_path}:{node.lineno}: write outside {WRITER_FUNCTION}"
+                )
+        elif callee == WRITER_REMOVAL:
+            exact = (
+                isinstance(node.func, ast.Attribute)
+                and not node.args
+                and not node.keywords
+            )
+            if inside and exact:
+                removed.append(receiver)
+            else:
+                violations.append(
+                    f"{relative_path}:{node.lineno}: {WRITER_REMOVAL} is not the "
+                    f"writer's removal of its own partial file"
+                )
+        elif callee in WRITE_ATTRIBUTES:
+            violations.append(f"{relative_path}:{node.lineno}: write call {callee}")
+    if len(opened) != 1:
+        violations.append(
+            f"{relative_path}: {WRITER_FUNCTION} must open its destination "
+            f"exactly once, found {len(opened)}"
+        )
+    if writes != 1:
+        violations.append(
+            f"{relative_path}: {WRITER_FUNCTION} must write exactly once, "
+            f"found {writes}"
+        )
+    if len(removed) != 1:
+        violations.append(
+            f"{relative_path}: {WRITER_FUNCTION} must remove its partial file "
+            f"exactly once, found {len(removed)}"
+        )
+    elif removed[0] is None or removed != opened:
+        violations.append(
+            f"{relative_path}: {WRITER_FUNCTION} must remove only the destination "
+            f"it opened"
+        )
+    return violations
+
+
 def _snapshot(directory: Path) -> tuple[tuple[str, int], ...]:
     """Names and sizes of a directory's entries; directories carry size -1."""
     entries: list[tuple[str, int]] = []
@@ -404,10 +533,10 @@ def _pinned_name_and_specifier(requirement: str) -> dict[str, str]:
     return {"name": name, "specifier": f"=={version}"}
 
 
-def test_the_package_census_is_exactly_the_task_one_modules(
+def test_the_package_census_is_exactly_the_task_one_and_two_modules(
     sub_project_root: Path,
 ) -> None:
-    """Task 2 extends this tuple when it adds its modules; nothing else may."""
+    """Task 3 extends this tuple when it adds its modules; nothing else may."""
     package = _package_dir(sub_project_root)
 
     names = tuple(sorted(path.name for path in package.glob("*.py")))
@@ -455,12 +584,27 @@ def test_importing_every_module_performs_no_side_effect(
     assert failures == []
 
 
-def test_no_module_contains_a_write_call(sub_project_root: Path) -> None:
+def test_no_module_but_the_writer_contains_a_write_call(
+    sub_project_root: Path,
+) -> None:
+    """Every module except ``normalize.py`` is held to the reader's no-write rule."""
     failures: list[str] = []
     for path in _expected_module_paths(sub_project_root):
+        if path.name == WRITER_MODULE:
+            continue
         failures.extend(_write_call_violations(_parse(path), path.name))
 
     assert failures == []
+    assert WRITER_MODULE in EXPECTED_MODULES
+
+
+def test_the_writer_module_writes_only_through_the_exclusive_create_in_the_writer(
+    sub_project_root: Path,
+) -> None:
+    """``normalize.py`` opens once with ``"xb"``, writes once, removes once."""
+    path = _package_dir(sub_project_root) / WRITER_MODULE
+
+    assert _writer_module_violations(_parse(path), path.name) == []
 
 
 def test_reading_a_fixture_leaves_input_and_directories_unchanged(
@@ -499,6 +643,49 @@ def test_reading_a_fixture_leaves_input_and_directories_unchanged(
         _snapshot(working_directory),
     ) == before
     assert Path.cwd() == working_directory
+
+
+def test_writing_a_container_creates_exactly_the_destination_and_nothing_else(
+    tmp_path: Path,
+    clean_fixture: Path,
+    fixed_ids: Any,
+    fixed_clock: Any,
+) -> None:
+    """The writer touches one path: the caller's destination, created exclusively."""
+    from crypto_lab.domain.results import Success
+
+    from crypto_lab_offline_data.candle_csv import read_ohlcv_csv
+    from crypto_lab_offline_data.normalize import write_normalized_container
+    from crypto_lab_offline_data.validation import validate_series
+
+    read = read_ohlcv_csv(clean_fixture, ids=fixed_ids, clock=fixed_clock)
+    assert isinstance(read, Success)
+    validated = validate_series(
+        read.value, timeframe="1m", ids=fixed_ids, clock=fixed_clock
+    )
+    assert isinstance(validated, Success)
+    destination = tmp_path / "part-0000.ndjson"
+    fixture_digest = hashlib.sha256(clean_fixture.read_bytes()).hexdigest()
+    working_directory = Path.cwd()
+    before = (
+        _snapshot(tmp_path),
+        _snapshot(clean_fixture.parent),
+        _snapshot(working_directory),
+    )
+    assert before[0] == ()
+
+    result = write_normalized_container(
+        validated.value, destination, ids=fixed_ids, clock=fixed_clock
+    )
+
+    assert isinstance(result, Success)
+    container = result.value
+    assert _snapshot(tmp_path) == (("part-0000.ndjson", container.bytes_written),)
+    assert _snapshot(clean_fixture.parent) == before[1]
+    assert _snapshot(working_directory) == before[2]
+    assert hashlib.sha256(clean_fixture.read_bytes()).hexdigest() == fixture_digest
+    assert Path.cwd() == working_directory
+    assert destination.read_bytes().count(b"\n") == container.row_count
 
 
 @pytest.mark.parametrize(
@@ -615,6 +802,88 @@ def test_the_write_scanner_detects_each_write_shape(source: str) -> None:
 )
 def test_the_write_scanner_admits_each_read_only_shape(source: str) -> None:
     assert _write_call_violations(ast.parse(source), "synthetic.py") == []
+
+
+WRITER_SHAPE = (
+    "def write_normalized_container(series, path):\n"
+    "    try:\n"
+    '        with path.open("xb") as handle:\n'
+    "            handle.write(data)\n"
+    "    except OSError:\n"
+    "        path.unlink()\n"
+    "    return path\n"
+)
+WRITE_LINE = "            handle.write(data)\n"
+REMOVAL_LINE = "        path.unlink()\n"
+GUARDED_REMOVAL = (
+    "        try:\n"
+    "            path.unlink()\n"
+    "        except OSError:\n"
+    "            pass\n"
+)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        WRITER_SHAPE.replace('"xb"', '"wb"'),
+        WRITER_SHAPE.replace('"xb"', '"rb"'),
+        WRITER_SHAPE.replace('path.open("xb")', 'open(path, "xb")'),
+        WRITER_SHAPE.replace('path.open("xb")', 'path.open("xb", buffering=0)'),
+        WRITER_SHAPE.replace('path.open("xb")', 'path.open(mode="xb")'),
+        WRITER_SHAPE + 'other = path.open("xb")\n',
+        WRITER_SHAPE + "handle.write(data)\n",
+        WRITER_SHAPE.replace(WRITE_LINE, WRITE_LINE + WRITE_LINE),
+        WRITER_SHAPE.replace(
+            WRITE_LINE,
+            '            with path.open("xb") as other:\n'
+            "                other.write(data)\n",
+        ),
+        WRITER_SHAPE.replace(WRITE_LINE, "            pass\n"),
+        WRITER_SHAPE.replace(WRITE_LINE, "            path.write_bytes(data)\n"),
+        WRITER_SHAPE.replace("    return path\n", "    path.parent.mkdir()\n"),
+        WRITER_SHAPE.replace("    return path\n", "    other.unlink()\n"),
+        WRITER_SHAPE.replace("    return path\n", "    path.replace(other)\n"),
+        WRITER_SHAPE.replace(REMOVAL_LINE, "        pass\n"),
+        WRITER_SHAPE.replace(REMOVAL_LINE, REMOVAL_LINE + REMOVAL_LINE),
+        WRITER_SHAPE.replace(REMOVAL_LINE, "        pass\n") + "path.unlink()\n",
+        WRITER_SHAPE + "path.unlink()\n",
+        WRITER_SHAPE.replace(REMOVAL_LINE, "        other.unlink()\n"),
+        WRITER_SHAPE.replace(REMOVAL_LINE, "        path.unlink(missing_ok=True)\n"),
+        WRITER_SHAPE.replace(REMOVAL_LINE, "        os.unlink(path)\n"),
+        WRITER_SHAPE.replace(REMOVAL_LINE, "        unlink(path)\n"),
+        WRITER_SHAPE.replace(REMOVAL_LINE, "        path.parent.unlink()\n"),
+        WRITER_SHAPE.replace(REMOVAL_LINE, REMOVAL_LINE + "        path.rmdir()\n"),
+        WRITER_SHAPE.replace(REMOVAL_LINE, "        path.replace(other)\n"),
+        WRITER_SHAPE.replace("write_normalized_container", "write_container"),
+        WRITER_SHAPE + WRITER_SHAPE,
+        "data = path.read_bytes()\n",
+    ],
+)
+def test_the_writer_scanner_detects_each_disallowed_shape(source: str) -> None:
+    assert _writer_module_violations(ast.parse(source), "synthetic.py") != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        WRITER_SHAPE,
+        "import hashlib\n\n" + WRITER_SHAPE,
+        "data = path.read_bytes()\n" + WRITER_SHAPE,
+        WRITER_SHAPE + "\n\ndef digest(data):\n    return sha256(data).hexdigest()\n",
+        'def _line(row):\n    return encode(row) + b"\\n"\n' + WRITER_SHAPE,
+        WRITER_SHAPE.replace("handle.write(data)", "written = handle.write(data)"),
+        WRITER_SHAPE.replace(REMOVAL_LINE, GUARDED_REMOVAL),
+        WRITER_SHAPE.replace(REMOVAL_LINE, "        if owned:\n    " + REMOVAL_LINE),
+        "def _flag(path):\n    return path.lstat().st_mode\n" + WRITER_SHAPE,
+        WRITER_SHAPE.replace(
+            "    try:\n",
+            "    try:\n        path.parent.lstat()\n        path.lstat()\n",
+        ),
+    ],
+)
+def test_the_writer_scanner_admits_each_confined_shape(source: str) -> None:
+    assert _writer_module_violations(ast.parse(source), "synthetic.py") == []
 
 
 @pytest.mark.parametrize("family", PROHIBITED_FAMILIES)
