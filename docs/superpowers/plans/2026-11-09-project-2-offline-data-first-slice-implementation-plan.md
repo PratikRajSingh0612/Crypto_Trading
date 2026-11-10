@@ -8,7 +8,16 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 21 (round 20 REQUEST_CHANGES on sha256 `8075c022...`, revision 20: the reviewer's
+**Status.** Revision 22 (round 21 APPROVE on sha256 `0f24d184...`, revision 21, with one MINOR folded in
+here; the advisor REJECTED revision 21 at 2026-11-10 09:14Z on internal consistency: Task 3's new wording
+"the in-flight refusal or exit 3 stands" after a failed removal contradicted the unchanged "still the
+`OUTPUT_DIRECTORY` refusal" at R7, 2.2 and 5.4, and "leaves only the empty directory" ignored the created
+files a failed removal leaves; revision 22 states one rule at all four sites: every created file's
+removal is attempted in reverse order even after one fails, a removal that itself fails changes
+nothing, the outcome in flight (a refusal, or a provider fault's exit 3) stands, the created files whose
+removal failed are the only remnants beside the directory, pre-existing entries are never touched, no
+`rmdir`, nothing crosses; and the Task 3 proofs cover the remnant case; nothing else changes; revision 21
+history: round 20 REQUEST_CHANGES on sha256 `8075c022...`, revision 20: the reviewer's
 audit of the complete P2-T3 candidate against every binding Task 3 statement found four IMPORTANT and
 six MINOR literal mismatches, all folded in here: `--output` is never resolved, since resolution would
 follow reparse points; the entry point's call carries the production providers; a run refused before
@@ -17,7 +26,8 @@ command created; the import-root allowlist gains exactly `argparse` and `collect
 may be strengthened for every module; the exit table gains argparse's `--help` exit 0 and the
 command's output text; the in-flight refusal stands when a removal fails; golden equality lives in
 the integration check; the converting handler also forecloses the core's hashing functions; and the
-fifth binding condition of the advisor's acceptances of revisions 16 to 21 is recorded here: the
+fifth binding condition of the advisor's acceptances of revisions 16 to 20, carried on each later
+acceptance, is recorded here: the
 specified `METADATA_FIELD` argument, digest and consumed-`ValidatedSeries` cases are proven through
 RED/GREEN tests, `diagnostics.py` gains only the new member, and both full verifiers and the
 independent task review pass before P2-T3 acceptance or publication; nothing else changes;
@@ -346,8 +356,11 @@ JSON schemas, inside an isolated sub-project environment.
   the latter for an `--output` that is a file, a reparse point or cannot be created); 2
   argument parsing only (an unsupported `--timeframe` is `validate_series`'s `TIMEFRAME_GRID`
   refusal, exit 1, never an argparse error); 3 provider fault. Exits 1, 2 and 3 leave nothing they
-  created under `--output` (a partial container is removed; a removal that itself fails is still
-  the `OUTPUT_DIRECTORY` refusal, nothing crossing).
+  created under `--output` beyond the directory itself and any created file whose removal failed
+  (every created file is removed in reverse order, each removal attempted even after one fails; a
+  removal that itself fails changes nothing: the outcome in flight, a refusal or a provider fault's
+  exit 3, stands and nothing crosses; the same rule binds the writer's removal of its partial file,
+  sections 2.2 and 5.4).
   This replaces the P2-T1 attempt's interim reading (the core `ValidationError` propagating)
   and narrows revision 9's blanket conversion rule in section 2.2 to data-dependent values.
 
@@ -381,8 +394,10 @@ blob differs from the pinned identity (report the drift; do not adapt silently).
 derived from the input) are caught at the sub-project boundary and converted to
 `Failure`; no such exception crosses the sub-project's public functions; an `OSError`
 on opening or reading the input is converted to the refusal `OFFLINE_DATA.INPUT_PATH`, and
-an `OSError` while creating, writing or removing the container, `descriptor.json` or
-`partitions.json` to `OFFLINE_DATA.OUTPUT_DIRECTORY`, and a core model refusing a value that
+an `OSError` while creating or writing the container, `descriptor.json` or `partitions.json` to
+`OFFLINE_DATA.OUTPUT_DIRECTORY` (an `OSError` from a removal during cleanup, the writer's partial file
+or the command's created files, is absorbed: it changes nothing, the outcome in flight stands and
+nothing crosses), and a core model refusing a value that
 `build_dataset_metadata` records from its arguments or its consumed products (`source`,
 `input_name`, the digests of a `NormalizedContainer` or `RawChecksum`) to
 `OFFLINE_DATA.METADATA_FIELD` (section 5.4). The one deliberate exception is a composition fault: an injected provider
@@ -626,7 +641,10 @@ documentation calls it a Parquet partition, and it never enters a persistent reg
   for an `--output` that is a file, a reparse point or cannot be created, or that already
   holds `descriptor.json`, `partitions.json` or `part-0000.ndjson`, or when its write of
   `descriptor.json` or `partitions.json` fails (the command removes every file it created, in
-  reverse order; a removal that itself fails is still this refusal), and by
+  reverse order, attempting each removal even after one fails; a removal that itself fails changes
+  nothing: the outcome in flight, this refusal or any other refusal or a provider fault's exit 3,
+  stands, the created files whose removal failed remain, pre-existing entries are untouched and the
+  directory is never removed), and by
   `write_normalized_container` when the container path already exists, its directory is
   missing, a reparse point or unwritable, or the write fails: `line` 0, `value_length` 0, the
   message names the rule and never the path; nothing is overwritten; exit 1),
@@ -922,8 +940,11 @@ each admitted by an AST scanner pinned to a named function and an exact call sha
 disallowed-shape and admitted-shape controls; `__main__.py` holds exactly one guarded
 `raise SystemExit(normalize_command(None, ids=Uuid4IdProvider(), clock=SystemClock()))`, the
 production providers; run-time proofs that a successful run creates exactly `--output` and its
-three files, that a run refused before its first write creates nothing anywhere, and that a later
-failure leaves only the empty directory the command created (the clause licenses no `rmdir`); the
+three files, that a run refused before its first write creates nothing anywhere, that a later
+failure whose removals all succeed leaves only the empty directory the command created, and that
+when a removal itself fails the only remnants beside that directory are the created files whose
+removal failed, every removal still attempted in reverse order and pre-existing entries untouched
+(the clause licenses no `rmdir`); the
 import-root allowlist gains exactly `argparse` and `collections`; guard logic may be strengthened
 for every module; no existing guard is weakened or removed, no other module gains a write
 allowance, and the dependency, lock, environment, network and process guards do not change),
@@ -958,12 +979,13 @@ input (`read_ohlcv_csv`), validate it (`validate_series`), compute `raw_checksum
 provider values once and snapshot them into fixed providers (passed to the writer and to
 `build_dataset_metadata`), create `--output` immediately before its first write, write the
 container, build the metadata with `raw` and `input_name`, write `descriptor.json` and
-`partitions.json`; it draws nothing after the first write; exits 1, 2 and 3 leave nothing
-they created under `--output` (every file the command created is removed in reverse order, a
-partial or completed container included; a removal that itself fails changes nothing, the
-in-flight refusal or exit 3 stands, nothing crossing; the directory the command created is not
-removed, so a failure after its creation leaves only that empty directory; pre-existing entries
-untouched).
+`partitions.json`; it draws nothing after the first write; exits 1, 2 and 3 leave under `--output`
+nothing they created beyond the directory itself and any created file whose removal failed (every
+file the command created is removed in reverse order, a partial or completed container included,
+each removal attempted even after one fails; a removal that itself fails changes nothing: the
+outcome in flight, a refusal or a provider fault's exit 3, stands and nothing crosses; the directory
+the command created is never removed, so a failure after its creation leaves that directory, empty
+when every removal succeeded; pre-existing entries untouched).
 
 - [ ] **Step 1 Focused RED.** Descriptor and partition field mapping (section 5.1, every
   field), the section 5.4 content-hash construction, `validate_dataset_identity` passes,
@@ -977,8 +999,9 @@ untouched).
   `--output` handling of section 6, a refused input writes nothing, exit codes, and the Task 3
   extension of `tests/safety/test_boundaries.py` (the command-module and entry-point scanners with
   their disallowed- and admitted-shape controls, the run-time proofs that a successful run creates
-  exactly `--output` and its three files and that a run refused before its first write creates
-  nothing anywhere). The
+  exactly `--output` and its three files, that a run refused before its first write creates nothing
+  anywhere, that a later failure whose removals succeed leaves only the empty created directory, and
+  that a failed removal leaves only the created files whose removal failed). The
   golden-equality tests are added after the first GREEN run captures the goldens.
 - [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN** (`pytest-focused tests/unit/test_metadata.py tests/unit/test_cli.py tests/integration/test_core_contract_roundtrip.py tests/unit/test_candle_csv.py tests/safety/test_boundaries.py -q`).
 - [ ] **Step 5** `verify-offline.ps1` green; the core's `scripts/verify.ps1` green; review of R3 and the goldens; commit
