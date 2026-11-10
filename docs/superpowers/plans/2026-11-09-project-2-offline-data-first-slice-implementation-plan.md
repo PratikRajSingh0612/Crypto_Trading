@@ -8,7 +8,11 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 16 (round 15 APPROVE on sha256 `5311b791...`, revision 15; the P2-T3 independent
+**Status.** Revision 17 (round 16 APPROVE on sha256 `d2c67583...`, revision 16, with two MINOR wording
+items folded in here: the `METADATA_FIELD` case list in 5.4 is introduced by "including" and names
+the remaining consumed fields, since the one converting handler covers every recorded field, and
+`INPUT_PATH` names `raw_checksum` beside `read_ohlcv_csv` among its emitters; nothing else changes;
+revision 16 history: round 15 APPROVE on sha256 `5311b791...`, revision 15; the P2-T3 independent
 review of 2026-11-10 06:59Z then APPROVED the task with one MINOR plan gap, and the live P2 advisor
 decided BLOCKED on it at 07:02Z: `build_dataset_metadata` emitted `OFFLINE_DATA.INPUT_PATH` for a
 core model refusing a value it records, a condition section 5.4 assigned to no code; revision 16
@@ -593,12 +597,16 @@ documentation calls it a Parquet partition, and it never enters a persistent reg
   message names the rule and never the path; nothing is overwritten; exit 1),
   `OFFLINE_DATA.INPUT_PATH` (the input path is missing, unreadable, a directory or a reparse
   point, or the bounded read fails: `line` 0, `value_length` 0, the message names the rule and
-  never the path; raised by `read_ohlcv_csv` and mapped by the command like any refusal),
+  never the path; raised by `read_ohlcv_csv` and by `raw_checksum` (Task 2) and mapped by the
+  command like any refusal),
   `OFFLINE_DATA.METADATA_FIELD` (emitted by `build_dataset_metadata` when a core model refuses a
-  value it records from its arguments or its consumed products: a `source` or `input_name`
-  outside the core's `BoundedText` bounds of 1 to 1024 characters (`datasets/models.py`), or a
-  `content_hash`, `normalized_checksum` or `sha256` of the consumed `NormalizedContainer` or
-  `RawChecksum` that is not the core's `Sha256` form of 64 lowercase hexadecimal characters:
+  value it records from its arguments or its consumed products, including a `source` or
+  `input_name` outside the core's `BoundedText` bounds of 1 to 1024 characters
+  (`datasets/models.py`), a `content_hash`, `normalized_checksum` or `sha256` of the consumed
+  `NormalizedContainer` or `RawChecksum` that is not the core's `Sha256` form of 64 lowercase
+  hexadecimal characters, and any other recorded field of the consumed `ValidatedSeries`,
+  `NormalizedContainer` or `RawChecksum` (`row_count`, `start_utc`, `end_utc`, the interval tuples,
+  the observations) that a core model refuses:
   `line` 0, `value_length` 0 because the one handler that converts the core's `ValueError`
   covers every recorded field and does not inspect the core's error, so it attributes no
   length; the message names the rule and never the value; the `ds_` and `part_` identifiers
