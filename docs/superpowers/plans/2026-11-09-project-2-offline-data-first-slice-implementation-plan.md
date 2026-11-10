@@ -8,7 +8,12 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 13 (the P2-T2 independent review of 2026-11-10 01:15Z found the plan jointly
+**Status.** Revision 14 (round 13 REQUEST_CHANGES on sha256 `b36108cb...`, revision 13: one IMPORTANT
+folded in here, the Task 3 signature could carry neither the raw checksum nor the input name that
+section 5.1 requires and the command sequence never placed `raw_checksum`; five MINOR items: the
+writer's partial-file removal versus "write nothing", an unsupported `--timeframe` foreclosed from
+argparse, `raw_checksum` hosted in `normalize.py`, the writer's `OSError` conversion stated in 2.2,
+and the boundary-guard file map allowing the writer's exclusive-create pin; revision 13 history: the P2-T2 independent review of 2026-11-10 01:15Z found the plan jointly
 unsatisfiable at the Task 2 writer: its published signature took no providers, so a failed
 write could build no `Failure` and an `OSError` crossed the boundary against R7, and the exit
 table had no mapping; the advisor decided BLOCKED for P2-T2 at 01:16Z. This revision gives the
@@ -294,7 +299,10 @@ JSON schemas, inside an isolated sub-project environment.
   `ValidationError` nor `OSError` escapes, and pin the command's exit codes: 0 success; 1
   refusal (`Failure`, including `OFFLINE_DATA.INPUT_PATH` and `OFFLINE_DATA.OUTPUT_DIRECTORY`,
   the latter for an `--output` that is a file, a reparse point or cannot be created); 2
-  argument parsing only; 3 provider fault. Exits 1, 2 and 3 write nothing under `--output`.
+  argument parsing only (an unsupported `--timeframe` is `validate_series`'s `TIMEFRAME_GRID`
+  refusal, exit 1, never an argparse error); 3 provider fault. Exits 1, 2 and 3 leave nothing they
+  created under `--output` (a partial container is removed; a removal that itself fails is still
+  the `OUTPUT_DIRECTORY` refusal, nothing crossing).
   This replaces the P2-T1 attempt's interim reading (the core `ValidationError` propagating)
   and narrows revision 9's blanket conversion rule in section 2.2 to data-dependent values.
 
@@ -326,9 +334,10 @@ The implementer re-reads each consumed module before use and refuses to proceed 
 blob differs from the pinned identity (report the drift; do not adapt silently). Core
 `ValueError` and Pydantic `ValidationError` raised for data-dependent values (anything
 derived from the input) are caught at the sub-project boundary and converted to
-`Failure`; no such exception crosses the sub-project's public functions, and an `OSError`
-on opening or reading the input is converted to the refusal `OFFLINE_DATA.INPUT_PATH`
-(section 5.4). The one deliberate exception is a composition fault: an injected provider
+`Failure`; no such exception crosses the sub-project's public functions; an `OSError`
+on opening or reading the input is converted to the refusal `OFFLINE_DATA.INPUT_PATH`, and
+an `OSError` while creating, writing or removing the container to
+`OFFLINE_DATA.OUTPUT_DIRECTORY` (section 5.4). The one deliberate exception is a composition fault: an injected provider
 value the core refuses makes a `Failure` unconstructible, so it is raised as the
 sub-project's `ProviderContractError` (`RuntimeError`-rooted so this conversion cannot
 swallow it; reading R7, section 1.6), never converted and never surfaced as a bare core
@@ -779,7 +788,8 @@ worker, never provisioned by it.
 
 **Files modified.** `offline_data/src/crypto_lab_offline_data/__init__.py`,
 `offline_data/README.md`, `offline_data/tests/safety/test_boundaries.py` (the module census,
-import-root allowlist and no-write guards admit the new modules; nothing else in it changes).
+import-root allowlist and no-write guards admit the new modules and may pin the writer's
+exclusive-create exemption; nothing else in it changes).
 
 **Interfaces produced.** `validate_series(rows, *, timeframe, ids, clock) -> Success[ValidatedSeries] | Failure`
 (provider faults raise `ProviderContractError`, R7)
@@ -791,9 +801,10 @@ exists, a missing, reparse-point or unwritable directory, or a failed write is t
 `OFFLINE_DATA.OUTPUT_DIRECTORY` refusal; the writer never overwrites, creates the file exclusively,
 and removes a partial file it created when the write fails; provider faults raise
 `ProviderContractError`, R7); `raw_checksum(path, *, max_bytes, ids, clock) -> Success[RawChecksum] | Failure`
-(`RawChecksum`: `sha256` hex and `byte_count` of the input bytes, read once under the reader's byte
-ceiling with the reader's `INPUT_PATH` and `SIZE_CEILING` refusals; the pipeline's one deliberate
-second read of the input, because the reader's single bounded read yields rows, not bytes).
+in `normalize.py` (`RawChecksum`: `sha256` hex and `byte_count` of the input bytes, read once under
+the reader's byte ceiling with the reader's `INPUT_PATH` and `SIZE_CEILING` refusals, reusing the
+reader's bounded-read helper by import; the pipeline's one deliberate second read of the input,
+because the reader's single bounded read yields rows, not bytes).
 
 - [ ] **Step 1 Focused RED.** One test per section 4 row for both valid fixtures and the
   four new invalid fixtures; container byte-exactness and checksum tests; `row_count`
@@ -829,17 +840,23 @@ through a command, with goldens and the consumer check.
 `offline_data/README.md`, `offline_data/tests/safety/test_boundaries.py` (census and
 import-root allowlist for the new modules only).
 
-**Interfaces produced.** `build_dataset_metadata(series, container, *, instrument, timeframe, source, ids, clock) -> Success[DatasetBundle] | Failure`
-(`DatasetBundle`: `descriptor`, `partitions`); `normalize_command(argv, *, ids, clock) -> int` writing
+**Interfaces produced.** `build_dataset_metadata(series, container, raw, *, instrument, timeframe, source, input_name, ids, clock) -> Success[DatasetBundle] | Failure`
+(`raw: RawChecksum` from Task 2's `raw_checksum`, feeding `source_hash`, `raw_checksums` and the
+partition `raw_checksum` of section 5.1; `input_name: str`, the bounded input file name, feeding
+`source_record`; `DatasetBundle`: `descriptor`, `partitions`); `normalize_command(argv, *, ids, clock) -> int` writing
 `descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`; exit codes 0 success;
 1 refusal (`Failure`, including `OFFLINE_DATA.INPUT_PATH` and `OFFLINE_DATA.OUTPUT_DIRECTORY`:
 an `--output` that is a file, a reparse point or cannot be created, or that already holds any
-of the three outputs; the command never overwrites); 2 argument parsing only;
-3 provider fault (`ProviderContractError`, R7). The command reads and validates the input,
-then draws its provider values once and snapshots them into fixed providers passed to
-`build_dataset_metadata`, creates `--output` immediately before its first write, and draws
-nothing after that write; exits 1, 2 and 3 write nothing under `--output` (pre-existing
-entries untouched).
+of the three outputs; the command never overwrites); 2 argument parsing only (an unsupported
+`--timeframe` is `validate_series`'s `TIMEFRAME_GRID` refusal, exit 1, never an argparse
+error); 3 provider fault (`ProviderContractError`, R7). The command's sequence: read the
+input (`read_ohlcv_csv`), validate it (`validate_series`), compute `raw_checksum`, draw its
+provider values once and snapshot them into fixed providers (passed to the writer and to
+`build_dataset_metadata`), create `--output` immediately before its first write, write the
+container, build the metadata with `raw` and `input_name`, write `descriptor.json` and
+`partitions.json`; it draws nothing after the first write; exits 1, 2 and 3 leave nothing
+they created under `--output` (a partial container is removed; pre-existing entries
+untouched).
 
 - [ ] **Step 1 Focused RED.** Descriptor and partition field mapping (section 5.1, every
   field), the section 5.4 content-hash construction, `validate_dataset_identity` passes,
