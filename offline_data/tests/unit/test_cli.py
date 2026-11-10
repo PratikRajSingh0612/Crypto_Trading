@@ -32,10 +32,16 @@ from typing import IO, Any
 
 import pytest
 from _pytest.capture import CaptureResult
-from crypto_lab.datasets.models import DatasetDescriptor
+from crypto_lab.datasets.models import (
+    DatasetDescriptor,
+    DatasetPartition,
+    DatasetValidationStatus,
+    RawSourceProvenance,
+)
 from crypto_lab.domain.identifiers import validate_prefixed_uuid4
 from crypto_lab.domain.results import Failure
 from crypto_lab.domain.time import require_utc
+from pydantic import TypeAdapter
 
 from crypto_lab_offline_data import cli
 from crypto_lab_offline_data.candle_csv import WHOLE_INPUT_LINE
@@ -57,7 +63,12 @@ from crypto_lab_offline_data.diagnostics import (
     RefusalCode,
     refusal,
 )
-from crypto_lab_offline_data.metadata import CONTAINER_FILE_NAME, DEFAULT_SOURCE
+from crypto_lab_offline_data.metadata import (
+    CONTAINER_FILE_NAME,
+    DEFAULT_SOURCE,
+    P2_B1_LIMITATION,
+    P2_B3_LIMITATION,
+)
 from crypto_lab_offline_data.providers import Clock, IdProvider
 
 INSTRUMENT_ID = "BINANCE:BTC/USDT:SPOT"
@@ -91,6 +102,18 @@ COMPLETE_ARGV = [
     "--timeframe",
     "1m",
 ]
+OHLCV_FORMAT = "ohlcv-csv/1"
+BINANCE_FORMAT = "binance-spot-kline-csv/1"
+BINANCE_SOURCE = "synthetic-binance-fixture"
+BINANCE_UNITS = {
+    "SYNTHETIC-BTCUSDT-1m-2024-12-31-ms": "milliseconds",
+    "SYNTHETIC-BTCUSDT-1m-2025-01-01-us": "microseconds",
+    "SYNTHETIC-BTCUSDT-1m-gaps-duplicates-us": "microseconds",
+}
+BINANCE_STEMS = tuple(BINANCE_UNITS)
+PARTITIONS_ADAPTER: TypeAdapter[tuple[DatasetPartition, ...]] = TypeAdapter(
+    tuple[DatasetPartition, ...]
+)
 
 
 def _without(option: str) -> list[str]:
@@ -114,6 +137,8 @@ def _argv(
     instrument: str = INSTRUMENT_ID,
     timeframe: str = "1m",
     source: str | None = None,
+    input_format: str | None = None,
+    timestamp_unit: str | None = None,
 ) -> list[str]:
     argv = [
         "normalize",
@@ -128,6 +153,10 @@ def _argv(
     ]
     if source is not None:
         argv.extend(["--source", source])
+    if input_format is not None:
+        argv.extend(["--input-format", input_format])
+    if timestamp_unit is not None:
+        argv.extend(["--timestamp-unit", timestamp_unit])
     return argv
 
 
@@ -524,8 +553,18 @@ def test_help_exits_zero_and_names_the_normalize_command(
     assert normalize_help == EXIT_SUCCESS
     assert captured.out.startswith("usage: crypto-lab-offline-data")
     assert "normalize" in captured.out
-    for option in ("--input", "--output", "--instrument", "--timeframe", "--source"):
+    for option in (
+        "--input",
+        "--output",
+        "--instrument",
+        "--timeframe",
+        "--source",
+        "--input-format",
+        "--timestamp-unit",
+    ):
         assert option in captured.out
+    assert "{ohlcv-csv/1,binance-spot-kline-csv/1}" in captured.out
+    assert "{milliseconds,microseconds}" in captured.out
     assert build_parser().prog == PROGRAM
 
 
@@ -1411,6 +1450,463 @@ def test_an_exit_three_leaves_an_existing_output_directory_untouched(
     assert _snapshot(output) == before
     assert (output / UNRELATED_NAME).read_bytes() == UNRELATED_BYTES
     assert MALFORMED_SUFFIX not in capsys.readouterr().out
+
+
+# --- the binance-spot-kline-csv/1 input format (second-slice plan, section 2.4) ---
+
+
+@pytest.fixture
+def binance_root(sub_project_root: Path) -> Path:
+    return sub_project_root / "tests" / "fixtures" / "binance"
+
+
+def _binance_argv(
+    fixture: Path,
+    output: Path | str,
+    *,
+    timeframe: str = "1m",
+    unit: str | None = None,
+    source: str | None = BINANCE_SOURCE,
+) -> list[str]:
+    """The Binance arguments; the unit defaults to the valid fixture's own."""
+    stem = fixture.name.removesuffix(".valid.csv")
+    return _argv(
+        fixture,
+        output,
+        timeframe=timeframe,
+        source=source,
+        input_format=BINANCE_FORMAT,
+        timestamp_unit=BINANCE_UNITS[stem] if unit is None else unit,
+    )
+
+
+def _descriptor(output: Path) -> DatasetDescriptor:
+    return DatasetDescriptor.model_validate_json(
+        (output / DESCRIPTOR_FILE_NAME).read_bytes(), strict=True
+    )
+
+
+def _partitions(output: Path) -> tuple[DatasetPartition, ...]:
+    return PARTITIONS_ADAPTER.validate_json(
+        (output / PARTITIONS_FILE_NAME).read_bytes(), strict=True
+    )
+
+
+def _output_bytes(output: Path) -> tuple[bytes, ...]:
+    return tuple((output / name).read_bytes() for name in OUTPUT_FILE_NAMES)
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("--input-format", "parquet/1"),
+        ("--input-format", "OHLCV-CSV/1"),
+        ("--input-format", "binance-spot-kline-csv/2"),
+        ("--input-format", ""),
+        ("--timestamp-unit", "secs"),
+        ("--timestamp-unit", "nanos"),
+        ("--timestamp-unit", "Microseconds"),
+        ("--timestamp-unit", ""),
+    ],
+)
+def test_the_two_new_arguments_are_closed_choices_that_never_echo_the_value(
+    option: str,
+    value: str,
+    tmp_path: Path,
+    binance_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ids = _CountingIds()
+    clock = _CountingClock()
+    output = tmp_path / "output"
+    fixture = binance_root / f"{BINANCE_STEMS[1]}.valid.csv"
+    argv = [*_binance_argv(fixture, output), option, value]
+
+    code = normalize_command(argv, ids=ids, clock=clock)
+
+    captured = capsys.readouterr()
+    assert code == EXIT_ARGUMENTS
+    assert captured.out == ""
+    assert captured.err.startswith("usage: crypto-lab-offline-data")
+    assert option in captured.err
+    if value:
+        assert value not in captured.err
+    assert ids.calls == NO_DRAWS
+    assert clock.calls == 0
+    assert not output.exists()
+
+
+def test_the_timestamp_unit_is_required_with_the_binance_format(
+    tmp_path: Path,
+    binance_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ids = _CountingIds()
+    clock = _CountingClock()
+    output = tmp_path / "output"
+    fixture = binance_root / f"{BINANCE_STEMS[1]}.valid.csv"
+
+    code = normalize_command(
+        _argv(fixture, output, input_format=BINANCE_FORMAT), ids=ids, clock=clock
+    )
+
+    captured = capsys.readouterr()
+    assert code == EXIT_ARGUMENTS
+    assert captured.out == ""
+    assert captured.err.startswith("usage: crypto-lab-offline-data")
+    assert "--timestamp-unit" in captured.err
+    assert "required" in captured.err
+    assert ids.calls == NO_DRAWS
+    assert clock.calls == 0
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("input_format", [None, OHLCV_FORMAT])
+@pytest.mark.parametrize("unit", ["milliseconds", "microseconds"])
+def test_the_timestamp_unit_is_refused_with_the_default_format(
+    input_format: str | None,
+    unit: str,
+    tmp_path: Path,
+    clean_fixture: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ids = _CountingIds()
+    clock = _CountingClock()
+    output = tmp_path / "output"
+    argv = _argv(clean_fixture, output, input_format=input_format, timestamp_unit=unit)
+
+    code = normalize_command(argv, ids=ids, clock=clock)
+
+    captured = capsys.readouterr()
+    assert code == EXIT_ARGUMENTS
+    assert captured.out == ""
+    assert "--timestamp-unit" in captured.err
+    assert OHLCV_FORMAT in captured.err
+    assert ids.calls == NO_DRAWS
+    assert clock.calls == 0
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "timeframe", ["5m", "15m", "1h", "4h", "1d", "1w", "1s", "2m", "60s", "", "1M"]
+)
+def test_a_timeframe_other_than_one_minute_is_an_argument_error_for_binance(
+    timeframe: str,
+    tmp_path: Path,
+    binance_root: Path,
+    clean_fixture: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Exit 2 for the Binance format; the same value stays exit 1 for ohlcv-csv/1."""
+    ids = _CountingIds()
+    clock = _CountingClock()
+    output = tmp_path / "output"
+    fixture = binance_root / f"{BINANCE_STEMS[1]}.valid.csv"
+
+    code = normalize_command(
+        _binance_argv(fixture, output, timeframe=timeframe), ids=ids, clock=clock
+    )
+    captured = capsys.readouterr()
+    control = normalize_command(
+        _argv(
+            clean_fixture,
+            tmp_path / "control",
+            timeframe=timeframe,
+            input_format=OHLCV_FORMAT,
+        ),
+        ids=_CountingIds(),
+        clock=_CountingClock(),
+    )
+    control_captured = capsys.readouterr()
+
+    assert code == EXIT_ARGUMENTS
+    assert captured.out == ""
+    assert "--timeframe" in captured.err
+    assert "1m" in captured.err
+    if timeframe:
+        assert f" {timeframe}" not in captured.err
+    assert ids.calls == NO_DRAWS
+    assert clock.calls == 0
+    assert not output.exists()
+    assert control == EXIT_REFUSAL
+    assert RefusalCode.TIMEFRAME_GRID.value in control_captured.out
+    assert not (tmp_path / "control").exists()
+
+
+def test_an_argument_coupling_error_leaves_an_existing_output_directory_untouched(
+    tmp_path: Path,
+    binance_root: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = _output_with_unrelated_entry(tmp_path)
+    before = _snapshot(output)
+    fixture = binance_root / f"{BINANCE_STEMS[0]}.valid.csv"
+
+    code = normalize_command(
+        _argv(fixture, output, input_format=BINANCE_FORMAT),
+        ids=fixed_ids,
+        clock=fixed_clock,
+    )
+
+    assert code == EXIT_ARGUMENTS
+    assert _snapshot(output) == before == ((UNRELATED_NAME, len(UNRELATED_BYTES)),)
+    assert capsys.readouterr().out == ""
+
+
+def test_the_default_input_format_is_unchanged_by_the_new_arguments(
+    tmp_path: Path,
+    clean_fixture: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+) -> None:
+    """Omitting ``--input-format`` and naming ``ohlcv-csv/1`` emit the same bytes."""
+    omitted = tmp_path / "omitted"
+    explicit = tmp_path / "explicit"
+
+    omitted_code = normalize_command(
+        _argv(clean_fixture, omitted), ids=fixed_ids, clock=fixed_clock
+    )
+    explicit_code = normalize_command(
+        _argv(clean_fixture, explicit, input_format=OHLCV_FORMAT),
+        ids=fixed_ids,
+        clock=fixed_clock,
+    )
+
+    assert omitted_code == explicit_code == EXIT_SUCCESS
+    assert _output_bytes(omitted) == _output_bytes(explicit)
+    descriptor = _descriptor(omitted)
+    (partition,) = _partitions(omitted)
+    assert descriptor.raw_source_provenance[0].source_name == "ohlcv-csv"
+    assert descriptor.raw_source_provenance[0].source_version == "1.0.0"
+    assert descriptor.known_limitations == (P2_B1_LIMITATION,)
+    assert partition.quality_observations == (P2_B1_LIMITATION,)
+    for data in _output_bytes(omitted):
+        assert b"P2-B3" not in data
+        assert b"binance" not in data
+
+
+def test_a_binance_run_writes_the_three_files_with_its_provenance_and_limitations(
+    tmp_path: Path,
+    binance_root: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = tmp_path / "output"
+    fixture = binance_root / f"{BINANCE_STEMS[1]}.valid.csv"
+    raw_sha256 = hashlib.sha256(fixture.read_bytes()).hexdigest()
+
+    code = normalize_command(
+        _binance_argv(fixture, output), ids=fixed_ids, clock=fixed_clock
+    )
+
+    captured = capsys.readouterr()
+    assert code == EXIT_SUCCESS
+    assert captured.out == ""
+    assert captured.err == ""
+    assert _names(output) == sorted(OUTPUT_FILE_NAMES)
+    descriptor = _descriptor(output)
+    (partition,) = _partitions(output)
+    assert descriptor.raw_source_provenance == (
+        RawSourceProvenance(
+            source_name="binance-spot-kline-csv",
+            source_version="1.0.0",
+            source_record=fixture.name,
+            source_hash=raw_sha256,
+        ),
+    )
+    assert partition.raw_source_provenance == descriptor.raw_source_provenance
+    assert descriptor.raw_checksums == (raw_sha256,)
+    assert partition.raw_checksum == raw_sha256
+    assert descriptor.source == BINANCE_SOURCE
+    assert descriptor.timeframe == "1m"
+    assert descriptor.instrument.canonical_id == INSTRUMENT_ID
+    assert descriptor.dataset_id == FIXED_DATASET_ID
+    assert descriptor.known_limitations == (P2_B3_LIMITATION, P2_B1_LIMITATION)
+    assert partition.quality_observations == (P2_B3_LIMITATION, P2_B1_LIMITATION)
+    assert descriptor.known_limitations == tuple(sorted(descriptor.known_limitations))
+    assert descriptor.validation_status is DatasetValidationStatus.VALID
+    assert descriptor.start_utc == datetime(2025, 1, 1, tzinfo=UTC)
+    assert descriptor.end_utc == datetime(2025, 1, 1, 1, 0, tzinfo=UTC)
+    container = (output / CONTAINER_FILE_NAME).read_bytes()
+    assert container.count(b"\n") == 60 == partition.row_count
+    assert hashlib.sha256(container).hexdigest() == partition.content_hash
+    assert descriptor.normalized_checksums == (partition.content_hash,)
+    descriptor_text = (output / DESCRIPTOR_FILE_NAME).read_text(encoding="utf-8")
+    assert str(fixture.parent) not in descriptor_text
+    assert fixture.parent.as_posix() not in descriptor_text
+
+
+def test_a_binance_run_with_the_default_source_records_local_fixture(
+    tmp_path: Path,
+    binance_root: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+) -> None:
+    output = tmp_path / "output"
+    fixture = binance_root / f"{BINANCE_STEMS[0]}.valid.csv"
+
+    code = normalize_command(
+        _binance_argv(fixture, output, source=None), ids=fixed_ids, clock=fixed_clock
+    )
+
+    assert code == EXIT_SUCCESS
+    descriptor = _descriptor(output)
+    assert descriptor.source == DEFAULT_SOURCE == "local-fixture"
+    assert descriptor.start_utc == datetime(2024, 12, 31, 23, 0, tzinfo=UTC)
+    assert descriptor.end_utc == datetime(2025, 1, 1, tzinfo=UTC)
+
+
+def test_a_binance_run_follows_the_accepted_sequence_and_draws_once(
+    tmp_path: Path,
+    binance_root: Path,
+) -> None:
+    log: list[tuple[str, ...]] = []
+    output = tmp_path / "output"
+    fixture = binance_root / f"{BINANCE_STEMS[2]}.valid.csv"
+
+    with pytest.MonkeyPatch.context() as patch:
+        _log_filesystem(patch, log)
+        code = normalize_command(
+            _binance_argv(fixture, output),
+            ids=_LoggingIds(log),
+            clock=_LoggingClock(log),
+        )
+
+    assert code == EXIT_SUCCESS
+    assert log == [
+        ("open", "rb", fixture.name),
+        ("open", "rb", fixture.name),
+        ("draw", "dataset_id"),
+        ("draw", "partition_id"),
+        ("draw", "diagnostic_id"),
+        ("draw", "now_utc"),
+        ("mkdir", "output"),
+        ("open", "xb", CONTAINER_FILE_NAME),
+        ("open", "xb", DESCRIPTOR_FILE_NAME),
+        ("open", "xb", PARTITIONS_FILE_NAME),
+    ]
+    descriptor = _descriptor(output)
+    assert descriptor.validation_status is DatasetValidationStatus.VALID_WITH_WARNINGS
+    assert len(descriptor.missing_intervals) == 1
+    assert len(descriptor.duplicate_intervals) == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "unit", "code", "line", "value_length"),
+    [
+        (
+            "SYNTHETIC-ms-declared-us.csv",
+            "microseconds",
+            RefusalCode.TIMESTAMP_UNIT,
+            1,
+            13,
+        ),
+        (
+            "SYNTHETIC-us-declared-ms.csv",
+            "milliseconds",
+            RefusalCode.TIMESTAMP_UNIT,
+            1,
+            16,
+        ),
+        ("SYNTHETIC-header-row.csv", "microseconds", RefusalCode.CSV_HEADER, 1, 147),
+        ("SYNTHETIC-empty.csv", "milliseconds", RefusalCode.EMPTY_SERIES, 1, 0),
+        ("SYNTHETIC-unsorted.csv", "microseconds", RefusalCode.ORDERING, 3, 20),
+    ],
+)
+def test_a_refused_binance_input_exits_one_and_creates_nothing(
+    name: str,
+    unit: str,
+    code: RefusalCode,
+    line: int,
+    value_length: int,
+    tmp_path: Path,
+    binance_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ids = _CountingIds()
+    clock = _CountingClock()
+    output = tmp_path / "output"
+    input_path = binance_root / "invalid" / name
+
+    with pytest.MonkeyPatch.context() as patch:
+        created = _record_mkdirs(patch)
+        exit_code = normalize_command(
+            _binance_argv(input_path, output, unit=unit), ids=ids, clock=clock
+        )
+
+    captured = capsys.readouterr()
+    assert exit_code == EXIT_REFUSAL
+    _printed_refusal(
+        captured,
+        code,
+        line=line,
+        value_length=value_length,
+        diagnostic_id=OTHER_DIAGNOSTIC_ID,
+        instant_text=OTHER_INSTANT_TEXT,
+    )
+    _assert_path_absent(captured.out, input_path)
+    _assert_path_absent(captured.out, output)
+    assert ids.calls == REFUSAL_DRAWS
+    assert clock.calls == 1
+    assert created == []
+    assert not output.exists()
+
+
+def test_a_failed_partitions_write_on_a_binance_run_removes_every_created_file(
+    tmp_path: Path,
+    binance_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Cleanup is unchanged: the created files go in reverse order, exit 1."""
+    output = _output_with_unrelated_entry(tmp_path)
+    fixture = binance_root / f"{BINANCE_STEMS[1]}.valid.csv"
+
+    with pytest.MonkeyPatch.context() as patch:
+        observed = _fail_the_write_of(patch, PARTITIONS_FILE_NAME)
+        unlinked = _record_unlinks(patch)
+        code = normalize_command(
+            _binance_argv(fixture, output), ids=_CountingIds(), clock=_CountingClock()
+        )
+
+    captured = capsys.readouterr()
+    assert code == EXIT_REFUSAL
+    _assert_output_directory_refusal(captured, output)
+    assert observed == [PARTITIONS_FILE_NAME]
+    assert unlinked == [
+        output / PARTITIONS_FILE_NAME,
+        output / DESCRIPTOR_FILE_NAME,
+        output / CONTAINER_FILE_NAME,
+    ]
+    assert _snapshot(output) == ((UNRELATED_NAME, len(UNRELATED_BYTES)),)
+
+
+@pytest.mark.parametrize("stem", BINANCE_STEMS)
+def test_the_binance_command_output_equals_the_committed_goldens_byte_for_byte(
+    stem: str,
+    tmp_path: Path,
+    binance_root: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+) -> None:
+    output = tmp_path / "output"
+    fixture = binance_root / f"{stem}.valid.csv"
+    golden = binance_root / "golden"
+
+    code = normalize_command(
+        _binance_argv(fixture, output), ids=fixed_ids, clock=fixed_clock
+    )
+
+    assert code == EXIT_SUCCESS
+    descriptor_bytes = (output / DESCRIPTOR_FILE_NAME).read_bytes()
+    partitions_bytes = (output / PARTITIONS_FILE_NAME).read_bytes()
+    assert descriptor_bytes == (golden / f"{stem}.descriptor.json").read_bytes()
+    assert partitions_bytes == (golden / f"{stem}.partitions.json").read_bytes()
+    hash_file = (golden / f"{stem}.content_hash.txt").read_bytes()
+    assert hash_file == (_descriptor(output).content_hash + "\n").encode("ascii")
+    assert b"\r" not in hash_file
 
 
 # --- the module entry point -------------------------------------------------------

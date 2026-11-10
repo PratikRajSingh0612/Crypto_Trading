@@ -64,6 +64,7 @@ PACKAGE = "crypto_lab_offline_data"
 EXPECTED_MODULES = (
     "__init__.py",
     "__main__.py",
+    "binance_kline_csv.py",
     "candle_csv.py",
     "cli.py",
     "diagnostics.py",

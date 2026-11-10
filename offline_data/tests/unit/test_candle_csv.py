@@ -857,6 +857,7 @@ def test_the_refusal_codes_are_the_closed_section_five_four_set() -> None:
         "OFFLINE_DATA.OUTPUT_DIRECTORY",
         "OFFLINE_DATA.INPUT_PATH",
         "OFFLINE_DATA.METADATA_FIELD",
+        "OFFLINE_DATA.TIMESTAMP_UNIT",
     ]
 
 

@@ -29,9 +29,11 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import inspect
 import json
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +51,7 @@ from crypto_lab.datasets.models import (
     RawSourceProvenance,
     TimeInterval,
 )
+from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.diagnostics import (
     Diagnostic,
     DiagnosticCategory,
@@ -59,6 +62,10 @@ from crypto_lab.domain.results import Failure, Success
 from pydantic import ValidationError
 
 from crypto_lab_offline_data import __version__
+from crypto_lab_offline_data.binance_kline_csv import (
+    TimestampUnit,
+    read_binance_kline_csv,
+)
 from crypto_lab_offline_data.candle_csv import (
     DEFAULT_MAX_BYTES,
     WHOLE_INPUT_LINE,
@@ -76,10 +83,13 @@ from crypto_lab_offline_data.metadata import (
     NORMALIZATION_IMPLEMENTATION,
     ORIGINAL_TIMEZONE,
     P2_B1_LIMITATION,
+    P2_B3_LIMITATION,
     PLACEHOLDER_CONTENT_HASH,
+    SOURCE_IDENTITIES,
     SOURCE_NAME,
     SOURCE_VERSION,
     DatasetBundle,
+    InputFormat,
     build_dataset_metadata,
     drawn_identifier,
     drawn_instant,
@@ -118,6 +128,14 @@ PLAN_LIMITATION_TEXT = (
     "interim container normalized-ndjson/0.1.0; Parquet partition emission "
     "requires the pyarrow acquisition (P2-B1)"
 )
+BINANCE_PLAN_LIMITATION_TEXT = (
+    "P2-B3: binance-spot-kline-csv/1 fields 7 to 12 (close time, quote asset "
+    "volume, number of trades, taker buy volumes, ignore) are validated for "
+    "shape and not retained; synthetic fixtures only, no real Binance archive "
+    "ingested"
+)
+BINANCE_US_FIXTURE = "SYNTHETIC-BTCUSDT-1m-2025-01-01-us.valid.csv"
+BINANCE_START = datetime(2025, 1, 1, tzinfo=UTC)
 DESCRIPTOR_FIELDS = {
     "schema_version",
     "dataset_id",
@@ -193,6 +211,21 @@ class _Inputs:
 
 def _inputs(fixture: Path, directory: Path, ids: IdProvider, clock: Clock) -> _Inputs:
     read = read_ohlcv_csv(fixture, ids=ids, clock=clock)
+    return _products(read, fixture, directory, ids, clock)
+
+
+def _binance_inputs(
+    fixture: Path, directory: Path, ids: IdProvider, clock: Clock
+) -> _Inputs:
+    read = read_binance_kline_csv(
+        fixture, timestamp_unit=TimestampUnit.MICROSECONDS, ids=ids, clock=clock
+    )
+    return _products(read, fixture, directory, ids, clock)
+
+
+def _products(
+    read: object, fixture: Path, directory: Path, ids: IdProvider, clock: Clock
+) -> _Inputs:
     assert isinstance(read, Success)
     validated = validate_series(read.value, timeframe="1m", ids=ids, clock=clock)
     assert isinstance(validated, Success)
@@ -234,6 +267,27 @@ def _build(
         input_name=inputs.input_name if input_name is None else input_name,
         ids=ids,
         clock=clock,
+    )
+
+
+def _build_for(
+    inputs: _Inputs,
+    ids: IdProvider,
+    clock: Clock,
+    source_format: InputFormat,
+) -> Success[DatasetBundle] | Failure:
+    """Build with an explicit ``source_format``; ``_build`` keeps the default."""
+    return build_dataset_metadata(
+        inputs.series,
+        inputs.container,
+        inputs.raw,
+        instrument=_instrument(),
+        timeframe="1m",
+        source=DEFAULT_SOURCE,
+        input_name=inputs.input_name,
+        ids=ids,
+        clock=clock,
+        source_format=source_format,
     )
 
 
@@ -1317,3 +1371,174 @@ def test_the_draw_helpers_validate_against_the_core_grammar(
     with pytest.raises(ProviderContractError) as clock_info:
         drawn_instant(_ValueClock(NAIVE_INSTANT))
     assert clock_info.value.method == "now_utc"
+
+
+# --- the second slice (section 2.5): input formats and source identities -------------
+
+
+def test_the_input_format_is_a_closed_enum_with_the_literal_identity_table() -> None:
+    assert issubclass(InputFormat, StrEnum)
+    assert [item.value for item in InputFormat] == [
+        "ohlcv-csv/1",
+        "binance-spot-kline-csv/1",
+    ]
+    assert InputFormat("ohlcv-csv/1") is InputFormat.OHLCV_CSV_1
+    assert (
+        InputFormat("binance-spot-kline-csv/1") is InputFormat.BINANCE_SPOT_KLINE_CSV_1
+    )
+    assert SOURCE_IDENTITIES == {
+        InputFormat.OHLCV_CSV_1: ("ohlcv-csv", "1.0.0"),
+        InputFormat.BINANCE_SPOT_KLINE_CSV_1: ("binance-spot-kline-csv", "1.0.0"),
+    }
+    assert SOURCE_IDENTITIES[InputFormat.OHLCV_CSV_1] == (SOURCE_NAME, SOURCE_VERSION)
+    assert set(SOURCE_IDENTITIES) == set(InputFormat)
+    with pytest.raises(ValueError, match="parquet"):
+        InputFormat("parquet/1")
+
+
+def test_the_source_format_parameter_is_keyword_only_with_the_default() -> None:
+    parameter = inspect.signature(build_dataset_metadata).parameters["source_format"]
+
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is InputFormat.OHLCV_CSV_1
+
+
+def test_the_default_source_format_keeps_the_slice_one_bundle_byte_identical(
+    tmp_path: Path,
+    clean_fixture: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+) -> None:
+    inputs = _inputs(clean_fixture, tmp_path, fixed_ids, fixed_clock)
+
+    default = _bundle(_build(inputs, fixed_ids, fixed_clock))
+    explicit = _bundle(
+        _build_for(inputs, fixed_ids, fixed_clock, InputFormat.OHLCV_CSV_1)
+    )
+
+    default_bytes = canonical_json_bytes(default.descriptor)
+    assert default_bytes == canonical_json_bytes(explicit.descriptor)
+    assert canonical_json_bytes(list(default.partitions)) == canonical_json_bytes(
+        list(explicit.partitions)
+    )
+    assert default.descriptor.raw_source_provenance[0].source_name == "ohlcv-csv"
+    assert default.descriptor.known_limitations == (PLAN_LIMITATION_TEXT,)
+    assert default.partitions[0].quality_observations == (PLAN_LIMITATION_TEXT,)
+    assert b"P2-B3" not in default_bytes
+    assert b"P2-B3" not in canonical_json_bytes(list(default.partitions))
+
+
+def test_the_binance_source_format_threads_its_identity_and_the_second_limitation(
+    tmp_path: Path,
+    sub_project_root: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+) -> None:
+    fixture = sub_project_root / "tests" / "fixtures" / "binance" / BINANCE_US_FIXTURE
+    inputs = _binance_inputs(fixture, tmp_path, fixed_ids, fixed_clock)
+    container_sha256 = hashlib.sha256(inputs.container_path.read_bytes()).hexdigest()
+
+    bundle = _bundle(
+        _build_for(inputs, fixed_ids, fixed_clock, InputFormat.BINANCE_SPOT_KLINE_CSV_1)
+    )
+
+    descriptor = bundle.descriptor
+    (partition,) = bundle.partitions
+    assert descriptor.raw_source_provenance == (
+        RawSourceProvenance(
+            source_name="binance-spot-kline-csv",
+            source_version="1.0.0",
+            source_record=BINANCE_US_FIXTURE,
+            source_hash=inputs.raw_sha256,
+        ),
+    )
+    assert partition.raw_source_provenance == descriptor.raw_source_provenance
+    assert descriptor.known_limitations == (
+        BINANCE_PLAN_LIMITATION_TEXT,
+        PLAN_LIMITATION_TEXT,
+    )
+    assert descriptor.known_limitations == tuple(sorted(descriptor.known_limitations))
+    assert partition.quality_observations == (
+        BINANCE_PLAN_LIMITATION_TEXT,
+        PLAN_LIMITATION_TEXT,
+    )
+    assert descriptor.validation_status is DatasetValidationStatus.VALID
+    assert descriptor.start_utc == BINANCE_START
+    assert descriptor.end_utc == BINANCE_START + timedelta(hours=1)
+    assert descriptor.raw_checksums == (inputs.raw_sha256,)
+    assert descriptor.normalized_checksums == (container_sha256,)
+    assert partition.row_count == FIXTURE_ROW_COUNT
+    assert descriptor.timeframe == "1m"
+    assert descriptor.source == DEFAULT_SOURCE
+    assert descriptor.content_hash == dataset_metadata_hash(
+        descriptor, bundle.partitions
+    )
+    validate_dataset_identity(descriptor, bundle.partitions)
+
+
+def test_the_binance_observations_sort_with_the_differing_duplicate_text(
+    tmp_path: Path,
+    candles_root: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+) -> None:
+    """Both limitation tuples are ``tuple(sorted(...))``: the P2-B3 text sorts first."""
+    inputs = _inputs(
+        candles_root / GAPS_DUPLICATES_FIXTURE, tmp_path, fixed_ids, fixed_clock
+    )
+
+    bundle = _bundle(
+        _build_for(inputs, fixed_ids, fixed_clock, InputFormat.BINANCE_SPOT_KLINE_CSV_1)
+    )
+
+    (partition,) = bundle.partitions
+    assert partition.quality_observations == (
+        BINANCE_PLAN_LIMITATION_TEXT,
+        DIFFERING_DUPLICATE_OBSERVATION,
+        PLAN_LIMITATION_TEXT,
+    )
+    assert partition.quality_observations == tuple(
+        sorted(partition.quality_observations)
+    )
+    assert bundle.descriptor.known_limitations == (
+        BINANCE_PLAN_LIMITATION_TEXT,
+        PLAN_LIMITATION_TEXT,
+    )
+    assert (
+        bundle.descriptor.validation_status
+        is DatasetValidationStatus.VALID_WITH_WARNINGS
+    )
+
+
+def test_the_second_limitation_text_is_the_plan_literal_within_the_core_bound() -> None:
+    assert P2_B3_LIMITATION == BINANCE_PLAN_LIMITATION_TEXT
+    assert P2_B3_LIMITATION.startswith("P2-B3: binance-spot-kline-csv/1 fields 7 to 12")
+    assert "not retained" in P2_B3_LIMITATION
+    assert "synthetic fixtures only" in P2_B3_LIMITATION
+    assert "no real Binance archive ingested" in P2_B3_LIMITATION
+    assert "P2-B1" not in P2_B3_LIMITATION
+    assert 1 <= len(P2_B3_LIMITATION) <= BOUNDED_TEXT_MAX_LENGTH
+    assert P2_B3_LIMITATION < P2_B1_LIMITATION
+    assert sorted((P2_B1_LIMITATION, P2_B3_LIMITATION)) == [
+        P2_B3_LIMITATION,
+        P2_B1_LIMITATION,
+    ]
+
+
+def test_the_source_format_is_material_to_the_content_hash(
+    tmp_path: Path,
+    clean_fixture: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+) -> None:
+    inputs = _inputs(clean_fixture, tmp_path, fixed_ids, fixed_clock)
+
+    ohlcv = _bundle(_build_for(inputs, fixed_ids, fixed_clock, InputFormat.OHLCV_CSV_1))
+    binance = _bundle(
+        _build_for(inputs, fixed_ids, fixed_clock, InputFormat.BINANCE_SPOT_KLINE_CSV_1)
+    )
+
+    assert ohlcv.descriptor.content_hash != binance.descriptor.content_hash
+    assert ohlcv.descriptor.dataset_id == binance.descriptor.dataset_id
+    assert ohlcv.partitions[0].content_hash == binance.partitions[0].content_hash
+    validate_dataset_identity(binance.descriptor, binance.partitions)

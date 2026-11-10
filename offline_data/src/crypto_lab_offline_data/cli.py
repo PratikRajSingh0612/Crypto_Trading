@@ -1,7 +1,10 @@
 """The ``normalize`` command of plan Task 3 and its exit table.
 
 ``normalize_command`` composes the slice in the accepted order: it reads the
-input (``read_ohlcv_csv``), validates it (``validate_series``), digests the raw
+input through the reader of the selected ``--input-format``
+(``read_ohlcv_csv`` for the default ``ohlcv-csv/1``, ``read_binance_kline_csv``
+with the declared ``--timestamp-unit`` for ``binance-spot-kline-csv/1``),
+validates it (``validate_series``), digests the raw
 bytes (``raw_checksum``), draws each provider value once (``dataset_id``,
 ``partition_id``, ``diagnostic_id``, ``now_utc``, in that order, each validated
 when drawn) and snapshots them into fixed providers, inspects and creates
@@ -22,9 +25,18 @@ and ``OFFLINE_DATA.OUTPUT_DIRECTORY`` included; ``2`` argument parsing only, whi
 is argparse's own exit for a missing, unknown or malformed argument (a
 ``--instrument`` the core helper cannot parse and a ``--source`` outside the
 core's bounded-text range are refused there, with messages that never echo the
-value, while an unsupported ``--timeframe`` is ``validate_series``'s
-``TIMEFRAME_GRID`` refusal, exit ``1``, never an argparse error); ``3``
-provider fault, the ``ProviderContractError`` any step raises.
+value, while for ``ohlcv-csv/1`` an unsupported ``--timeframe`` is
+``validate_series``'s ``TIMEFRAME_GRID`` refusal, exit ``1``, never an argparse
+error); ``3`` provider fault, the ``ProviderContractError`` any step raises.
+The second slice adds two closed-choice arguments, each converted by a
+function that names the admitted values and never echoes the given one:
+``--input-format`` (default ``ohlcv-csv/1``) and ``--timestamp-unit``
+(``milliseconds`` or ``microseconds``). Three couplings are argparse errors
+(exit ``2``, the parser's own usage text, no value echoed), checked after
+parsing and before any provider draw: ``--timestamp-unit`` is required with
+``binance-spot-kline-csv/1`` and refused with ``ohlcv-csv/1``, and
+``--timeframe`` must be ``1m`` with ``binance-spot-kline-csv/1``, the only
+timeframe that format supports (``ohlcv-csv/1`` keeps its six timeframes).
 
 ``--output`` is taken as given (a relative path is relative to the working
 directory) and inspected on its own entry without following it: an absent path
@@ -67,9 +79,14 @@ from crypto_lab.domain.canonical_json import canonical_json_bytes, canonical_jso
 from crypto_lab.domain.records import InstrumentRef, MarketType, parse_instrument_id
 from crypto_lab.domain.results import Failure
 
+from crypto_lab_offline_data.binance_kline_csv import (
+    TimestampUnit,
+    read_binance_kline_csv,
+)
 from crypto_lab_offline_data.candle_csv import (
     DEFAULT_MAX_BYTES,
     WHOLE_INPUT_LINE,
+    ReadResult,
     read_ohlcv_csv,
 )
 from crypto_lab_offline_data.diagnostics import (
@@ -82,6 +99,7 @@ from crypto_lab_offline_data.metadata import (
     CONTAINER_FILE_NAME,
     DEFAULT_SOURCE,
     SCHEMA_VERSION,
+    InputFormat,
     build_dataset_metadata,
     drawn_identifier,
     drawn_instant,
@@ -104,6 +122,8 @@ EXIT_SUCCESS = 0
 EXIT_REFUSAL = 1
 EXIT_ARGUMENTS = 2
 EXIT_PROVIDER_FAULT = 3
+#: The one timeframe ``binance-spot-kline-csv/1`` supports (second slice, 1).
+BINANCE_TIMEFRAME = "1m"
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,17 +155,22 @@ class _SnapshotClock:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """The command parser: one ``normalize`` command with its five options."""
+    """The command parser: one ``normalize`` command with its seven options."""
     parser = argparse.ArgumentParser(
         prog=PROGRAM,
-        description="Offline historical candle data: the first bounded slice.",
+        description="Offline historical candle data: the bounded slices of Project 2.",
     )
     commands = parser.add_subparsers(dest="command", required=True, metavar="command")
     normalize = commands.add_parser(
         "normalize",
-        help="read one ohlcv-csv/1 input and emit its interim container and metadata",
+        help=(
+            "read one ohlcv-csv/1 or binance-spot-kline-csv/1 input and emit its "
+            "interim container and metadata"
+        ),
     )
-    normalize.add_argument("--input", required=True, help="the ohlcv-csv/1 input file")
+    normalize.add_argument(
+        "--input", required=True, help="the input file in the selected --input-format"
+    )
     normalize.add_argument(
         "--output",
         required=True,
@@ -160,7 +185,10 @@ def build_parser() -> argparse.ArgumentParser:
     normalize.add_argument(
         "--timeframe",
         required=True,
-        help="the bar timeframe: 1m, 5m, 15m, 1h, 4h or 1d",
+        help=(
+            "the bar timeframe: 1m, 5m, 15m, 1h, 4h or 1d for ohlcv-csv/1; "
+            f"{BINANCE_TIMEFRAME} only for binance-spot-kline-csv/1"
+        ),
     )
     normalize.add_argument(
         "--source",
@@ -171,7 +199,76 @@ def build_parser() -> argparse.ArgumentParser:
             f"(default: {DEFAULT_SOURCE})"
         ),
     )
+    normalize.add_argument(
+        "--input-format",
+        default=InputFormat.OHLCV_CSV_1,
+        type=_input_format_argument,
+        choices=tuple(InputFormat),
+        help=(
+            f"the input format (default: {InputFormat.OHLCV_CSV_1.value}); "
+            f"{InputFormat.BINANCE_SPOT_KLINE_CSV_1.value} requires "
+            f"--timestamp-unit and --timeframe {BINANCE_TIMEFRAME}"
+        ),
+    )
+    normalize.add_argument(
+        "--timestamp-unit",
+        type=_timestamp_unit_argument,
+        choices=tuple(TimestampUnit),
+        help=(
+            "the unit of the open and close time fields, required with "
+            f"{InputFormat.BINANCE_SPOT_KLINE_CSV_1.value} and refused with "
+            f"{InputFormat.OHLCV_CSV_1.value}"
+        ),
+    )
     return parser
+
+
+def _input_format_argument(text: str) -> InputFormat:
+    """Parse ``--input-format`` into the closed ``InputFormat`` without echoing it."""
+    try:
+        return InputFormat(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"input format must be {InputFormat.OHLCV_CSV_1.value} or "
+            f"{InputFormat.BINANCE_SPOT_KLINE_CSV_1.value}"
+        ) from None
+
+
+def _timestamp_unit_argument(text: str) -> TimestampUnit:
+    """Parse ``--timestamp-unit`` into ``TimestampUnit`` without echoing the value."""
+    try:
+        return TimestampUnit(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"timestamp unit must be {TimestampUnit.MILLISECONDS.value} or "
+            f"{TimestampUnit.MICROSECONDS.value}"
+        ) from None
+
+
+def _validate_couplings(
+    parser: argparse.ArgumentParser, arguments: argparse.Namespace
+) -> None:
+    """The second slice's argument couplings, each an argparse error (exit 2).
+
+    The messages name the options and the admitted literals only, never the
+    given values; nothing has been drawn or created when they are raised.
+    """
+    binance = arguments.input_format is InputFormat.BINANCE_SPOT_KLINE_CSV_1
+    if binance and arguments.timestamp_unit is None:
+        parser.error(
+            "--timestamp-unit is required with --input-format "
+            f"{InputFormat.BINANCE_SPOT_KLINE_CSV_1.value}"
+        )
+    if not binance and arguments.timestamp_unit is not None:
+        parser.error(
+            "--timestamp-unit is not accepted with --input-format "
+            f"{InputFormat.OHLCV_CSV_1.value}"
+        )
+    if binance and arguments.timeframe != BINANCE_TIMEFRAME:
+        parser.error(
+            f"--timeframe must be {BINANCE_TIMEFRAME} with --input-format "
+            f"{InputFormat.BINANCE_SPOT_KLINE_CSV_1.value}"
+        )
 
 
 def _instrument_argument(text: str) -> InstrumentRef:
@@ -214,7 +311,9 @@ def normalize_command(
     files the command created and exits ``3``.
     """
     try:
-        arguments = build_parser().parse_args(argv)
+        parser = build_parser()
+        arguments = parser.parse_args(argv)
+        _validate_couplings(parser, arguments)
     except SystemExit as exit_request:
         return (
             exit_request.code if isinstance(exit_request.code, int) else EXIT_ARGUMENTS
@@ -237,7 +336,7 @@ def _run(
 ) -> int:
     """The accepted sequence; ``created`` records every file once it is owned."""
     input_path = Path(arguments.input)
-    read = read_ohlcv_csv(input_path, ids=ids, clock=clock)
+    read = _read_input(input_path, arguments, ids=ids, clock=clock)
     if isinstance(read, Failure):
         return _refused(read)
     validated = validate_series(
@@ -274,6 +373,7 @@ def _run(
         input_name=input_path.name,
         ids=snapshot_ids,
         clock=snapshot_clock,
+        source_format=arguments.input_format,
     )
     if isinstance(built, Failure):
         _remove_created(created)
@@ -287,6 +387,24 @@ def _run(
             _remove_created(created)
             return _refused(_output_refusal(snapshot_ids, snapshot_clock))
     return EXIT_SUCCESS
+
+
+def _read_input(
+    input_path: Path,
+    arguments: argparse.Namespace,
+    *,
+    ids: IdProvider,
+    clock: Clock,
+) -> ReadResult:
+    """Read the input through the reader of the selected ``--input-format``."""
+    if arguments.input_format is InputFormat.BINANCE_SPOT_KLINE_CSV_1:
+        return read_binance_kline_csv(
+            input_path,
+            timestamp_unit=arguments.timestamp_unit,
+            ids=ids,
+            clock=clock,
+        )
+    return read_ohlcv_csv(input_path, ids=ids, clock=clock)
 
 
 def _refused(failure: Failure) -> int:

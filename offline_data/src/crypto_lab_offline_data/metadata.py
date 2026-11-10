@@ -9,16 +9,22 @@ come from the injected providers: one ``ds_`` draw, one ``part_`` draw and one
 ``now_utc`` draw that fills both ``imported_at_utc`` and ``created_at_utc``.
 ``venue`` and ``instrument`` come from the ``InstrumentRef`` the command built
 with the core's ``parse_instrument_id``; ``source`` is the command's bounded
-text; the single ``RawSourceProvenance`` names the ``ohlcv-csv`` format at
-version ``1.0.0``, the bounded input file name and the raw checksum; the
-bounds, intervals, ``row_count`` and both checksums are the validated series'
-and the container's; ``validation_status`` is ``VALID`` when the series has no
-missing and no duplicate interval and ``VALID_WITH_WARNINGS`` otherwise
-(reading R4; a refused input never reaches this function, so ``INVALID`` is
-never emitted); and ``known_limitations`` and the partition's
+text; the single ``RawSourceProvenance`` names the input format's identity
+from the literal ``SOURCE_IDENTITIES`` table (``ohlcv-csv`` at version
+``1.0.0`` for the default ``source_format``, ``binance-spot-kline-csv`` at
+``1.0.0`` for the second slice's format), the bounded input file name and the
+raw checksum; the bounds, intervals, ``row_count`` and both checksums are the
+validated series' and the container's; ``validation_status`` is ``VALID`` when
+the series has no missing and no duplicate interval and ``VALID_WITH_WARNINGS``
+otherwise (reading R4; a refused input never reaches this function, so
+``INVALID`` is never emitted); and ``known_limitations`` and the partition's
 ``quality_observations`` both carry the P2-B1 text naming the interim
-container, the latter sorted together with the differing-duplicate
-observation when the series raised it (reading R3).
+container, for ``binance-spot-kline-csv/1`` runs the P2-B3 text naming what
+that format drops as well, each tuple sorted (the core requires sorted
+collections, so the ``P2-B3:`` text lands first) and the latter sorted
+together with the differing-duplicate observation when the series raised it
+(reading R3). Every existing call keeps the default ``source_format`` and
+emits bytes identical to the first slice's.
 
 The content hash follows section 5.4: the descriptor is built with a
 placeholder ``content_hash`` of sixty-four zeros, hashed with the core's
@@ -59,6 +65,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Final, Literal
 
 from crypto_lab.datasets.hashing import (
@@ -104,9 +111,24 @@ from crypto_lab_offline_data.validation import (
 
 #: The core schema version of every descriptor and partition this slice emits.
 SCHEMA_VERSION: Final = "1.0.0"
+
+
+class InputFormat(StrEnum):
+    """The closed set of input formats the command reads (second slice, 2.5)."""
+
+    OHLCV_CSV_1 = "ohlcv-csv/1"
+    BINANCE_SPOT_KLINE_CSV_1 = "binance-spot-kline-csv/1"
+
+
 #: The provenance ``source_name`` and ``source_version`` of ``ohlcv-csv/1``.
 SOURCE_NAME = "ohlcv-csv"
 SOURCE_VERSION = "1.0.0"
+#: The provenance identity of each input format, a literal table (second
+#: slice, section 2.5); its ``ohlcv-csv/1`` pair equals the two constants above.
+SOURCE_IDENTITIES = {
+    InputFormat.OHLCV_CSV_1: ("ohlcv-csv", "1.0.0"),
+    InputFormat.BINANCE_SPOT_KLINE_CSV_1: ("binance-spot-kline-csv", "1.0.0"),
+}
 #: The ``normalization_implementation`` identifier: the distribution's name.
 NORMALIZATION_IMPLEMENTATION = SOURCE_COMPONENT
 #: The command's default ``--source`` (section 5.1).
@@ -123,6 +145,14 @@ BOUNDED_TEXT_MAX_LENGTH = 1024
 P2_B1_LIMITATION = (
     "interim container normalized-ndjson/0.1.0; Parquet partition emission "
     "requires the pyarrow acquisition (P2-B1)"
+)
+#: The second limitation of ``binance-spot-kline-csv/1`` runs (second slice,
+#: section 2.6): what the format drops, and that no real archive was ingested.
+P2_B3_LIMITATION = (
+    "P2-B3: binance-spot-kline-csv/1 fields 7 to 12 (close time, quote asset "
+    "volume, number of trades, taker buy volumes, ignore) are validated for "
+    "shape and not retained; synthetic fixtures only, no real Binance archive "
+    "ingested"
 )
 _IDENTIFIER_PREFIXES = {
     "dataset_id": DATASET_ID_PREFIX,
@@ -182,6 +212,7 @@ def build_dataset_metadata(
     input_name: str,
     ids: IdProvider,
     clock: Clock,
+    source_format: InputFormat = InputFormat.OHLCV_CSV_1,
 ) -> MetadataResult:
     """Build the section 5.1 descriptor and partition with the section 5.4 identity.
 
@@ -191,7 +222,8 @@ def build_dataset_metadata(
     models are built inside one handler whose only effect is to leave
     ``bundle`` unset, and the ``METADATA_FIELD`` refusal (line ``0``, value
     length ``0``) is drawn after it, so no provider draw sits inside a handler
-    that converts a core error.
+    that converts a core error. ``source_format`` selects the provenance
+    identity and the limitation texts; its default is the first slice's format.
     """
     if timeframe not in SUPPORTED_TIMEFRAME_SECONDS:
         return refusal(
@@ -216,6 +248,7 @@ def build_dataset_metadata(
             dataset_id=dataset_id,
             partition_id=partition_id,
             instant=instant,
+            source_format=source_format,
         )
     except ValueError:
         bundle = None
@@ -242,11 +275,14 @@ def _bundle(
     dataset_id: str,
     partition_id: str,
     instant: datetime,
+    source_format: InputFormat,
 ) -> DatasetBundle:
     """The section 5.1 models with the section 5.4 identity; core errors propagate."""
+    source_name, source_version = SOURCE_IDENTITIES[source_format]
+    limitations = _limitations(source_format)
     provenance = RawSourceProvenance(
-        source_name=SOURCE_NAME,
-        source_version=SOURCE_VERSION,
+        source_name=source_name,
+        source_version=source_version,
         source_record=input_name,
         source_hash=raw.sha256,
     )
@@ -264,7 +300,7 @@ def _bundle(
         normalized_checksum=container.normalized_checksum,
         column_schema_version=COLUMN_SCHEMA_VERSION,
         raw_source_provenance=(provenance,),
-        quality_observations=tuple(sorted({P2_B1_LIMITATION, *series.observations})),
+        quality_observations=tuple(sorted({*limitations, *series.observations})),
     )
     has_quality_facts = bool(series.missing_intervals or series.duplicate_intervals)
     status = (
@@ -297,7 +333,7 @@ def _bundle(
         raw_checksums=(raw.sha256,),
         normalized_checksums=(container.normalized_checksum,),
         column_schema_version=COLUMN_SCHEMA_VERSION,
-        known_limitations=(P2_B1_LIMITATION,),
+        known_limitations=tuple(sorted(limitations)),
         created_at_utc=instant,
     )
     partitions = (partition,)
@@ -307,3 +343,10 @@ def _bundle(
     )
     validate_dataset_identity(descriptor, partitions)
     return DatasetBundle(descriptor=descriptor, partitions=partitions)
+
+
+def _limitations(source_format: InputFormat) -> tuple[str, ...]:
+    """The limitation texts of a run: P2-B1 always, P2-B3 for the Binance format."""
+    if source_format == InputFormat.BINANCE_SPOT_KLINE_CSV_1:
+        return (P2_B1_LIMITATION, P2_B3_LIMITATION)
+    return (P2_B1_LIMITATION,)

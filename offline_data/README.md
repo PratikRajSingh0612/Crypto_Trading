@@ -1,30 +1,34 @@
 # Crypto Trading Lab - offline historical candle data (`offline_data`)
 
-**Status:** Project 2, first bounded slice - Task 3 authored to plan revision 22, pending
-acceptance. The Task 0 scaffold, Task 1 and Task 2 are committed. Of
-`docs/superpowers/plans/2026-11-09-project-2-offline-data-first-slice-implementation-plan.md`:
+**Status:** Project 2, first bounded slice committed (Tasks 0 to 3 of
+`docs/superpowers/plans/2026-11-09-project-2-offline-data-first-slice-implementation-plan.md`,
+revision 22); second slice, the `binance-spot-kline-csv/1` reader of
+`docs/superpowers/plans/2026-11-10-project-2-binance-kline-reader-plan.md` (revision 3),
+authored and awaiting the controller's verification, independent review and acceptance.
 
 | Task | Delivers | Status |
 |---|---|---|
 | 0 | scaffold, launcher, verify script, pinned lock | committed |
 | 1 | the `ohlcv-csv/1` reader (`candle_csv`), refusal diagnostics and the provider contract exception (`diagnostics`), injected identity and clock providers (`providers`), fixtures, boundary guards | committed |
 | 2 | section 4 validation with explicit missing and duplicate intervals (`validation`), the interim normalized container, its checksums and the raw input checksum (`normalize`), five fixtures, the writer's exclusive-create and partial-file-removal pins in the boundary guards | committed |
-| 3 | `DatasetDescriptor` and `DatasetPartition` emission with the core content hash (`metadata`), the `normalize` command and its module entry point (`cli`, `__main__`), six golden files, the consumer round trip, the one new refusal code `OFFLINE_DATA.METADATA_FIELD` with its closed-set pin, the command's directory-creation, JSON-write and reverse-order-removal pins in the boundary guards | authored; awaits the controller's verification, independent review and acceptance |
+| 3 | `DatasetDescriptor` and `DatasetPartition` emission with the core content hash (`metadata`), the `normalize` command and its module entry point (`cli`, `__main__`), six golden files, the consumer round trip, the one new refusal code `OFFLINE_DATA.METADATA_FIELD` with its closed-set pin, the command's directory-creation, JSON-write and reverse-order-removal pins in the boundary guards | committed |
+| second slice, Task 1 | the `binance-spot-kline-csv/1` reader with explicit timestamp units (`binance_kline_csv`), the `--input-format` and `--timestamp-unit` arguments, the `InputFormat` source-identity table and the P2-B3 limitation (`metadata`), the one new refusal code `OFFLINE_DATA.TIMESTAMP_UNIT`, twenty-one SYNTHETIC fixtures and nine goldens | authored; awaits the controller's verification, independent review and acceptance |
 
-Pending after Task 3 and outside this slice (plan section 1.4): registration of the emitted
-metadata into a core dataset registry (slice 2, a temporary-database contract test owned by
-Workstream A, fed by the committed goldens), finalization through the artifact finalizer
-(slice 3, after the Stage 9 merge), Parquet emission (the P2-B1 lift) and the real-source
-verification. No interim container enters a persistent registry.
+Pending after the second slice and outside it: registration of the emitted metadata into a
+core dataset registry (a temporary-database contract test owned by Workstream A, fed by the
+committed goldens), finalization through the artifact finalizer (after the Stage 9 merge),
+Parquet emission (the P2-B1 lift) and the real-source verification. No interim container
+enters a persistent registry, and no real Binance archive has been ingested.
 
 ## Scope
 
-This sub-project is the first slice of Project 2: read one local historical-candle
-fixture in one documented input format, validate and normalize it under the core's
-dataset rules, and emit the dataset metadata the core already defines
-(`DatasetDescriptor`, `DatasetPartition`) with a deterministic content identity.
-Everything is offline: no download, no exchange or broker integration, no credentials,
-no live trading, no cloud or server deployment.
+This sub-project is Project 2 in bounded slices: read one local historical-candle file in
+one of two documented input formats (`ohlcv-csv/1`; `binance-spot-kline-csv/1`, an
+already extracted Binance Spot kline CSV with a declared timestamp unit), validate and
+normalize it under the core's dataset rules, and emit the dataset metadata the core
+already defines (`DatasetDescriptor`, `DatasetPartition`) with a deterministic content
+identity. Everything is offline: no download, no exchange or broker integration, no
+credentials, no live trading, no cloud or server deployment.
 
 ## Placement: outside the core's dependency and runtime boundary
 
@@ -141,10 +145,13 @@ sub-project verifier and the core verifier alone, never concurrently.
 
 ## Input format
 
-The one supported input format of this slice is `ohlcv-csv/1`, read by
-`crypto_lab_offline_data.candle_csv.read_ohlcv_csv(path, *, ids, clock, max_rows, max_bytes)`.
-The reader is strict: every violation below is a refusal, and nothing is truncated,
-converted or repaired.
+Two input formats are supported, each a separate, explicit identity selected with the
+command's `--input-format` (default `ohlcv-csv/1`). The first slice's format is
+`ohlcv-csv/1`, read by
+`crypto_lab_offline_data.candle_csv.read_ohlcv_csv(path, *, ids, clock, max_rows, max_bytes)`;
+the second slice's format, `binance-spot-kline-csv/1`, has its own subsection below and
+reuses this reader's shared rules without changing them. Both readers are strict: every
+violation below is a refusal, and nothing is truncated, converted or repaired.
 
 - **Input path.** The path must be a readable regular file. A missing path, a
   directory, an unreadable file (for example one another process holds open without
@@ -215,11 +222,121 @@ core error, and a refused value raises
 `RuntimeError`, so no `ValueError` conversion at a boundary can swallow it; it names the
 provider method (`method` attribute) and never carries the value, and the core error
 that refused the value is not chained. It is raised by `refusal` and, through it, by
-`read_ohlcv_csv`, `validate_series`, `write_normalized_container` and `raw_checksum`; all
-four draw their providers only when they build a refusal, so a faulty provider is never
-observed on an accepted input or a completed write. It is the only exception that
-crosses the sub-project's boundary: neither the core `ValidationError`, nor an
-`OSError`, nor the `ValueError` of a path the platform rejects escapes any of them.
+`read_ohlcv_csv`, `read_binance_kline_csv`, `validate_series`,
+`write_normalized_container` and `raw_checksum`; all five draw their providers only when
+they build a refusal, so a faulty provider is never observed on an accepted input or a
+completed write. It is the only exception that crosses the sub-project's boundary:
+neither the core `ValidationError`, nor an `OSError`, nor the `ValueError` of a path the
+platform rejects escapes any of them.
+
+### Binance Spot kline CSV (`binance-spot-kline-csv/1`)
+
+`crypto_lab_offline_data.binance_kline_csv.read_binance_kline_csv(path, *, timestamp_unit,
+ids, clock, max_rows, max_bytes)` reads one already extracted Binance Spot historical kline
+CSV file as the user placed it on disk, for one representative instrument
+(`BINANCE:BTC/USDT:SPOT`) and one supported timeframe, `1m`. It returns the same
+`Success[tuple[CandleRow, ...]] | Failure` as the first reader, so validation, the container,
+the raw checksum and the metadata consume its rows unchanged. The reader downloads nothing,
+calls no API, reads no archive or `.CHECKSUM` file and repairs nothing.
+
+**Documented and UNVERIFIED facts.** The format facts come from documentation only (the
+`binance/binance-public-data` README, its "Microsecond update" commit, the Spot REST
+market-data documentation and the Binance Vision Dataset Terms, retrieved 2026-11-10):
+the twelve columns and their order, the microsecond timestamps for Spot data from
+2025-01-01 (milliseconds before), the interval list and the archive checksum scheme. The
+delimiter (the README renders its example row pipe-separated in a table), header presence,
+line endings, a final newline, the `Ignore` value, exponent-free numerics and whether any
+file mixes units are UNVERIFIED and decided conservatively: the reader refuses what
+differs. No successful ingestion of an actual Binance archive is claimed; every fixture is
+SYNTHETIC and labelled so by its `SYNTHETIC-` name.
+
+**Timestamp unit.** `timestamp_unit` is `TimestampUnit.MILLISECONDS` (`milliseconds`) or
+`TimestampUnit.MICROSECONDS` (`microseconds`), declared by the caller (the command's
+`--timestamp-unit`) and applied to the whole file; the reader never guesses it. With the
+divisor `1000` or `1000000`, the integer of each time field is first checked against the
+window `1483228800 * divisor <= value < 4102444800 * divisor`, the epoch seconds of
+`2017-01-01T00:00:00Z` (inclusive) and `2100-01-01T00:00:00Z` (exclusive); a value outside
+it is `OFFLINE_DATA.TIMESTAMP_UNIT` at the row's line with the field's length. That is
+exactly what a millisecond value declared as microseconds (a 1970 instant) or a
+microsecond value declared as milliseconds (far beyond 2100) produces. Because the check
+precedes construction, the instant is then built by integer arithmetic alone
+(`divmod(value, divisor)`, a `timedelta` of whole seconds and microseconds from the epoch);
+no float is used and no `OverflowError` or `ValueError` can arise. Between 2001 and 2286
+millisecond values have 13 digits and microsecond values 16.
+
+**Shared rules.** Input path, size ceilings, encoding and line endings are exactly the
+`ohlcv-csv/1` rules above (`INPUT_PATH`, `SIZE_CEILING` by bytes and by rows,
+`CSV_ENCODING`; UTF-8 without a BOM; LF or CRLF; a missing final newline accepted). A file
+using another delimiter, another line ending or exponent notation is refused by the rule it
+violates, never repaired.
+
+**No header row.** The documented layout has none and header presence is UNVERIFIED, so
+the reader accepts none: every line is a data row. The line-1 rule comes first and applies
+to line 1 only: a first line whose first comma-separated field is not an unsigned decimal
+integer of 1 to 20 digits (a blank line, a documented-column-names header, a pipe-delimited
+line) is `OFFLINE_DATA.CSV_HEADER` at line 1 with the line's length. Once that rule passes,
+every line, line 1 included, is parsed by the row rules below in order, so a wrong-unit
+value on line 1 is `TIMESTAMP_UNIT` at line 1. An empty file is `OFFLINE_DATA.EMPTY_SERIES`
+at line 1, the line at which the first data row was expected.
+
+**Rows.** Exactly twelve comma-separated fields, no quoting; anything else, a blank line
+included, is `OFFLINE_DATA.CSV_ROW_SHAPE` with the line's length. Rules apply per row in
+field order, so a row that breaks two rules is refused by the first:
+
+| Field | Binance column | Grammar | Refusal | Mapped to |
+|---|---|---|---|---|
+| 1 | Open time | unsigned decimal integer `[0-9]{1,20}` in the declared unit, inside the window | `CSV_TIMESTAMP`; `TIMESTAMP_UNIT` | `CandleRow.open_time_utc` |
+| 2 | Open | the `ohlcv-csv/1` number grammar, positive | `CSV_NUMBER` | `open` |
+| 3 | High | same, positive | `CSV_NUMBER` | `high` |
+| 4 | Low | same, positive | `CSV_NUMBER` | `low` |
+| 5 | Close | same, positive | `CSV_NUMBER` | `close` |
+| 6 | Volume (base asset) | the number grammar | `CSV_NUMBER` | `volume` |
+| 7 | Close time | `[0-9]{1,20}` in the declared unit, inside the window, strictly greater than the open time | `CSV_TIMESTAMP`; `TIMESTAMP_UNIT`; `CSV_TIMESTAMP` with the close field's length | checked, not retained |
+| 8 | Quote asset volume | the number grammar | `CSV_NUMBER` | checked, not retained |
+| 9 | Number of trades | unsigned decimal integer `[0-9]+` within the canonical bound | `CSV_NUMBER` | checked, not retained |
+| 10 | Taker buy base asset volume | the number grammar | `CSV_NUMBER` | checked, not retained |
+| 11 | Taker buy quote asset volume | the number grammar | `CSV_NUMBER` | checked, not retained |
+| 12 | Ignore | any text without a comma; not interpreted (its value is UNVERIFIED) | none | dropped |
+
+Fields 2 to 6, 8, 10 and 11 use the slice-1 `_parse_number` rule (exact `Decimal`, the
+core's 256-character canonical bound, no sign, no exponent, no whitespace; trailing zeros
+such as `4.15070000` are kept and canonicalized only in the normalized container). A time
+field that is not `[0-9]{1,20}` is `CSV_TIMESTAMP` with the field's length, a longer digit
+run included: no `int()` is ever applied to an unbounded token and the interpreter's
+integer-string digit limit is never reached (the tests prove the 20-digit bound, a 21-digit
+token and a 4400-digit token). Because field 12 is not interpreted, a lone trailing carriage
+return on the final line lands in it and the row is accepted; a file of CR-only line
+endings is one line of too many fields, the `CSV_ROW_SHAPE` refusal. The relation shown by
+the documentation's example row (close time = open time + interval - 1 unit) is not
+enforced because the reader checks no timeframe: grid, spacing, ordering, gaps and
+duplicates stay the `validate_series` rules on `open_time_utc`, so a file of a coarser
+interval declared `--timeframe 1m` surfaces as missing intervals and
+`VALID_WITH_WARNINGS`, a reversed `high`/`low` as `PRICE_SANITY`, a decreasing open time
+as `ORDERING` and an off-grid open time as `TIMEFRAME_GRID`.
+
+**Refusals.** The closed set gains one member, `OFFLINE_DATA.TIMESTAMP_UNIT`, appended
+after `METADATA_FIELD` (fifteen codes). The reader emits:
+
+| Code | When | `line`, `value_length` |
+|---|---|---|
+| `OFFLINE_DATA.INPUT_PATH`, `OFFLINE_DATA.SIZE_CEILING` (by bytes), `OFFLINE_DATA.CSV_ENCODING` | the shared rules above | as for `ohlcv-csv/1` (`line` 0 is used by this reader only through these shared paths) |
+| `OFFLINE_DATA.SIZE_CEILING` (by rows) | the first row beyond `max_rows` | the row's line, the line's length |
+| `OFFLINE_DATA.EMPTY_SERIES` | an empty file | 1, 0 |
+| `OFFLINE_DATA.CSV_HEADER` | line 1 whose first field is not 1 to 20 digits | 1, the line's length |
+| `OFFLINE_DATA.CSV_ROW_SHAPE` | a line without exactly twelve fields | the line, its length |
+| `OFFLINE_DATA.CSV_TIMESTAMP` | a time field outside `[0-9]{1,20}`; a close time not after the open time | the line, the field's length |
+| `OFFLINE_DATA.TIMESTAMP_UNIT` | a time field outside the window in the declared unit | the line, the field's length |
+| `OFFLINE_DATA.CSV_NUMBER` | a numeric field outside its grammar (zero or signed prices included) | the line, the field's length |
+
+Every diagnostic names the line, the rule and the length only, never the value (section
+5.4 of the first-slice plan); the `diag_` identifier is drawn once per refusal and nothing
+is drawn on success; a refused provider value raises `ProviderContractError`.
+
+**Limitations and terms.** Fields 7 to 12 are validated for shape and not retained; every
+`binance-spot-kline-csv/1` run records that fact as the P2-B3 limitation beside P2-B1 (see
+"Interim format and pending obligations" and "Source terms" below). Non-goals of this
+slice: futures or margin klines, every Binance interval other than `1m` for this format,
+zip archives and `.CHECKSUM` files, header rows, multi-file concatenation.
 
 ## Validation
 
@@ -384,13 +501,19 @@ descriptor's `source_hash` and `raw_checksums` entry and the partition's `raw_ch
 ## Dataset metadata
 
 `crypto_lab_offline_data.metadata.build_dataset_metadata(series, container, raw, *,
-instrument, timeframe, source, input_name, ids, clock)` turns a `ValidatedSeries`, the
+instrument, timeframe, source, input_name, ids, clock,
+source_format=InputFormat.OHLCV_CSV_1)` turns a `ValidatedSeries`, the
 `NormalizedContainer` of its write and the `RawChecksum` of the input into a
 `Success[DatasetBundle]` (`descriptor`: the core `DatasetDescriptor`; `partitions`: the one
 core `DatasetPartition`) or one refusal `Failure`. `instrument` is the core `InstrumentRef`
 the command builds with the core's `parse_instrument_id`; `source` is the command's
-`--source` text; `input_name` is the input file's name. Every field follows plan section
-5.1:
+`--source` text; `input_name` is the input file's name; `source_format` is the
+`InputFormat` (`StrEnum`: `OHLCV_CSV_1 = "ohlcv-csv/1"`,
+`BINANCE_SPOT_KLINE_CSV_1 = "binance-spot-kline-csv/1"`) whose identity the literal table
+`SOURCE_IDENTITIES` maps to the provenance pair (`("ohlcv-csv", "1.0.0")`, equal to the
+retained `SOURCE_NAME` and `SOURCE_VERSION`; `("binance-spot-kline-csv", "1.0.0")`). Every
+existing call keeps the default and emits bytes identical to the first slice's. Every
+field follows plan section 5.1:
 
 | Descriptor field | Value |
 |---|---|
@@ -404,7 +527,7 @@ the command builds with the core's `parse_instrument_id`; `source` is the comman
 | `original_timezone` | `UTC` (the input contract admits only `Z`) |
 | `normalized_to_utc` | `true` |
 | `imported_at_utc`, `created_at_utc` | one `now_utc` draw of the injected `Clock`, used for both |
-| `raw_source_provenance` | one entry: `source_name` `ohlcv-csv`, `source_version` `1.0.0`, `source_record` the input file name, `source_hash` the raw checksum |
+| `raw_source_provenance` | one entry: `source_name` and `source_version` from `SOURCE_IDENTITIES[source_format]` (`ohlcv-csv`, `1.0.0` by default; `binance-spot-kline-csv`, `1.0.0` for the Binance format), `source_record` the input file name, `source_hash` the raw checksum |
 | `normalization_implementation`, `normalization_version` | `crypto-lab-offline-data`, `0.1.0` |
 | `validation_status` | `VALID` without missing or duplicate intervals, else `VALID_WITH_WARNINGS` (reading R4); `INVALID` is never emitted because a refused input emits nothing |
 | `partition_ids` | the one `part_` draw |
@@ -412,7 +535,7 @@ the command builds with the core's `parse_instrument_id`; `source` is the comman
 | `diagnostic_ids` | empty |
 | `raw_checksums`, `normalized_checksums` | one entry each: the raw checksum and the container's SHA-256 |
 | `column_schema_version` | `0.1.0` |
-| `known_limitations` | exactly `interim container normalized-ndjson/0.1.0; Parquet partition emission requires the pyarrow acquisition (P2-B1)` |
+| `known_limitations` | `interim container normalized-ndjson/0.1.0; Parquet partition emission requires the pyarrow acquisition (P2-B1)`; for `binance-spot-kline-csv/1` runs also the P2-B3 text below, the tuple sorted (the core requires sorted collections, so the `P2-B3:` text lands first) |
 | `content_hash` | the construction below |
 
 | Partition field | Value |
@@ -422,7 +545,7 @@ the command builds with the core's `parse_instrument_id`; `source` is the comman
 | `content_hash`, `normalized_checksum` | both the SHA-256 of the container bytes (equal by construction in this slice) |
 | `row_count` | the container's line count, duplicates included |
 | `start_utc`, `end_utc`, `raw_checksum`, `column_schema_version`, `raw_source_provenance` | the descriptor's |
-| `quality_observations` | the P2-B1 limitation text above, plus `DIFFERING_DUPLICATE_OBSERVATION` when the series raised it, sorted |
+| `quality_observations` | the P2-B1 limitation text above (and the P2-B3 text for `binance-spot-kline-csv/1` runs), plus `DIFFERING_DUPLICATE_OBSERVATION` when the series raised it, sorted |
 
 **Content hash (plan section 5.4).** The descriptor is first built with a placeholder
 `content_hash` of sixty-four zeros, `dataset_metadata_hash(descriptor, partitions)` is
@@ -468,19 +591,28 @@ is the launcher for tooling; the product command itself is the package's module 
 point, run by the sub-project's interpreter as
 
 ```text
-python -m crypto_lab_offline_data normalize --input <file> --output <directory> --instrument VENUE:BASE/QUOTE:MARKET --timeframe <tf> [--source <text>]
+python -m crypto_lab_offline_data normalize --input <file> --output <directory> --instrument VENUE:BASE/QUOTE:MARKET --timeframe <tf> [--source <text>] [--input-format <format>] [--timestamp-unit <unit>]
 ```
 
 (`crypto_lab_offline_data.cli.normalize_command(argv, *, ids, clock) -> int` is the same
 command with injected providers; `argv=None` reads the process arguments, as the entry
-point does with `Uuid4IdProvider` and `SystemClock`). It writes three files into
+point does with `Uuid4IdProvider` and `SystemClock`). `--input-format` has the closed
+choices `ohlcv-csv/1` (default) and `binance-spot-kline-csv/1`; `--timestamp-unit` has the
+closed choices `milliseconds` and `microseconds`. `--timestamp-unit` is required with
+`binance-spot-kline-csv/1` and refused with `ohlcv-csv/1`, and `--timeframe` must be `1m`
+with `binance-spot-kline-csv/1`, the only timeframe that format supports (`ohlcv-csv/1`
+keeps its six timeframes); each violation, and a value outside either closed set, is an
+argparse error (exit `2`) whose message names the options and the admitted literals only,
+never the given value. The command writes three files into
 `--output`: `part-0000.ndjson` (the interim container), `descriptor.json` and
 `partitions.json` (the canonical JSON bytes of the `DatasetDescriptor` and of the JSON
 array of `DatasetPartition` models, no trailing newline). The sequence is the plan's: read
-(`read_ohlcv_csv`), validate (`validate_series`), `raw_checksum`, then one draw of each
+(through the selected reader, `read_ohlcv_csv` or `read_binance_kline_csv`), validate
+(`validate_series`), `raw_checksum`, then one draw of each
 provider value (`dataset_id`, `partition_id`, `diagnostic_id`, `now_utc`, in that order,
 each validated when drawn) snapshotted into fixed providers, then `--output` inspected and
-created immediately before the first write, then the container, the metadata and the two
+created immediately before the first write, then the container, the metadata (with the
+selected format as `source_format`) and the two
 JSON files. Everything after the snapshot receives the fixed providers, so nothing is drawn
 after the first write and every later refusal carries the reserved `diag_` identifier and
 instant.
@@ -489,7 +621,7 @@ instant.
 |---|---|
 | `0` | success; nothing is printed (also argparse's own exit for `--help`, which prints the usage text) |
 | `1` | refusal: the `Failure` of any step, `OFFLINE_DATA.INPUT_PATH`, `OFFLINE_DATA.METADATA_FIELD` (mapped like any refusal, though unreachable through the command, see "Dataset metadata") and `OFFLINE_DATA.OUTPUT_DIRECTORY` included; the `Failure` is printed as one canonical JSON line |
-| `2` | argument parsing only (argparse's own exit): a missing or unknown argument, an `--instrument` the core helper cannot parse or a `--source` outside 1 to 1024 characters, each with a message that never echoes the value. An unsupported `--timeframe` is not an argument error: it is `validate_series`'s `TIMEFRAME_GRID` refusal, exit `1` |
+| `2` | argument parsing only (argparse's own exit): a missing or unknown argument, an `--instrument` the core helper cannot parse, a `--source` outside 1 to 1024 characters, an `--input-format` or `--timestamp-unit` outside its closed choices, a `--timestamp-unit` given with `ohlcv-csv/1` or missing with `binance-spot-kline-csv/1`, or a `--timeframe` other than `1m` with `binance-spot-kline-csv/1`, each with a message that never echoes the value. For `ohlcv-csv/1` an unsupported `--timeframe` is not an argument error: it is `validate_series`'s `TIMEFRAME_GRID` refusal, exit `1` |
 | `3` | provider fault: `ProviderContractError` from any step; its message, naming the provider method only, is printed |
 
 The printed lines name no value and no path. They go to standard output because the
@@ -527,20 +659,46 @@ JSON documents through the core models in strict JSON mode, recomputes the ident
 core's `dataset_metadata_hash`, checks it with `validate_dataset_identity` and ties the
 partition's `content_hash` and `raw_checksum` to the container and fixture bytes. Golden
 hashes: clean `9377a6d4...`, gaps-duplicates `41acb380...` (full digests in the files).
+`tests/fixtures/binance/golden/` holds the same three files for each of the three SYNTHETIC
+Binance fixtures (nine files), captured once with `--input-format binance-spot-kline-csv/1`,
+the fixture's unit, `--timeframe 1m` and `--source synthetic-binance-fixture`, pinned byte
+for byte by `tests/unit/test_cli.py` and re-parsed, recomputed and shown deterministic
+across two fresh directories by the integration module. Golden hashes:
+`SYNTHETIC-BTCUSDT-1m-2024-12-31-ms` `932499c6...`, `SYNTHETIC-BTCUSDT-1m-2025-01-01-us`
+`820dc27a...`, `SYNTHETIC-BTCUSDT-1m-gaps-duplicates-us` `903a55b2...`.
 
 ## Interim format and pending obligations
 
 - The partition container is `normalized-ndjson/0.1.0`, an interim format (P2-B1). It is
   not a Parquet partition and is never called one; every descriptor and partition says so.
+- **P2-B3.** Every `binance-spot-kline-csv/1` descriptor and partition also carries the
+  literal `P2-B3: binance-spot-kline-csv/1 fields 7 to 12 (close time, quote asset volume,
+  number of trades, taker buy volumes, ignore) are validated for shape and not retained;
+  synthetic fixtures only, no real Binance archive ingested` (`metadata.P2_B3_LIMITATION`,
+  within the core's `BoundedText` bound) in `known_limitations` and `quality_observations`,
+  each tuple sorted so the `P2-B3:` text precedes the lowercase P2-B1 text. `ohlcv-csv/1`
+  outputs are byte-identical to the first slice's and carry P2-B1 alone.
 - No interim container is registered in a persistent core dataset registry. Registration
-  is slice 2, a temporary-database contract test through `SqliteDatasetRepository` owned by
-  Workstream A and fed by the committed goldens; finalization through the artifact finalizer
-  is slice 3, after the Stage 9 merge; both stay pending here.
-- One input format, one instrument, one partition per dataset; the real-source adapter
-  waits for the authorized source verification.
+  is a later slice, a temporary-database contract test through `SqliteDatasetRepository`
+  owned by Workstream A and fed by the committed goldens; finalization through the artifact
+  finalizer follows the Stage 9 merge; both stay pending here.
+- Two input formats, one instrument, one partition per dataset; `binance-spot-kline-csv/1`
+  supports `1m` only; the real-source adapter and any claim of real-source execution wait
+  for the authorized source verification.
 - The command prints to standard output only, creates no parent directory for `--output`
-  and does not remove a directory it created; `--instrument` and `--source` are argument
-  refusals (exit `2`), the one argument refusal with a diagnostic is `--timeframe`.
+  and does not remove a directory it created; `--instrument`, `--source`, `--input-format`,
+  `--timestamp-unit` and their couplings are argument refusals (exit `2`), the one argument
+  refusal with a diagnostic is `--timeframe` for `ohlcv-csv/1`.
+
+## Source terms
+
+The Binance Vision Dataset Terms (v1.0, `TERMS_AND_CONDITIONS.md`, as recorded in the
+second-slice plan) license the published historical data under CC BY-NC-SA 4.0:
+non-commercial, attribution, no redistribution of derivative data feeds; the permitted uses
+include algorithmic historical backtesting for purely personal non-production research.
+This tool reads user-provided extracted files for personal, non-production research,
+downloads nothing, redistributes nothing and ships only SYNTHETIC fixtures; the user
+remains responsible for complying with the terms of any file they place on disk.
 
 ## Safety scope
 
