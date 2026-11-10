@@ -34,8 +34,16 @@ pass, in order:
    invocation is validated through the ``ResultRecoveryValidator`` (29.3) and
    resumed from phase 2 under a fresh deadline (reading 2) or, when any check
    fails, quarantined with the run ``FAILED`` under the check's diagnostic; a
-   ``CORE`` candidate left in ``CANDIDATE`` or ``VALIDATING`` is abandoned
-   staging and is quarantined (RV-10).
+   ``CORE`` group left in ``CANDIDATE`` or ``VALIDATING`` whose invocation the
+   repository does not answer, or whose newest candidate was staged before the
+   invocation's ``cleanup_completed_at_utc``, is abandoned staging and is
+   quarantined (RV-10: "older than their invocation's cleanup"); one staged at
+   or after that instant -- the conclusion stages its evidence after the
+   supervisor has completed the cleanup (plan 4.4 step 2), so
+   ``cleanup_complete`` alone never decides, and the two instants coincide
+   under a fixed clock -- resumes through the finalizer, revalidated
+   independently (plan 5.1 CP-1, 29.4; the ruling of 2026-11-10;
+   ``_predates_cleanup`` states the justification).
 3. Step 9: a directory under the runtime root shaped like a command root that
    names no invocation is quarantined and never attached by name (RV-6); the
    raw-bearing bytes of every token-bearing root of a terminal run with no open
@@ -324,6 +332,39 @@ def _relative_files(root: Path) -> tuple[str, ...]:
     )
 
 
+def _predates_cleanup(
+    group: tuple[CandidateArtifact, ...], invocation: CommandInvocationRecord
+) -> bool:
+    """RV-10's temporal predicate: the core staging of ``group`` is abandoned
+    when its newest candidate was created before the invocation's cleanup
+    completed. An invocation whose cleanup is not complete, or staging created
+    at or after the cleanup instant (a conclusion stages after the supervisor's
+    cleanup), is not abandoned by this rule.
+
+    Why the newest candidate decides for the group: the group is the unit the
+    pass turns into one ``EvidenceFinalizationRequest`` (one candidate set, one
+    set hash, one idempotency identity), and in the production order every
+    member is staged by the one conclusion after the supervisor's cleanup (plan
+    4.4 step 2), so a group with members on both sides of the instant is a
+    planted state. The pass neither splits such a group by instant nor
+    quarantines all of it for one older member: a member at or after the
+    instant shows the conclusion staged into this group after the cleanup, the
+    group resumes whole, and the finalizer revalidates every member
+    independently (29.4), so no member registers on its instant alone.
+
+    Why ``<`` and not ``<=``: the supervisor's enrichment stamps
+    ``cleanup_completed_at_utc`` with its service's ``now`` and the conclusion's
+    staging stamps ``created_at_utc`` from the clock it is given; nothing
+    guarantees a later reading at staging, and under a fixed or coarse clock the
+    two instants coincide, so the comparison is strict and equal instants are
+    not older (the ``at-cleanup`` case of the focused tests pins it).
+    """
+    completed = invocation.cleanup_completed_at_utc
+    if not invocation.cleanup_complete or not isinstance(completed, datetime):
+        return False
+    return max(candidate.created_at_utc for candidate in group) < completed
+
+
 class _Reconciler:
     """One pass of ``reconcile_finalization``; the state is the pass's counts."""
 
@@ -496,8 +537,13 @@ class _Reconciler:
         self, group: tuple[CandidateArtifact, ...]
     ) -> Failure | None:
         """29.4 and plan 5.1 CP-1: core candidates left before their lease resume
-        through the finalizer, revalidated independently; staging whose
-        invocation is gone or already cleaned up is abandoned (RV-10)."""
+        through the finalizer, revalidated independently. Staging is abandoned
+        (RV-10) and quarantined whole when the invocation its correlation names
+        is not read -- the repository answers a ``Failure`` for a missing row,
+        and a refused read is the same ``Failure`` here, as in
+        ``_reconcile_result_group``; no cleanup instant was read, so the
+        staging's own instant never matters -- or when it is older than the
+        invocation's completed cleanup (``_predates_cleanup``)."""
         first = group[0]
         kind, correlation_id = first.staging_relative_path.split("/")[:2]
         if kind == "INVOCATION":
@@ -506,7 +552,9 @@ class _Reconciler:
                 invocation = transaction.command_invocations.get(correlation_id)
             finally:
                 transaction.rollback()
-            if isinstance(invocation, Failure) or invocation.value.cleanup_complete:
+            if isinstance(invocation, Failure) or _predates_cleanup(
+                group, invocation.value
+            ):
                 return self._quarantine_group(
                     group,
                     ARTIFACT_VALIDATION_FAILED,

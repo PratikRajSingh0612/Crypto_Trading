@@ -337,10 +337,16 @@ class SupervisedSqliteFlow:
         """S-8: the same file through ``open_test_database`` with new objects only."""
         return cls.open(tmp_path, config=ApplicationConfig())
 
-    def close(self) -> None:
+    def close(self, *, keep_command_roots: bool = False) -> None:
         """Terminate and await anything a controller launched (the Stage 7
         discipline), roll back anything left open, dispose the engine, drop the
-        command roots and every application object."""
+        command roots and every application object.
+
+        Stage 9 plan 7.1 (Task 8): ``keep_command_roots=True`` leaves every
+        command root on disk -- the staging bytes, work directory and request
+        material a crash row's recovery reads after ``reopen`` -- and drops only
+        the application objects.
+        """
         try:
             self._assert_nothing_launched_survives()
         finally:
@@ -351,8 +357,9 @@ class SupervisedSqliteFlow:
                 assert not leaked, "a flow-owned transaction leaked past its finalizer"
             finally:
                 self.database.close()
-            for paths in self._paths.values():
-                shutil.rmtree(paths.command_root, ignore_errors=True)
+            if not keep_command_roots:
+                for paths in self._paths.values():
+                    shutil.rmtree(paths.command_root, ignore_errors=True)
             self._tees.clear()
             self._paths.clear()
             self._entries.clear()

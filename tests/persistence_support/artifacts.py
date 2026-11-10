@@ -46,8 +46,9 @@ own; every failure is stamped from the shared ``FixedClock(INSTANT)``.
 
 from __future__ import annotations
 
+import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -55,11 +56,18 @@ from pathlib import Path
 from typing import Any, Final
 
 import pytest
+from pydantic import ValidationError
 from pydantic.experimental.missing_sentinel import MISSING
 from sqlalchemy import Select, select
 from sqlalchemy.exc import DBAPIError
 
-from crypto_lab.adapters.envelopes import NegotiatedVersions
+from contract.harness import DEFAULT_NEGOTIATED
+from contract.scenarios import SCENARIOS, Scenario
+from crypto_lab.adapters.envelopes import (
+    AdapterCommandRequestEnvelope,
+    EngineRunRequest,
+    NegotiatedVersions,
+)
 from crypto_lab.adapters.events import (
     ArtifactProducedPayload,
     FinalResultPayload,
@@ -80,6 +88,9 @@ from crypto_lab.adapters.manifests import (
     parse_result_manifest,
     sanitize_result_manifest,
 )
+from crypto_lab.adapters.negotiation import DescriptorParse
+from crypto_lab.adapters.reconciliation import CandidateObservation
+from crypto_lab.adapters.sanitization import StderrCapture
 from crypto_lab.adapters.vocabulary import (
     NEGOTIABLE_SCHEMA_NAMES,
     ProtocolEventType,
@@ -104,6 +115,8 @@ from crypto_lab.artifacts.ports import (
     FinalizationAuditor,
     FinalizationLog,
     FinalizationProbe,
+    LogFact,
+    NoProbe,
     PurposeRegistrar,
 )
 from crypto_lab.artifacts.ports import (
@@ -118,7 +131,13 @@ from crypto_lab.artifacts.requests import (
     EvidenceFinalizationRequest,
     ResultFinalizationRequest,
 )
-from crypto_lab.audit.models import AuditEvent
+from crypto_lab.artifacts.store import ArtifactStore, QuarantineEntry
+from crypto_lab.audit.jsonl import JsonLinesLogWriter, log_write_failure
+from crypto_lab.audit.models import AuditEvent, LogRecord, LogSeverity
+from crypto_lab.audit.redaction import REDACTED, contains_token_shape, redact_details
+from crypto_lab.configuration.models import ApplicationConfig, ProcessConfig
+from crypto_lab.configuration.snapshot import ConfigSnapshot
+from crypto_lab.datasets.models import DatasetDescriptor, DatasetPartition
 from crypto_lab.domain.base import SCHEMA_VERSION
 from crypto_lab.domain.canonical_json import canonical_json_bytes, canonical_json_text
 from crypto_lab.domain.command_invocation import CommandInvocationRecord
@@ -127,7 +146,13 @@ from crypto_lab.domain.descriptors import SupportedSchemaVersion
 from crypto_lab.domain.diagnostics import Diagnostic, DiagnosticCategory
 from crypto_lab.domain.engine_run import AttemptTokenMaterial, EngineRunRecord
 from crypto_lab.domain.experiment import ExperimentRecord
-from crypto_lab.domain.hashing import _uuid4_shaped, run_manifest_id_for, sha256_bytes
+from crypto_lab.domain.hashing import (
+    CanonicalHashEnvelope,
+    HashingProfile,
+    _uuid4_shaped,
+    run_manifest_id_for,
+    sha256_bytes,
+)
 from crypto_lab.domain.lifecycle import (
     CommandInvocationState,
     CommandKind,
@@ -135,11 +160,23 @@ from crypto_lab.domain.lifecycle import (
     ExperimentState,
     ProcessExitCategory,
 )
-from crypto_lab.domain.results import Result
+from crypto_lab.domain.ports import Clock
+from crypto_lab.domain.results import Failure, Result
 from crypto_lab.experiments.experiment_service import cancel_experiment
 from crypto_lab.experiments.finalization import (
     AuditFactRecorder,
+    CommandConclusion,
+    ConclusionConfig,
     ResultRegistrar,
+    conclude_command,
+    conclude_describe,
+    declared_candidate_paths,
+    fail_run_for_refusal,
+    finalize_evidence,
+    observe_candidates,
+    protocol_capture_evidence,
+    semantic_outcome_or_replay,
+    stderr_evidence,
 )
 from crypto_lab.experiments.finalization import (
     ResultRecoveryValidator as ProductionRecoveryValidator,
@@ -147,6 +184,7 @@ from crypto_lab.experiments.finalization import (
 from crypto_lab.experiments.requests import (
     CancelExperimentRequest,
     RunTransitionRequest,
+    SemanticOutcomeRequest,
 )
 from crypto_lab.experiments.run_manifest import (
     NormalizedResultProvenance,
@@ -188,6 +226,13 @@ from crypto_lab.persistence.schema import (
     metadata,
 )
 from crypto_lab.persistence.unit_of_work import SqliteTransaction, SqliteUnitOfWork
+from crypto_lab.process_supervision.models import (
+    ReconciliationReport,
+    SupervisionOutcome,
+    SupervisionTraceEntry,
+)
+from crypto_lab.process_supervision.roots import CommandPaths
+from crypto_lab.strategy.versioning import StrategyVersion, strategy_version_payload
 from doubles.artifacts import (
     ADAPTER_MANIFEST_ID,
     ADAPTER_OWNER,
@@ -260,21 +305,34 @@ from persistence_support.harness import (
     raw_connection,
     sql_identity_literal,
 )
+from persistence_support.supervised import DescribeOutcome, SupervisedSqliteFlow
 
 __all__ = [
     "DEFAULT_NEGOTIATED_VERSIONS",
+    "FINALIZATION_TIMEOUT_SECONDS",
+    "FINALIZING_CONFIG",
     "RUNNING_EXPERIMENT",
+    "STAGE9_SUPERVISED_ROW_NAMES",
     "STAGE9_TABLES",
     "TRIGGER_TABLES",
     "ArtifactHarness",
+    "ClockAdvancingProbe",
+    "DescribeConclusion",
     "FinalizationFixture",
+    "FinalizingSupervisedFlow",
+    "JsonLinesFinalizationLog",
     "ProductionResultPlan",
+    "RecoveryReports",
     "Refusal",
     "ResultPrestate",
+    "TokenScanReport",
+    "configuration_audit_bytes",
+    "dataset_identity_bytes",
     "sample_normalized_provenance",
     "sample_run_manifest",
     "sample_run_provenance",
     "scan_tree_for_token",
+    "strategy_identity_bytes",
     "token_scan",
 ]
 
@@ -1619,3 +1677,1049 @@ class FinalizationFixture:
             command_root_files=self.roots.command_root_files(),
             quarantine_entries=self.roots.quarantine_entries(),
         )
+
+
+# --------------------------------------------------------------------------
+# Task 8 (plan 7.1, 4.4, 4.6, 5): the finalizing supervised flow
+# --------------------------------------------------------------------------
+#
+# ``FinalizingSupervisedFlow`` extends the Stage 8 ``SupervisedSqliteFlow`` with
+# the Stage 9 composition. It lives here rather than in ``supervised.py`` because
+# the Stage 8 import pin (``test_stage8_supervised_flow.py``) holds that module's
+# import set exactly and the plan keeps that test unchanged (plan 7.4): the Stage 9
+# members are a subclass over the Stage 8 flow, whose one Stage 8 change is the
+# ``keep_command_roots`` keyword of ``close`` (plan 7.1), with no new import. The
+# composition is the production one throughout -- ``observe_candidates`` before the
+# verdict,
+# ``semantic_outcome_or_replay``, ``conclude_command`` and ``conclude_describe``
+# over ``CoreArtifactFinalizer`` with ``ResultRegistrar``, ``AuditFactRecorder``
+# and ``ResultRecoveryValidator``, then ``reconcile_invocations`` followed by
+# ``reconcile_finalization`` for recovery -- and the flow adds only what a test
+# needs around it: the roots, the probe, the durable readers, the token scan.
+#
+# Declared readings: the supervision root is the Stage 9 runtime root (the
+# reconciler lists ``inv_*`` command roots there and skips the reserved
+# ``staging`` and ``quarantine`` segments beside them); every
+# ``SupervisionTraceEntry`` is projected as a ``LogRecord`` through the audit
+# package's JSON Lines writer -- the log record is an audit contract (reading
+# 15) and the closed ``AuditAction`` vocabulary names no supervision action, so
+# an ``AuditEvent`` projection would have to fabricate one; the finalizing
+# configuration pins ``finalization_timeout_seconds`` above the compiled lease
+# so a crash cell's lease can expire inside its deadline (the ruling of
+# 2026-11-08); the audit identifiers of a (re)opened flow are seeded from the
+# committed audit row count so no committed identifier is minted twice.
+
+#: The finalization timeout the Stage 9 flow pins: above ``RESULT_LEASE_SECONDS``
+#: (300), so an expired lease can be taken over before the deadline passes.
+FINALIZATION_TIMEOUT_SECONDS: Final = 600
+FINALIZING_CONFIG: Final = ApplicationConfig(
+    process=ProcessConfig(finalization_timeout_seconds=FINALIZATION_TIMEOUT_SECONDS)
+)
+#: The Stage 8 rows plus the warning and checksum-mismatch rows Task 8 drives.
+STAGE9_SUPERVISED_ROW_NAMES: Final = frozenset(
+    {
+        "row01-conformant-describe",
+        "row02-conformant-validate",
+        "row03-conformant-run",
+        "row04-warnings-run",
+        "row05-unsupported-capability-validate",
+        "row26-process-timeout-run",
+        "row27-cancellation-run",
+        "row28-exit-40-run",
+        "row36-checksum-mismatch-run",
+    }
+)
+_STAGE9_SCENARIO_BY_NAME: Final[dict[str, Scenario]] = {
+    item.name: item for item in SCENARIOS
+}
+_AUDIT_SEED: Final = "stage9-supervised"
+_LOG_COMPONENT: Final = "persistence-support.finalizing-flow"
+_TRACE_EVENT_PREFIX: Final = "SUPERVISION"
+_DATABASE_SEGMENT: Final = "db"
+_SUPERVISION_SEGMENT: Final = "sv"
+_STAGING_SEGMENT: Final = "staging"
+_QUARANTINE_SEGMENT: Final = "quarantine"
+_ARTIFACTS_SEGMENT: Final = "artifacts"
+_LOGS_SEGMENT: Final = "logs"
+_REQUEST_FILE_NAME: Final = "request.json"
+_OUTPUT_FILE_NAME: Final = "output.json"
+_RUNS_SEGMENT: Final = "runs"
+_WORK_SEGMENT: Final = "work"
+_COMMAND_ROOT_PREFIX: Final = "inv_"
+_JSON_COLUMN_SUFFIX: Final = "_json"
+_USER_TABLES_SQL: Final = (
+    "SELECT name FROM sqlite_master WHERE type = 'table' "
+    "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+)
+_PROBE_POINTS: Final = (
+    "before_prepared",
+    "after_prepared",
+    "before_move",
+    "after_move",
+    "before_moved",
+    "after_moved",
+    "before_registered",
+    "inside_registered",
+    "after_registered",
+    "after_close",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class DescribeConclusion(DescribeOutcome):
+    """S-1's products plus plan 4.6: the ``ADAPTER``-owned evidence references
+    ``conclude_describe`` finalized (the descriptor and the stderr capture)."""
+
+    evidence_refs: tuple[ArtifactRef, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RecoveryReports:
+    """One ``recover()``: the Stage 7 process reconciliation first, then the
+    Stage 9 artifact reconciliation."""
+
+    process: ReconciliationReport
+    artifacts: FinalizationReconciliationReport
+
+
+@dataclass(frozen=True, slots=True)
+class TokenScanReport:
+    """One ``scan_for_token``: how many files or cells each surface held and
+    every surface location that carried the raw token."""
+
+    surfaces: Mapping[str, int]
+    hits: tuple[str, ...]
+
+
+class ClockAdvancingProbe:
+    """A ``FinalizationProbe`` that advances the flow's ``FixedClock`` the first
+    time one named point is reached (RC-4: the deadline passes between
+    ``after_moved`` and T3 of the RESULT finalization; the conclusion's later
+    evidence finalization, which shares the probe, is left alone)."""
+
+    def __init__(self, point: str, clock: FixedClock, seconds: float) -> None:
+        if point not in _PROBE_POINTS:
+            raise ValueError(f"{point} is not a probe point")
+        self._point = point
+        self._clock = clock
+        self._seconds = seconds
+        self.fired = 0
+        self.reached = 0
+
+    def _at(self, point: str) -> None:
+        if point != self._point:
+            return
+        self.reached += 1
+        if self.fired == 0:
+            self._clock.advance(self._seconds)
+            self.fired += 1
+
+    def before_prepared(self) -> None:
+        self._at("before_prepared")
+
+    def after_prepared(self) -> None:
+        self._at("after_prepared")
+
+    def before_move(self, index: int) -> None:
+        del index
+        self._at("before_move")
+
+    def after_move(self, index: int) -> None:
+        del index
+        self._at("after_move")
+
+    def before_moved(self) -> None:
+        self._at("before_moved")
+
+    def after_moved(self) -> None:
+        self._at("after_moved")
+
+    def before_registered(self) -> None:
+        self._at("before_registered")
+
+    def inside_registered(self) -> None:
+        self._at("inside_registered")
+
+    def after_registered(self) -> None:
+        self._at("after_registered")
+
+    def after_close(self) -> None:
+        self._at("after_close")
+
+
+class JsonLinesFinalizationLog:
+    """The flow's ``FinalizationLog`` over the audit package's JSON Lines writer,
+    and the O-13 stand-in: every ``SupervisionTraceEntry`` is projected as a
+    ``LogRecord`` carrying the entry's own facts (redacted to the fixed point),
+    never as an ``AuditEvent`` of a borrowed action. A projection, never a
+    record of truth (specification 30.1)."""
+
+    __slots__ = ("_clock", "_writer", "lines")
+
+    def __init__(self, writer: JsonLinesLogWriter, clock: Clock) -> None:
+        self._writer = writer
+        self._clock = clock
+        self.lines = 0
+
+    def write(self, fact: LogFact) -> Result[None]:
+        payload: dict[str, Any] = {
+            "schema_version": "1.0.0",
+            "timestamp_utc": self._clock.now_utc(),
+            "severity": LogSeverity(fact.severity),
+            "component": _LOG_COMPONENT,
+            "event_code": fact.event_code,
+            "correlation_id": fact.correlation_id,
+            "message": (
+                REDACTED if contains_token_shape(fact.message) else fact.message
+            ),
+            "details": redact_details(dict(fact.details)),
+        }
+        for name in ("experiment_id", "run_id", "invocation_id"):
+            value = getattr(fact, name)
+            if isinstance(value, str):
+                payload[name] = value
+        return self._write(payload)
+
+    def project_trace(self, entries: Sequence[SupervisionTraceEntry]) -> int:
+        """Plan Task 8 and O-13: one line per trace entry, the entry's kind as the
+        event code, its facts (and ordinal readings) as the details."""
+        for entry in entries:
+            facts: dict[str, Any] = dict(entry.facts)
+            facts["sequence"] = entry.sequence
+            facts["monotonic_100ns"] = entry.monotonic_100ns
+            ok(
+                self._write(
+                    {
+                        "schema_version": "1.0.0",
+                        "timestamp_utc": entry.at_utc,
+                        "severity": LogSeverity.INFO,
+                        "component": _LOG_COMPONENT,
+                        "event_code": f"{_TRACE_EVENT_PREFIX}.{entry.kind.value}",
+                        "correlation_id": entry.invocation_id,
+                        "invocation_id": entry.invocation_id,
+                        "message": (
+                            f"supervision trace {entry.sequence}: {entry.kind.value}"
+                        ),
+                        "details": redact_details(facts),
+                    }
+                )
+            )
+        return len(entries)
+
+    def _write(self, payload: Mapping[str, Any]) -> Result[None]:
+        try:
+            record = LogRecord.model_validate(dict(payload))
+        except ValidationError as error:
+            # The locations and messages name fields and grammars, never values.
+            reasons = "; ".join(
+                f"{'.'.join(str(part) for part in item['loc'])}: {item['msg']}"
+                for item in error.errors(include_input=False, include_url=False)
+            )
+            return log_write_failure(
+                f"log record could not be validated: {reasons}",
+                now_utc=self._clock.now_utc(),
+            )
+        written = self._writer.write(record)
+        if not isinstance(written, Failure):
+            self.lines += 1
+        return written
+
+    def close(self) -> None:
+        self._writer.close()
+
+
+def _files_under(root: Path) -> tuple[Path, ...]:
+    """Every regular file under ``root`` (none when the root is absent), sorted."""
+    if not root.is_dir():
+        return ()
+    return tuple(path for path in sorted(root.rglob("*")) if path.is_file())
+
+
+def _hash_envelope_bytes(profile: HashingProfile, payload: dict[str, Any]) -> bytes:
+    """The exact bytes ``profile_hash`` digests: the canonical JSON of the
+    ``CanonicalHashEnvelope`` over ``payload`` (``domain/hashing.py``)."""
+    return canonical_json_bytes(
+        CanonicalHashEnvelope(
+            schema_version="1.0.0", hashing_profile=profile, payload=payload
+        )
+    )
+
+
+def configuration_audit_bytes(snapshot: ConfigSnapshot) -> bytes:
+    """The bytes whose SHA-256 is the frozen ``configuration_audit_hash``: the
+    ``CONFIGURATION_AUDIT_V1`` envelope over the frozen configuration document
+    (``configuration/snapshot.py``)."""
+    document = json.loads(snapshot.configuration_json)
+    if not isinstance(document, dict):
+        raise ValueError("the frozen configuration is not a JSON object")
+    return _hash_envelope_bytes(HashingProfile.CONFIGURATION_AUDIT_V1, document)
+
+
+def dataset_identity_bytes(
+    descriptor: DatasetDescriptor, partitions: tuple[DatasetPartition, ...]
+) -> bytes:
+    """The bytes whose SHA-256 is the dataset ``content_hash``: the
+    ``DATASET_METADATA_V1`` envelope over the material metadata of the descriptor
+    and its ordered partitions (``datasets/hashing.py::dataset_metadata_hash``,
+    whose exclusions are restated here because the payload builder is private)."""
+    ordered = sorted(partitions, key=lambda partition: partition.ordinal)
+    descriptor_payload = descriptor.model_dump(
+        mode="json",
+        exclude={
+            "content_hash",
+            "created_at_utc",
+            "dataset_id",
+            "diagnostic_ids",
+            "imported_at_utc",
+            "partition_ids",
+        },
+    )
+    partition_payloads = [
+        partition.model_dump(
+            mode="json", exclude={"dataset_id", "partition_id", "relative_path"}
+        )
+        for partition in ordered
+    ]
+    return _hash_envelope_bytes(
+        HashingProfile.DATASET_METADATA_V1,
+        {"descriptor": descriptor_payload, "partitions": partition_payloads},
+    )
+
+
+def strategy_identity_bytes(version: StrategyVersion) -> bytes:
+    """The bytes whose SHA-256 is the strategy ``content_hash``: the
+    ``STRATEGY_VERSION_V1`` envelope over ``strategy_version_payload``."""
+    return _hash_envelope_bytes(
+        HashingProfile.STRATEGY_VERSION_V1,
+        dict(strategy_version_payload(version.strategy_spec)),
+    )
+
+
+def _root_paths_of(paths: CommandPaths) -> CommandRootPaths:
+    """Plan 4.1: the Stage 7 ``CommandPaths`` destructured into the domain-typed
+    ``CommandRootPaths`` the finalization consumes."""
+    command_root = Path(paths.command_root)
+    request_path = Path(paths.request_path)
+    if isinstance(paths.work_dir, str) and isinstance(paths.result_path, str):
+        return CommandRootPaths(
+            command_root=command_root,
+            request_path=request_path,
+            work_dir=Path(paths.work_dir),
+            result_path=Path(paths.result_path),
+        )
+    assert isinstance(paths.output_path, str)
+    return CommandRootPaths(
+        command_root=command_root,
+        request_path=request_path,
+        output_path=Path(paths.output_path),
+    )
+
+
+def _rediscovered_roots(command_root: Path) -> CommandRootPaths | MISSING:  # type: ignore[valid-type]
+    """The command root of a reopened flow, read back from the Stage 7 layout
+    (``request.json``; ``runs/<run_id>/work`` for a ``RUN``, ``output.json``
+    otherwise)."""
+    if not command_root.is_dir():
+        return MISSING
+    request_path = command_root / _REQUEST_FILE_NAME
+    runs = command_root / _RUNS_SEGMENT
+    if runs.is_dir():
+        run_dirs = sorted(child for child in runs.iterdir() if child.is_dir())
+        if run_dirs:
+            work_dir = run_dirs[0] / _WORK_SEGMENT
+            return CommandRootPaths(
+                command_root=command_root,
+                request_path=request_path,
+                work_dir=work_dir,
+                result_path=work_dir / RESULT_MANIFEST_RELATIVE_PATH,
+            )
+    return CommandRootPaths(
+        command_root=command_root,
+        request_path=request_path,
+        output_path=command_root / _OUTPUT_FILE_NAME,
+    )
+
+
+class FinalizingSupervisedFlow(SupervisedSqliteFlow):
+    """Plan 7.1 (Task 8): the Stage 8 supervised flow with the Stage 9 composition.
+
+    The roots: the supervision root doubles as the Stage 9 runtime root with
+    ``staging/`` and ``quarantine/`` beside the ``inv_*`` command roots, the
+    content-addressed store under the sibling ``artifacts/`` and the JSON Lines
+    log under the sibling ``logs/``. ``conclude_and_finalize`` replaces the Stage
+    8 ``conclude``: the production ``observe_candidates`` before the verdict for
+    a ``RUN`` (empty observations for a ``VALIDATE``), ``semantic_outcome_or_replay``
+    whose stored conclusion is passed through on replay, then ``conclude_command``
+    over the destructured outcome and paths; an observation refusal goes through
+    ``fail_run_for_refusal`` and the invocation's core evidence is still staged
+    and finalized. ``describe`` adds ``conclude_describe``. ``recover`` runs the
+    Stage 7 reconciliation before the artifact reconciliation.
+    """
+
+    def __init__(
+        self,
+        database: SqliteDatabase,
+        config: ApplicationConfig,
+        *,
+        clock: FixedClock,
+        supervision_root: Path,
+    ) -> None:
+        super().__init__(
+            database, config, clock=clock, supervision_root=supervision_root
+        )
+        self._closed = False
+        self.runtime_root = supervision_root
+        self.staging_root = supervision_root / _STAGING_SEGMENT
+        self.quarantine_root = supervision_root / _QUARANTINE_SEGMENT
+        self.artifacts_root = supervision_root.parent / _ARTIFACTS_SEGMENT
+        self.logs_root = supervision_root.parent / _LOGS_SEGMENT
+        self.staging_root.mkdir(exist_ok=True)
+        self.artifacts_root.mkdir(exist_ok=True)
+        self.hasher = StreamingContentHasher()
+        self.store: ArtifactStore = ok(
+            ArtifactStore.open(
+                self.staging_root,
+                self.artifacts_root,
+                self.quarantine_root,
+                now_utc=clock.now_utc(),
+                hasher=self.hasher,
+            )
+        )
+        self.harness = ArtifactHarness(database)
+        committed = len(self.harness.committed_audit_events())
+        self.audit_ids = SequentialAuditIds(f"{_AUDIT_SEED}-{committed}")
+        self.auditor = AuditFactRecorder(self.audit_ids, clock)
+        self.registrar = ResultRegistrar(
+            self.auditor, clock, transactions=self._root.begin
+        )
+        timeout = config.process.finalization_timeout_seconds
+        self.validator = ProductionRecoveryValidator(
+            unit_of_work=self._root,
+            hasher=self.hasher,
+            negotiated_versions=DEFAULT_NEGOTIATED,
+            finalization_timeout_seconds=timeout,
+            clock=clock,
+            registrar=self.registrar,
+        )
+        self.conclusion_config = ConclusionConfig(
+            store=self.store,
+            hasher=self.hasher,
+            auditor=self.auditor,
+            finalization_timeout_seconds=timeout,
+            registrar=self.registrar,
+        )
+        writer = ok(
+            JsonLinesLogWriter.open(
+                self.logs_root,
+                retained_files=config.logging.retained_files,
+                clock=clock,
+            )
+        )
+        self.log = JsonLinesFinalizationLog(writer, clock)
+
+    @classmethod
+    def open(
+        cls, tmp_path: Path, *, config: ApplicationConfig = FINALIZING_CONFIG
+    ) -> FinalizingSupervisedFlow:
+        """Migrate ``tmp_path / "db"`` and compose the finalizing flow over it.
+
+        The supervision root is the short ``sv`` segment rather than the Stage 8
+        ``supervision``: core staging spends 117 characters on the owner-hash,
+        correlation and invocation directories below it, and under pytest's
+        temporary directory the Stage 8 name pushes a staged leaf past the
+        259-character file ceiling of a host without long-path support.
+        """
+        clock = FixedClock(INSTANT)
+        directory = tmp_path / _DATABASE_SEGMENT
+        directory.mkdir(exist_ok=True)
+        supervision_root = tmp_path / _SUPERVISION_SEGMENT
+        supervision_root.mkdir(exist_ok=True)
+        return cls(
+            open_test_database(directory, clock=clock),
+            config,
+            clock=clock,
+            supervision_root=supervision_root,
+        )
+
+    @classmethod
+    def reopen(
+        cls, tmp_path: Path, *, config: ApplicationConfig = FINALIZING_CONFIG
+    ) -> FinalizingSupervisedFlow:
+        """The same file and roots through new objects only; the command roots a
+        ``close(keep_command_roots=True)`` left are rediscovered on demand."""
+        return cls.open(tmp_path, config=config)
+
+    @staticmethod
+    def scenario(name: str) -> Scenario:
+        """One of the Stage 9 rows, by its ``Scenario.name``."""
+        assert name in STAGE9_SUPERVISED_ROW_NAMES, name
+        return _STAGE9_SCENARIO_BY_NAME[name]
+
+    @property
+    def unit_of_work(self) -> SqliteUnitOfWork:
+        """The root the Stage 9 composition opens its transactions through."""
+        return self._root
+
+    def close(self, *, keep_command_roots: bool = False) -> None:
+        """Close the log, then the Stage 8 close; idempotent."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.log.close()
+        finally:
+            super().close(keep_command_roots=keep_command_roots)
+
+    def assert_no_child_survives(self) -> int:
+        """28.3:2096: every identity a tee launched or recorded is not
+        ``ALIVE_MATCHING``; returns how many identities were checked."""
+        self._assert_nothing_launched_survives()
+        return sum(len(tee.identities) + len(tee.descendants) for tee in self._tees)
+
+    # -- composition -----------------------------------------------------------
+
+    def finalizer(
+        self, probe: FinalizationProbe | None = None
+    ) -> CoreArtifactFinalizer:
+        """The production finalizer over the production registrar; ``probe`` is
+        per call, so a recovery never re-trips a crashing probe."""
+        return CoreArtifactFinalizer(
+            self._root.begin,
+            self.clock,
+            self.hasher,
+            self.store,
+            probe if probe is not None else NoProbe(),
+            self.registrar,
+            self.auditor,
+            command_roots=self.command_roots,
+            token_material=self.token_material,
+            log=self.log,
+        )
+
+    def command_roots(self, invocation_id: str) -> CommandRootPaths | MISSING:  # type: ignore[valid-type]
+        """The command root of an invocation this flow planned, or the one read
+        back from the supervision root after a reopen."""
+        paths = self._paths.get(invocation_id)
+        if paths is not None:
+            return _root_paths_of(paths)
+        return _rediscovered_roots(self.supervision_root / invocation_id)
+
+    def token_material(self, invocation_id: str) -> AttemptTokenMaterial | MISSING:  # type: ignore[valid-type]
+        """The attempt token read from the surviving Stage 7 request envelope
+        (``payload.attempt_token`` of an ``EngineRunRequest``); absent for a
+        describe root, a closed root or an unreadable envelope. The material is
+        the caller's frame's alone."""
+        roots = self.command_roots(invocation_id)
+        if not isinstance(roots, CommandRootPaths) or not roots.request_path.is_file():
+            return MISSING
+        try:
+            envelope = AdapterCommandRequestEnvelope.model_validate_json(
+                roots.request_path.read_bytes()
+            )
+        except (OSError, ValidationError, ValueError):
+            return MISSING
+        payload = envelope.payload
+        if not isinstance(payload, EngineRunRequest):
+            return MISSING
+        return AttemptTokenMaterial(
+            run_id=payload.run_id, attempt_token=payload.attempt_token
+        )
+
+    def raw_token(self, run_id: str) -> str:
+        """The raw attempt token the flow holds for ``run_id``, for the positive
+        control of the token scan alone."""
+        return self._token_for(run_id)
+
+    def _invoke(self, row: Scenario, run: EngineRunRecord | None) -> SupervisionOutcome:
+        outcome = super()._invoke(row, run)
+        self.log.project_trace(outcome.trace)
+        return outcome
+
+    def describe(self, row: Scenario) -> DescribeConclusion:
+        """S-1, then plan 4.6: ``conclude_describe`` over the describe outcome."""
+        described = super().describe(row)
+        outcome = described.outcome
+        invocation = outcome.command_result.invocation
+        roots = self.command_roots(invocation.invocation_id)
+        assert isinstance(roots, CommandRootPaths)
+        parse = outcome.output_parse
+        refs = ok(
+            conclude_describe(
+                outcome.command_result,
+                parse if isinstance(parse, DescriptorParse) else MISSING,
+                described.reconciliation,
+                roots=roots,
+                config=self.conclusion_config,
+                unit_of_work=self._root,
+                finalizer=self.finalizer(),
+                clock=self.clock,
+            )
+        )
+        return DescribeConclusion(
+            outcome=described.outcome,
+            reconciliation=described.reconciliation,
+            observation=described.observation,
+            owner_hash=described.owner_hash,
+            evidence_refs=refs,
+        )
+
+    def conclude_and_finalize(
+        self,
+        row: Scenario,
+        run: EngineRunRecord,
+        outcome: SupervisionOutcome,
+        *,
+        probe: FinalizationProbe | None = None,
+    ) -> CommandConclusion | None:
+        """Plan 4.4 for an ``EXITED`` invocation: the production candidate
+        observation before the verdict (a ``VALIDATE`` supplies none), the
+        verdict through ``semantic_outcome_or_replay`` (a stored conclusion is
+        passed through), then ``conclude_command`` over the destructured outcome
+        and paths with the frame's token material. A core-won terminal returns
+        ``None``; an observation refusal fails the run through
+        ``fail_run_for_refusal`` and still finalizes the invocation's evidence."""
+        invocation = outcome.command_result.invocation
+        if invocation.state is not CommandInvocationState.EXITED:
+            return None
+        roots = self.command_roots(invocation.invocation_id)
+        assert isinstance(roots, CommandRootPaths)
+        token = AttemptTokenMaterial(
+            run_id=run.run_id, attempt_token=self._token_for(run.run_id)
+        )
+        parse: Any = outcome.output_parse
+        assert not isinstance(parse, DescriptorParse)
+        finalizer = self.finalizer(probe)
+        # B7-03: the stored revisions, re-read after the supervisor's last write.
+        stored_run = self.fresh_run(run.run_id)
+        stored_invocation = self.fresh_invocation(invocation.invocation_id)
+        observations: tuple[CandidateObservation, ...] = ()
+        if row.command is CommandKind.RUN:
+            assert isinstance(roots.work_dir, Path)
+            observed = observe_candidates(
+                roots.work_dir,
+                declared_candidate_paths(outcome.protocol_summary, parse),
+                token,
+                hasher=self.hasher,
+                clock=self.clock,
+            )
+            if isinstance(observed, Failure):
+                return self._conclude_refused(
+                    observed, stored_run, outcome, roots, token, finalizer
+                )
+            observations = observed.value
+        answered = ok(
+            semantic_outcome_or_replay(
+                SemanticOutcomeRequest(
+                    schema_version="1.0.0",
+                    invocation_id=stored_invocation.invocation_id,
+                    expected_invocation_revision=stored_invocation.revision,
+                    run_id=stored_run.run_id,
+                    expected_run_revision=stored_run.revision,
+                    parsed_output=parse,
+                    protocol_summary=outcome.protocol_summary,
+                    candidate_observations=observations,
+                    negotiated_versions=DEFAULT_NEGOTIATED,
+                ),
+                unit_of_work=self._root,
+                clock=self.clock,
+            )
+        )
+        if isinstance(answered, CommandConclusion):
+            return answered  # reading 24: the stored conclusion, passed through
+        return ok(
+            conclude_command(
+                answered,
+                outcome.command_result,
+                parse,
+                outcome.protocol_summary,
+                observations,
+                roots=roots,
+                token=token,
+                config=self.conclusion_config,
+                unit_of_work=self._root,
+                finalizer=finalizer,
+                clock=self.clock,
+            )
+        )
+
+    def _conclude_refused(
+        self,
+        refusal: Failure,
+        stored_run: EngineRunRecord,
+        outcome: SupervisionOutcome,
+        roots: CommandRootPaths,
+        token: AttemptTokenMaterial,
+        finalizer: CoreArtifactFinalizer,
+    ) -> CommandConclusion:
+        """Plan 4.4 step 0: a refused observation fails the run through
+        ``fail_run_for_refusal`` (the diagnostic recorded, ``RUN_FAILED`` audited,
+        the root closed) and the invocation's stderr and protocol capture are
+        still staged and finalized under the ``INVOCATION`` correlation."""
+        invocation = outcome.command_result.invocation
+        invocation_id = invocation.invocation_id
+        ok(
+            fail_run_for_refusal(
+                refusal,
+                run_id=stored_run.run_id,
+                expected_run_revision=stored_run.revision,
+                roots=roots,
+                config=self.conclusion_config,
+                unit_of_work=self._root,
+                clock=self.clock,
+            )
+        )
+        owner = RunArtifactOwner(
+            owner_kind="RUN",
+            experiment_id=stored_run.experiment_id,
+            run_id=stored_run.run_id,
+            invocation_id=invocation_id,
+        )
+        staged: list[CandidateArtifact] = []
+        stderr = outcome.command_result.stderr
+        if isinstance(stderr, StderrCapture):
+            staged.append(
+                ok(
+                    stderr_evidence(
+                        stderr,
+                        owner,
+                        invocation_id,
+                        store=self.store,
+                        unit_of_work=self._root,
+                        auditor=self.auditor,
+                        clock=self.clock,
+                    )
+                )
+            )
+        if outcome.command_result.accepted_events:
+            staged.append(
+                ok(
+                    protocol_capture_evidence(
+                        outcome.command_result.accepted_events,
+                        owner,
+                        invocation_id,
+                        store=self.store,
+                        unit_of_work=self._root,
+                        clock=self.clock,
+                    )
+                )
+            )
+        evidence_refs: tuple[ArtifactRef, ...] = ()
+        evidence_failure: Failure | MISSING = MISSING  # type: ignore[valid-type]
+        if staged:
+            finalized = finalize_evidence(
+                staged,
+                EvidenceCorrelation(kind="INVOCATION", invocation_id=invocation_id),
+                finalizer=finalizer,
+                token=token,
+            )
+            if isinstance(finalized, Failure):
+                evidence_failure = finalized
+            else:
+                evidence_refs = tuple(
+                    self.fresh_ref(mapping.artifact_id)
+                    for mapping in finalized.value.candidate_to_artifact_refs
+                )
+        return CommandConclusion(
+            run=self.fresh_run(stored_run.run_id),
+            invocation=self.fresh_invocation(invocation_id),
+            evidence_refs=evidence_refs,
+            evidence_failure=evidence_failure,
+        )
+
+    def recover(self) -> RecoveryReports:
+        """Plan 7.1: the Stage 7 ``reconcile()`` first, then
+        ``reconcile_finalization`` over the flow's runtime root."""
+        process = self.reconcile()
+        artifacts = ok(
+            reconcile_finalization(
+                unit_of_work_factory=self._root.begin,
+                store=self.store,
+                hasher=self.hasher,
+                registrar=self.registrar,
+                recovery_validator=self.validator,
+                auditor=self.auditor,
+                clock=self.clock,
+                runtime_root=self.runtime_root,
+                command_roots=self.command_roots,
+                token_material=self.token_material,
+                log=self.log,
+            )
+        )
+        return RecoveryReports(process=process, artifacts=artifacts)
+
+    # -- the Stage 5 run and experiment writes the rows use -------------------
+
+    def cancel_run(self, run_id: str) -> EngineRunRecord:
+        """RC-1 and reading 23: the production run-cancel edge after ``EXITED`` --
+        ``transition_run`` to ``CANCELLED`` with a recorded ``CANCELLATION``
+        diagnostic naming the run's ``RUN`` invocation."""
+        run = self.fresh_run(run_id)
+        invocations = [
+            invocation
+            for invocation in self.harness.lifecycle().committed_command_invocations()
+            if invocation.run_id == run_id
+            and invocation.command_kind is CommandKind.RUN
+        ]
+        assert len(invocations) == 1, "the run has exactly one RUN invocation"
+        diagnostic = sample_diagnostic(
+            f"diag_{_uuid4_shaped(sha256_bytes(f'cancel:{run_id}'.encode()))}",
+            error_code=_CANCELLATION_CODE,
+            category=DiagnosticCategory.CANCELLATION,
+            retriable=False,
+            experiment_id=run.experiment_id,
+            run_id=run_id,
+            invocation_id=invocations[0].invocation_id,
+            timestamp_utc=self.clock.now_utc(),
+        )
+        ok(self.recorder.record(diagnostic))
+        return ok(
+            transition_run(
+                RunTransitionRequest(
+                    schema_version="1.0.0",
+                    run_id=run_id,
+                    expected_revision=run.revision,
+                    target_state=EngineRunState.CANCELLED,
+                    reason_code=_FIXTURE_REASON,
+                    primary_terminal_diagnostic_id=diagnostic.diagnostic_id,
+                ),
+                unit_of_work=self.counting,
+                clock=self.clock,
+            )
+        )
+
+    def cancel_experiment(self, experiment_id: str) -> ExperimentRecord:
+        """The Stage 5 ``cancel_experiment`` over the current experiment row: it
+        swaps the experiment to ``CANCELLED`` and reads no run (reading 23)."""
+        experiment = self.fresh_experiment(experiment_id)
+        return ok(
+            cancel_experiment(
+                CancelExperimentRequest(
+                    schema_version="1.0.0",
+                    experiment_id=experiment_id,
+                    expected_revision=experiment.revision,
+                    correlation_id=_CANCEL_CORRELATION,
+                ),
+                unit_of_work=self.counting,
+                clock=self.clock,
+            )
+        )
+
+    # -- authoritative durable readers -----------------------------------------
+
+    def fresh_dataset(
+        self, content_hash: str
+    ) -> tuple[DatasetDescriptor, tuple[DatasetPartition, ...]]:
+        """The dataset registered under ``content_hash`` and its partitions in
+        ordinal order, read back from the authoritative registry through fresh
+        sessions (never the fixture builders)."""
+        descriptor = self._fresh(
+            lambda opened: ok(opened.datasets.get_by_hash(content_hash))
+        )
+        partitions = self._fresh(
+            lambda opened: ok(opened.datasets.list_partitions(descriptor.dataset_id))
+        )
+        return descriptor, partitions
+
+    def fresh_strategy_version(self, content_hash: str) -> StrategyVersion:
+        """The strategy version registered under ``content_hash``, read back from
+        the authoritative registry through a fresh session."""
+        return self._fresh(
+            lambda opened: ok(opened.strategy_versions.get_by_hash(content_hash))
+        )
+
+    def fresh_runs(self) -> tuple[EngineRunRecord, ...]:
+        return self.harness.lifecycle().committed_engine_runs()
+
+    def fresh_candidates(self) -> tuple[CandidateArtifact, ...]:
+        return self.harness.committed_candidates()
+
+    def fresh_journal(self) -> tuple[FinalizationJournalEntry, ...]:
+        return self.harness.committed_journal()
+
+    def fresh_audit(self) -> tuple[AuditEvent, ...]:
+        return self.harness.committed_audit_events()
+
+    def fresh_ref(self, artifact_id: str) -> ArtifactRef:
+        return self._fresh(lambda opened: ok(opened.artifact_refs.get(artifact_id)))
+
+    def fresh_refs(self, run_id: str) -> tuple[ArtifactRef, ...]:
+        """Every reference whose ``RUN`` owner names ``run_id`` (both of the
+        attempt's invocations), sorted by identity."""
+        return tuple(
+            ref
+            for ref in self.harness.committed_refs()
+            if isinstance(ref.owner, RunArtifactOwner) and ref.owner.run_id == run_id
+        )
+
+    def fresh_links(self, run_id: str) -> tuple[RunArtifactLink, ...]:
+        return tuple(
+            link
+            for link in self.harness.committed_run_artifacts()
+            if link.run_id == run_id
+        )
+
+    def fresh_manifest(self, run_id: str) -> RunManifest | None:
+        """The run's ``RunManifest`` decoded from its row, or ``None``."""
+        facts = self._fresh(lambda opened: ok(opened.run_manifests.get(run_id)))
+        if not isinstance(facts, RunManifestFacts):
+            return None
+        return RunManifest.model_validate_json(facts.manifest_json)
+
+    def fresh_manifest_facts(self, run_id: str) -> RunManifestFacts:
+        facts = self._fresh(lambda opened: ok(opened.run_manifests.get(run_id)))
+        assert isinstance(facts, RunManifestFacts), "the run has no manifest row"
+        return facts
+
+    def fresh_sanitized_manifest(self, sanitized_hash: str) -> SanitizedManifestFacts:
+        facts = self._fresh(
+            lambda opened: ok(opened.sanitized_manifests.get(sanitized_hash))
+        )
+        assert isinstance(facts, SanitizedManifestFacts), "no sanitized row"
+        return facts
+
+    def fresh_validation_result(self, invocation_id: str) -> ValidationResultFacts:
+        facts = self._fresh(
+            lambda opened: ok(opened.validation_results.get(invocation_id))
+        )
+        assert isinstance(facts, ValidationResultFacts), "no validation row"
+        return facts
+
+    def _committed_diagnostics(self) -> tuple[Diagnostic, ...]:
+        statement = select(DiagnosticRow).order_by(DiagnosticRow.diagnostic_id)
+        return tuple(
+            ok(decode_diagnostic(row, clock=self.clock))
+            for row in self.harness._rows(statement)
+        )
+
+    def durable(self, run_id: str) -> DurableState:
+        """Every Stage 9 table beside the run's row and its ``RUN`` invocation,
+        the filesystem listing and the audit rows, through fresh sessions."""
+        runs = [run for run in self.fresh_runs() if run.run_id == run_id]
+        invocations = [
+            invocation
+            for invocation in self.harness.lifecycle().committed_command_invocations()
+            if invocation.run_id == run_id
+            and invocation.command_kind is CommandKind.RUN
+        ]
+        return DurableState(
+            journal=self.fresh_journal(),
+            candidates=self.fresh_candidates(),
+            refs=self.harness.committed_refs(),
+            run=runs[0] if runs else None,
+            invocation=invocations[0] if invocations else None,
+            run_manifests=self.harness.committed_run_manifests(),
+            run_artifacts=self.harness.committed_run_artifacts(),
+            audit_events=self.fresh_audit(),
+            diagnostics=self._committed_diagnostics(),
+            object_blobs=self.object_blobs(),
+            staging_files=self.staging_files(),
+            command_root_files=self.command_root_files(),
+            quarantine_entries=self.quarantine_entries(),
+        )
+
+    # -- the filesystem ---------------------------------------------------------
+
+    def object_blobs(self) -> tuple[str, ...]:
+        """The content hashes present under ``objects/``, sorted."""
+        return tuple(
+            sorted(path.name for path in _files_under(self.store.objects_root))
+        )
+
+    def staging_files(self) -> tuple[str, ...]:
+        return tuple(
+            path.relative_to(self.staging_root).as_posix()
+            for path in _files_under(self.staging_root)
+        )
+
+    def _command_root_dirs(self) -> tuple[Path, ...]:
+        """Every ``inv_*`` directory under the supervision root, from disk."""
+        return tuple(
+            child
+            for child in sorted(self.supervision_root.iterdir())
+            if child.is_dir() and child.name.startswith(_COMMAND_ROOT_PREFIX)
+        )
+
+    def command_root_files(self) -> tuple[str, ...]:
+        """Every file under a command root, as ``<invocation_id>/<relative>``."""
+        files: list[str] = []
+        for root in self._command_root_dirs():
+            files.extend(
+                f"{root.name}/{path.relative_to(root).as_posix()}"
+                for path in _files_under(root)
+            )
+        return tuple(files)
+
+    def quarantine_entries(self) -> tuple[QuarantineEntry, ...]:
+        return self.store.quarantine_entries()
+
+    # -- the raw-token scan -------------------------------------------------------
+
+    def scan_for_token(
+        self, token: str, *, extra_roots: Sequence[Path] = ()
+    ) -> TokenScanReport:
+        """The test-side exact-byte scan over every durable surface: the
+        checkpointed database file, its ``-wal`` and ``-shm`` sidecars when
+        present, every cell of every table (the ``*_json`` cells counted), the
+        logs, artifacts, quarantine and staging roots, every ``inv_*`` command
+        root on disk and every registered blob by its reference; ``extra_roots``
+        admits the positive control's scratch root."""
+        needle = token.encode("utf-8")
+        if not needle:
+            raise ValueError("token must not be empty")
+        surfaces: dict[str, int] = {}
+        hits: list[str] = []
+
+        def scan_files(label: str, files: Sequence[Path]) -> None:
+            surfaces[label] = surfaces.get(label, 0) + len(files)
+            hits.extend(str(path) for path in files if token_scan(path, needle))
+
+        # The checkpoint runs under asserted quiescence (ledger A7-01/B7-01) so
+        # every committed frame is in the main file before it is read.
+        self.database_sha256()
+        database_path = self.database.path
+        scan_files("database", (database_path,))
+        for label, suffix in (("wal", "-wal"), ("shm", "-shm")):
+            sidecar = Path(f"{database_path}{suffix}")
+            scan_files(label, (sidecar,) if sidecar.is_file() else ())
+        surfaces["json_columns"] = self._scan_cells(token, needle, hits)
+        scan_files("logs", _files_under(self.logs_root))
+        scan_files("artifacts", _files_under(self.artifacts_root))
+        scan_files("quarantine", _files_under(self.quarantine_root))
+        scan_files("staging", _files_under(self.staging_root))
+        surfaces["command_roots"] = 0
+        for root in self._command_root_dirs():
+            scan_files("command_roots", _files_under(root))
+        blobs: list[Path] = []
+        for ref in self.harness.committed_refs():
+            blob = self.store.finalized_path_for(ref.content_hash)
+            assert blob.is_file(), f"registered blob of {ref.artifact_id} is missing"
+            blobs.append(blob)
+        scan_files("blobs", blobs)
+        for extra in extra_roots:
+            scan_files(f"extra:{extra.name}", _files_under(extra))
+        return TokenScanReport(surfaces=surfaces, hits=tuple(hits))
+
+    def _scan_cells(self, token: str, needle: bytes, hits: list[str]) -> int:
+        """Every cell of every user table through the independent stdlib
+        connection; returns how many ``*_json`` cells were scanned."""
+        json_cells = 0
+        connection = raw_connection(self.database.path)
+        try:
+            tables = [str(row[0]) for row in connection.execute(_USER_TABLES_SQL)]
+            for table in tables:
+                assert table.replace("_", "").isalnum(), table
+                # The identifier comes from sqlite_master and was just checked;
+                # SQLite admits no bound parameter in place of a table name.
+                cursor = connection.execute(f'SELECT * FROM "{table}"')  # noqa: S608
+                columns = [str(item[0]) for item in cursor.description]
+                for row in cursor:
+                    for column, cell in zip(columns, row, strict=True):
+                        if column.endswith(_JSON_COLUMN_SUFFIX):
+                            json_cells += 1
+                        if (isinstance(cell, str) and token in cell) or (
+                            isinstance(cell, bytes) and needle in cell
+                        ):
+                            hits.append(f"{table}.{column}")
+        finally:
+            connection.close()
+        return json_cells

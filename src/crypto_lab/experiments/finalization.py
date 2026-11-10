@@ -84,6 +84,36 @@ conclusion's frame already holds, so the exact raw-token scan runs over every
 finalization of a conclusion before the terminal close removes ``request.json``;
 a describe conclusion is token-free.
 
+Under the ruling of 2026-11-10 the three input snapshot kinds of plan 4.6 --
+``configuration-snapshot`` (``EXPERIMENT_INPUT``), ``dataset-manifest``
+(``DATASET_INPUT``) and ``strategy-snapshot`` (``STRATEGY_INPUT``), each a
+``CanonicalHashEnvelope`` staged under the ``AUDIT`` correlation -- answer the
+same contract against their authoritative source facts: the record is the
+envelope re-serializing to the very bytes and declaring the kind's hashing
+profile; the owner's own registry row -- the frozen ``ConfigSnapshot`` of the
+experiment, the dataset registered under the bytes' digest, the strategy version
+registered under it -- is read through the transaction; the digest equals that
+row's fact (``configuration_audit_hash``, the dataset ``content_hash``, the
+version ``content_hash``) and the owner names that row; and the payload restates
+the row's typed record (the frozen configuration document, the descriptor and
+its partitions in ordinal order, the strategy specification and its extension
+hashes). The registry records belong to the ``configuration``, ``datasets`` and
+``strategy`` packages, which ``experiments`` may not import (plan 2.3, 27.1):
+the transaction members are typed by shape (``FrozenConfigurationReader``,
+``DatasetReader``, ``StrategyVersionReader``) and the records are inspected as
+the pydantic models the registries return. Their uncontrolled strings are the
+typed records' (``uncontrolled_strings_of``) that the payload carries; for the
+frozen configuration, whose model is not reachable here, every string of the
+document -- its object keys included -- except the two the contract controls at
+their declared key positions (``_configuration_strings``): the domain
+``RetryPolicy`` field names as the keys of ``scheduler.retry``, the section the
+configuration restates verbatim, and the ``Sha256`` an adapter entry declares at
+``adapters.entries[*].executable_hash``. The position decides, never the value:
+the same literal as a path value, a runtime-metadata key or a runtime-metadata
+value, and a digest anywhere else, stay uncontrolled. A matching digest, the
+kind label or the envelope parse alone never qualifies; a snapshot owner takes
+no attempt token.
+
 ``ResultRecoveryValidator`` is the production 29.3 validator: over a ``RUN``
 root it requires the durably ``EXITED`` run-command invocation with captured
 exit facts, hashes the raw token from the surviving request material and
@@ -268,6 +298,8 @@ from crypto_lab.domain.engine_run import (
     assert_run_transition,
 )
 from crypto_lab.domain.hashing import (
+    CanonicalHashEnvelope,
+    HashingProfile,
     attempt_token_hash,
     candidate_artifact_id_for,
     candidate_set_hash_for,
@@ -309,6 +341,7 @@ from crypto_lab.domain.lifecycle import (
 from crypto_lab.domain.metrics import MetricStatus, MetricValue, MetricValueType
 from crypto_lab.domain.ports import Clock
 from crypto_lab.domain.results import Failure, Result, Success
+from crypto_lab.domain.retry import RetryPolicy
 from crypto_lab.experiments.diagnostics import (
     CONCURRENCY_CONFLICT,
     INVARIANT_VIOLATION,
@@ -396,10 +429,23 @@ class _CanonicalContract:
     model: type[BaseModel] | None
 
 
+#: The ruling of 2026-11-10: the hashing profile each input snapshot kind's
+#: envelope declares -- the registry fact its owner's row carries is the digest
+#: of exactly that envelope -- and the owner kind of each.
+_INPUT_SNAPSHOT_PROFILES: Final[Mapping[str, HashingProfile]] = {
+    "EXPERIMENT": HashingProfile.CONFIGURATION_AUDIT_V1,
+    "DATASET": HashingProfile.DATASET_METADATA_V1,
+    "STRATEGY": HashingProfile.STRATEGY_VERSION_V1,
+}
+_INPUT_SNAPSHOT_OWNERS: Final[Mapping[str, type[Any]]] = {
+    "EXPERIMENT": ExperimentArtifactOwner,
+    "DATASET": DatasetArtifactOwner,
+    "STRATEGY": StrategyArtifactOwner,
+}
 #: The canonical evidence ruling of 2026-11-09: the six producers whose content
-#: the registrars can establish. The three input snapshots (``AUDIT``
-#: correlation, caller-supplied bytes proved equal to a registry fact) answer no
-#: contract here and keep the whole-content protection (Task 8 exercises them).
+#: the registrars can establish; the ruling of 2026-11-10 adds the three input
+#: snapshots (``AUDIT`` correlation, the hash envelope over a registry fact),
+#: qualified against the owner's registry row (see the module docstring).
 _CANONICAL_CONTRACTS: Final[Mapping[str, _CanonicalContract]] = {
     STDERR_KIND: _CanonicalContract(
         role=_R.CORE_EVIDENCE,
@@ -443,6 +489,16 @@ _CANONICAL_CONTRACTS: Final[Mapping[str, _CanonicalContract]] = {
         leaf=_DIAGNOSTIC_REPORT_LEAF,
         model=Diagnostic,
     ),
+    **{
+        INPUT_SNAPSHOT_KINDS[kind]: _CanonicalContract(
+            role=INPUT_SNAPSHOT_ROLES[kind],
+            owners=(_INPUT_SNAPSHOT_OWNERS[kind],),
+            correlation_kind="AUDIT",
+            leaf=f"{INPUT_SNAPSHOT_KINDS[kind]}.json",
+            model=CanonicalHashEnvelope,
+        )
+        for kind in INPUT_SNAPSHOT_KINDS
+    },
 }
 
 
@@ -526,6 +582,30 @@ _CONTROLLED_PATTERNS: Final[frozenset[str]] = frozenset(
 #: value equal to a member is the core's constant, not adapter-chosen text, so
 #: the contracts carrying them mirror the vocabulary as controlled.
 _CORE_VOCABULARY: Final[frozenset[str]] = frozenset(NEGOTIABLE_SCHEMA_NAMES)
+#: The ruling of 2026-11-10: the frozen configuration restates the domain
+#: ``RetryPolicy`` field by field at ``scheduler.retry`` (the section the policy
+#: ``retry_policy_from_config`` derives from; the envelope ``schema_version`` is
+#: the projection's own), so those field names -- two of them runs of 32 or
+#: more url-safe characters -- are the core's own constants where they are the
+#: section's keys, mirrored as controlled like the negotiable schema names.
+#: The configuration model is not reachable from ``experiments``, so the
+#: qualifier mirrors the declared key positions it controls
+#: (``_RETRY_SECTION_POSITION``, ``_EXECUTABLE_HASH_POSITION``) and holds every
+#: other string of the document -- its other keys, the operator's values, the
+#: whole of every runtime-metadata mapping -- to the token-shape rule.
+_RETRY_POLICY_FIELDS: Final[frozenset[str]] = frozenset(RetryPolicy.model_fields) - {
+    "schema_version"
+}
+#: One step of a document position: an object key, or ``None`` for an element
+#: of an array (no key of a decoded document can equal it).
+type _PositionStep = str | None
+_RETRY_SECTION_POSITION: Final[tuple[_PositionStep, ...]] = ("scheduler", "retry")
+_EXECUTABLE_HASH_POSITION: Final[tuple[_PositionStep, ...]] = (
+    "adapters",
+    "entries",
+    None,
+    "executable_hash",
+)
 
 
 def _admits_string(leaf: object) -> bool:
@@ -639,13 +719,52 @@ class OwnerRegistry(Protocol):
     def register(self, owner: ArtifactOwnerRef) -> Result[Sha256]: ...
 
 
+class FrozenConfigurationReader(Protocol):
+    """The ``configuration_snapshots`` member: the frozen configuration snapshot
+    of one experiment, ``MISSING`` while none is frozen. The record is the
+    ``configuration`` package's ``ConfigSnapshot``, which ``experiments`` may not
+    import (plan 2.3, 27.1), so the port names the shape alone and the canonical
+    qualifier reads ``configuration_json`` and ``configuration_audit_hash`` off
+    the record the registry returns (the ruling of 2026-11-10)."""
+
+    def get(self, experiment_id: ExperimentId) -> Result[Any]: ...
+
+
+class StrategyVersionReader(Protocol):
+    """The ``strategy_versions`` member (Stage 8 reading 12): the immutable
+    strategy version registered under a content hash, a ``strategy`` record the
+    qualifier inspects as the registry returns it."""
+
+    def get_by_hash(self, content_hash: Sha256) -> Result[Any]: ...
+
+
+class DatasetReader(Protocol):
+    """The ``datasets`` member (specification 8.2): the descriptor registered
+    under a content hash and a dataset's partitions in ordinal order,
+    ``datasets`` records the qualifier inspects as the registry returns them."""
+
+    def get_by_hash(self, content_hash: Sha256) -> Result[Any]: ...
+
+    def list_partitions(self, dataset_id: DatasetId) -> Result[tuple[Any, ...]]: ...
+
+
 class ConclusionTransaction(UnitOfWork, RegistrationUnitOfWork, Protocol):
     """One open transaction carrying the Stage 5 repositories, the Task 6
-    registration members and the owner registry; ``SqliteTransaction`` satisfies
-    it structurally."""
+    registration members, the owner registry and the three registry readers the
+    input snapshot contracts consult; ``SqliteTransaction`` satisfies it
+    structurally."""
 
     @property
     def artifact_owners(self) -> OwnerRegistry: ...
+
+    @property
+    def configuration_snapshots(self) -> FrozenConfigurationReader: ...
+
+    @property
+    def strategy_versions(self) -> StrategyVersionReader: ...
+
+    @property
+    def datasets(self) -> DatasetReader: ...
 
     def begin(self) -> ConclusionTransaction: ...
 
@@ -1448,7 +1567,10 @@ def input_snapshot_evidence(
     """Plan 4.6 and O-12: caller-supplied canonical bytes whose SHA-256 must equal
     the registry fact (``configuration_audit_hash``, the dataset ``content_hash``,
     ``strategy_version_hash``) under the ``AUDIT`` correlation; differing bytes
-    are ``ARTIFACT.VALIDATION_FAILED`` before anything is staged."""
+    are ``ARTIFACT.VALIDATION_FAILED`` before anything is staged. The staged
+    envelope then qualifies at finalization against the owner's registry row
+    (the ruling of 2026-11-10; the module docstring): the staging boundary trusts
+    the caller's fact no further than the finalizer's phase 1 re-establishes it."""
     now = clock.now_utc()
     kind = owner.owner_kind
     if sha256_bytes(payload) != expected_hash:
@@ -1780,6 +1902,247 @@ def _qualify_diagnostic_report(
     return _Established(tuple(uncontrolled))
 
 
+def _document_strings(value: object, out: list[str]) -> None:
+    """Every string of a decoded JSON document in document order -- the values
+    and the object keys at any depth. A decoded document declares no types, so
+    the classifier's rule for a dynamic mapping governs all of it."""
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, list):
+        for item in value:
+            _document_strings(item, out)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            out.append(key)
+            _document_strings(item, out)
+
+
+def _configuration_strings(
+    value: object, position: tuple[_PositionStep, ...], out: list[str]
+) -> None:
+    """Every string of the frozen configuration document in document order --
+    the values and the object keys at any depth -- except the two the contract
+    controls at their declared key positions: a key of ``scheduler.retry`` that
+    names a ``RetryPolicy`` field, and the value at
+    ``adapters.entries[*].executable_hash`` when it is in the declared ``Sha256``
+    grammar. The position is the path of keys from the document root, an array
+    element stepping as ``None``; the same literal anywhere else -- a path value,
+    a runtime-metadata key or value, a digest in a runtime-metadata mapping -- is
+    uncontrolled."""
+    if isinstance(value, str):
+        if (
+            position != _EXECUTABLE_HASH_POSITION
+            or _SHA256_HEX.fullmatch(value) is None
+        ):
+            out.append(value)
+    elif isinstance(value, list):
+        for item in value:
+            _configuration_strings(item, (*position, None), out)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if position != _RETRY_SECTION_POSITION or key not in _RETRY_POLICY_FIELDS:
+                out.append(key)
+            _configuration_strings(item, (*position, key), out)
+
+
+def _authoritative(found: Result[Any], disagrees: _Disagreement, subject: str) -> Any:
+    """A registry's answer under the ruling: a ``PERSISTENCE.*`` refusal keeps
+    the storage posture and is returned as is; a row the registry does not hold
+    is the disagreement with ``subject``; otherwise the record."""
+    if isinstance(found, Failure):
+        if _code_of(found).startswith("PERSISTENCE."):
+            return found
+        return disagrees(subject)
+    return found.value
+
+
+def _restates(document: object, record: object) -> bool:
+    """Whether ``document`` -- one object of an identity payload -- restates
+    ``record``: a non-empty object whose every key names a field of the record's
+    JSON-mode dump with an equal value (the identity payloads exclude fields,
+    never add them)."""
+    if (
+        not isinstance(document, dict)
+        or not document
+        or not isinstance(record, BaseModel)
+    ):
+        return False
+    dump = record.model_dump(mode="json")
+    return all(key in dump and dump[key] == value for key, value in document.items())
+
+
+def _typed_uncontrolled(
+    records: Sequence[object], present: frozenset[str]
+) -> tuple[str, ...] | None:
+    """The uncontrolled strings of typed registry records that the payload
+    carries (a field the identity payload excludes puts no string into the
+    bytes); ``None`` when a record is no pydantic model or carries a leaf the
+    classifier does not know, so the kind answers no contract."""
+    out: list[str] = []
+    for record in records:
+        if not isinstance(record, BaseModel):
+            return None
+        try:
+            strings = uncontrolled_strings_of(record)
+        except TypeError:
+            return None
+        out.extend(text for text in strings if text in present)
+    return tuple(out)
+
+
+def _qualify_configuration_snapshot(
+    transaction: ConclusionTransaction,
+    owner: ExperimentArtifactOwner,
+    payload: Mapping[str, Any],
+    digest: str,
+    disagrees: _Disagreement,
+) -> _Established | Failure:
+    """The frozen ``ConfigSnapshot`` of the owner's experiment is the fact: its
+    audit hash is the envelope's digest and its canonical document is the
+    envelope's payload. The uncontrolled strings are the document's, classified
+    by declared key position (``_configuration_strings``)."""
+    snapshot = _authoritative(
+        transaction.configuration_snapshots.get(owner.experiment_id),
+        disagrees,
+        "frozen configuration",
+    )
+    if isinstance(snapshot, Failure):
+        return snapshot
+    audit_hash = getattr(snapshot, "configuration_audit_hash", None)
+    document_text = getattr(snapshot, "configuration_json", None)
+    if (
+        _is_missing(snapshot)
+        or not isinstance(audit_hash, str)
+        or not isinstance(document_text, str)
+    ):
+        return disagrees("frozen configuration")
+    try:
+        frozen = json.loads(document_text)
+    except ValueError:
+        return disagrees("frozen configuration")
+    if audit_hash != digest or frozen != payload:
+        return disagrees("frozen configuration")
+    strings: list[str] = []
+    _configuration_strings(frozen, (), strings)
+    return _Established(tuple(strings))
+
+
+def _qualify_dataset_manifest(
+    transaction: ConclusionTransaction,
+    owner: DatasetArtifactOwner,
+    payload: Mapping[str, Any],
+    digest: str,
+    disagrees: _Disagreement,
+) -> _Established | Failure | None:
+    """The descriptor registered under the envelope's digest is the fact: it is
+    the owner's dataset, and the payload restates it and its partitions in
+    ordinal order."""
+    descriptor = _authoritative(
+        transaction.datasets.get_by_hash(digest), disagrees, "registry fact"
+    )
+    if isinstance(descriptor, Failure):
+        return descriptor
+    if getattr(descriptor, "content_hash", None) != digest:
+        return disagrees("registry fact")
+    if getattr(descriptor, "dataset_id", None) != owner.dataset_id:
+        return disagrees("owner")
+    listed = _authoritative(
+        transaction.datasets.list_partitions(owner.dataset_id),
+        disagrees,
+        "registry fact",
+    )
+    if isinstance(listed, Failure):
+        return listed
+    partitions = tuple(listed) if isinstance(listed, list | tuple) else ()
+    parts = payload.get("partitions")
+    if (
+        not partitions
+        or not _restates(payload.get("descriptor"), descriptor)
+        or not isinstance(parts, list)
+        or len(parts) != len(partitions)
+        or not all(
+            _restates(part, partition)
+            for part, partition in zip(parts, partitions, strict=True)
+        )
+    ):
+        return disagrees("registry record")
+    strings: list[str] = []
+    _document_strings(dict(payload), strings)
+    uncontrolled = _typed_uncontrolled((descriptor, *partitions), frozenset(strings))
+    return None if uncontrolled is None else _Established(uncontrolled)
+
+
+def _qualify_strategy_snapshot(
+    transaction: ConclusionTransaction,
+    owner: StrategyArtifactOwner,
+    payload: Mapping[str, Any],
+    digest: str,
+    disagrees: _Disagreement,
+) -> _Established | Failure | None:
+    """The strategy version registered under the envelope's digest is the fact:
+    the owner names it (by content hash or by version identifier), and the
+    payload restates its specification and extension hashes."""
+    version = _authoritative(
+        transaction.strategy_versions.get_by_hash(digest), disagrees, "registry fact"
+    )
+    if isinstance(version, Failure):
+        return version
+    if getattr(version, "content_hash", None) != digest:
+        return disagrees("registry fact")
+    names_hash = isinstance(owner.strategy_version_hash, str)
+    expected = owner.strategy_version_hash if names_hash else owner.strategy_version_id
+    actual = getattr(version, "content_hash" if names_hash else "strategy_version_id")
+    if expected != actual:
+        return disagrees("owner")
+    extension_hashes = getattr(version, "extension_hashes", None)
+    if (
+        not _restates(payload.get("strategy_spec"), version.strategy_spec)
+        or not isinstance(extension_hashes, tuple)
+        or payload.get("extension_hashes") != list(extension_hashes)
+    ):
+        return disagrees("registry record")
+    strings: list[str] = []
+    _document_strings(dict(payload), strings)
+    uncontrolled = _typed_uncontrolled((version,), frozenset(strings))
+    return None if uncontrolled is None else _Established(uncontrolled)
+
+
+def _qualify_input_snapshot(
+    transaction: ConclusionTransaction,
+    owner: ArtifactOwnerRef,
+    correlation_id: str,
+    records: tuple[bytes, ...],
+    disagrees: _Disagreement,
+) -> _Established | Failure | None:
+    """The ruling of 2026-11-10 over one input snapshot: exactly one record that
+    is a ``CanonicalHashEnvelope`` declaring the owner kind's hashing profile
+    (a profile the table does not name is a kind outside the contract), then
+    the owner kind's fact check. The ``AUDIT`` correlation names the staging
+    event; the facts are the owner's rows, so the correlation plays no further
+    part here."""
+    del correlation_id
+    envelopes = _canonical_records(CanonicalHashEnvelope, records)
+    if envelopes is None or len(envelopes) != 1:
+        return None
+    envelope = envelopes[0]
+    kind = owner_kind_of(owner).value
+    if envelope.hashing_profile is not _INPUT_SNAPSHOT_PROFILES.get(kind):
+        return disagrees("hashing profile")
+    digest = sha256_bytes(records[0])
+    payload: Mapping[str, Any] = envelope.payload
+    if isinstance(owner, ExperimentArtifactOwner):
+        return _qualify_configuration_snapshot(
+            transaction, owner, payload, digest, disagrees
+        )
+    if isinstance(owner, DatasetArtifactOwner):
+        return _qualify_dataset_manifest(transaction, owner, payload, digest, disagrees)
+    # The profile table admits exactly the three snapshot kinds, so the owner
+    # that declared the remaining profile is the strategy owner.
+    return _qualify_strategy_snapshot(
+        transaction, cast("StrategyArtifactOwner", owner), payload, digest, disagrees
+    )
+
+
 type _ContractCheck = Callable[
     [ConclusionTransaction, ArtifactOwnerRef, str, tuple[bytes, ...], _Disagreement],
     _Established | Failure | None,
@@ -1791,6 +2154,7 @@ _CONTRACT_CHECKS: Final[Mapping[str, _ContractCheck]] = {
     VALIDATION_RESULT_KIND: _qualify_validation_result,
     DESCRIPTOR_KIND: _qualify_descriptor,
     DIAGNOSTIC_REPORT_KIND: _qualify_diagnostic_report,
+    **{kind: _qualify_input_snapshot for kind in INPUT_SNAPSHOT_KINDS.values()},
 }
 
 
@@ -3715,10 +4079,13 @@ __all__ = (
     "ConclusionOutcome",
     "ConclusionTransaction",
     "ConclusionUnitOfWork",
+    "DatasetReader",
     "EvidenceRegistrar",
+    "FrozenConfigurationReader",
     "OwnerRegistry",
     "ResultRecoveryValidator",
     "ResultRegistrar",
+    "StrategyVersionReader",
     "conclude_command",
     "conclude_describe",
     "declared_candidate_paths",
