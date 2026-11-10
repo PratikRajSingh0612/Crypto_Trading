@@ -8,7 +8,20 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 20 (round 19 APPROVE on sha256 `691c89ee...`, revision 19; P2-T3 attempt 06 of
+**Status.** Revision 21 (round 20 REQUEST_CHANGES on sha256 `8075c022...`, revision 20: the reviewer's
+audit of the complete P2-T3 candidate against every binding Task 3 statement found four IMPORTANT and
+six MINOR literal mismatches, all folded in here: `--output` is never resolved, since resolution would
+follow reparse points; the entry point's call carries the production providers; a run refused before
+its first write creates nothing anywhere and a later failure leaves only the empty directory the
+command created; the import-root allowlist gains exactly `argparse` and `collections` and guard logic
+may be strengthened for every module; the exit table gains argparse's `--help` exit 0 and the
+command's output text; the in-flight refusal stands when a removal fails; golden equality lives in
+the integration check; the converting handler also forecloses the core's hashing functions; and the
+fifth binding condition of the advisor's acceptances of revisions 16 to 21 is recorded here: the
+specified `METADATA_FIELD` argument, digest and consumed-`ValidatedSeries` cases are proven through
+RED/GREEN tests, `diagnostics.py` gains only the new member, and both full verifiers and the
+independent task review pass before P2-T3 acceptance or publication; nothing else changes;
+revision 20 history: round 19 APPROVE on sha256 `691c89ee...`, revision 19; P2-T3 attempt 06 of
 2026-11-10 08:44Z then met the live advisor's BLOCKED at 08:47Z: Task 3's file map restricted
 `tests/safety/test_boundaries.py` to "census and import-root allowlist for the new modules only",
 yet Task 2 left that file's no-write rule at "no module writes except `normalize.py`", which the
@@ -630,7 +643,8 @@ documentation calls it a Parquet partition, and it never enters a persistent reg
   `NormalizedContainer` or `RawChecksum` (`row_count`, `start_utc`, `end_utc`, the interval tuples,
   the observations) that a core model refuses:
   `line` 0, `value_length` 0 because the one handler that converts the core's `ValueError`
-  covers every recorded field and does not inspect the core's error, so it attributes no
+  covers every recorded field (and, unreachably by construction, the core's hashing functions)
+  and does not inspect the core's error, so it attributes no
   length; the message names the rule and never the value; the `ds_` and `part_` identifiers
   and the instant are drawn before that handler and the `diag_` identifier after it, so no
   provider draw sits inside it (R7); never emitted for `INPUT_PATH`'s cases and never replaced
@@ -673,14 +687,17 @@ Fixtures under `offline_data/tests/fixtures/candles/`:
 Deterministic tests (`offline_data/tests/unit/`): reader grammar (one test per refusal,
 asserting the diagnostic code, line and the absence of the value), rule matrix of
 section 4 (one test per row, both valid fixtures), normalization bytes and checksums,
-descriptor and partition construction, golden equality, identity validation, re-run
+descriptor and partition construction, identity validation, re-run
 idempotency (two runs into two fresh output directories produce identical bytes and hashes;
 a run into a directory already holding any of the three outputs is the `OUTPUT_DIRECTORY`
 refusal and writes nothing), output-directory confinement (`--output` may be
-absolute or relative; it is resolved, created when absent, must be a directory, reparse
-points are refused, and nothing is written outside it), size ceilings, the boundary
-tests of section 2.6. A consumer check re-parses the emitted JSON through the core
-models in strict JSON mode and recomputes the hash with the core's function.
+absolute or relative; it is interpreted against the working directory when relative and never
+resolved, since resolution would follow the reparse points section 5.4 refuses; created when
+absent, must be a directory, reparse points are refused, and nothing is written outside it),
+size ceilings, the boundary
+tests of section 2.6. The consumer check (`tests/integration/test_core_contract_roundtrip.py`)
+re-parses the emitted JSON through the core models in strict JSON mode, recomputes the hash with the
+core's function and holds the golden-equality tests.
 
 ## 7. Task decomposition
 
@@ -903,10 +920,13 @@ rather than exempting: `cli.py` may create `--output` with one directory-creatio
 through one exclusive-create helper and remove only files it created through one removal helper,
 each admitted by an AST scanner pinned to a named function and an exact call shape, with
 disallowed-shape and admitted-shape controls; `__main__.py` holds exactly one guarded
-`raise SystemExit(normalize_command())`; run-time proofs that a successful run creates exactly
-`--output` and its three files and that a refused run creates nothing anywhere; no existing guard
-is weakened or removed, no other module gains a write allowance, and the dependency, lock,
-import-root, environment, network and process guards do not change),
+`raise SystemExit(normalize_command(None, ids=Uuid4IdProvider(), clock=SystemClock()))`, the
+production providers; run-time proofs that a successful run creates exactly `--output` and its
+three files, that a run refused before its first write creates nothing anywhere, and that a later
+failure leaves only the empty directory the command created (the clause licenses no `rmdir`); the
+import-root allowlist gains exactly `argparse` and `collections`; guard logic may be strengthened
+for every module; no existing guard is weakened or removed, no other module gains a write
+allowance, and the dependency, lock, environment, network and process guards do not change),
 `offline_data/src/crypto_lab_offline_data/diagnostics.py` (the one new `RefusalCode` member
 `METADATA_FIELD` of section 5.4 only; `refusal` and every other member unchanged), and
 `offline_data/tests/unit/test_candle_csv.py` (its closed-set pin
@@ -921,22 +941,29 @@ partition `raw_checksum` of section 5.1; `input_name: str`, the bounded input fi
 `TIMEFRAME_GRID` refusal at line 0 before any draw, and a core model refusing a recorded `source`,
 `input_name` or consumed digest is the `OFFLINE_DATA.METADATA_FIELD` refusal of section 5.4, never
 `INPUT_PATH`); `normalize_command(argv, *, ids, clock) -> int` writing
-`descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`; exit codes 0 success;
+`descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`; exit codes 0 success
+(also argparse's own exit for `--help`, which prints the usage text);
 1 refusal (`Failure`, including `OFFLINE_DATA.INPUT_PATH`, `OFFLINE_DATA.METADATA_FIELD` and
 `OFFLINE_DATA.OUTPUT_DIRECTORY`:
 an `--output` that is a file, a reparse point or cannot be created, or that already holds any
 of the three outputs, or a write of `descriptor.json` or `partitions.json` that fails; the
 command never overwrites); 2 argument parsing only (an unsupported
 `--timeframe` is `validate_series`'s `TIMEFRAME_GRID` refusal, exit 1, never an argparse
-error); 3 provider fault (`ProviderContractError`, R7). The command's sequence: read the
+error); 3 provider fault (`ProviderContractError`, R7). The command's only output: nothing on
+exit 0 (`--help` apart), the `Failure` as one canonical JSON line on exit 1, argparse's own text on
+exit 2 (which may echo the caller's own argv for an unrecognised argument), and on exit 3 the
+fault's message, naming the provider method only; no input value or path enters that text. The
+command's sequence: read the
 input (`read_ohlcv_csv`), validate it (`validate_series`), compute `raw_checksum`, draw its
 provider values once and snapshot them into fixed providers (passed to the writer and to
 `build_dataset_metadata`), create `--output` immediately before its first write, write the
 container, build the metadata with `raw` and `input_name`, write `descriptor.json` and
 `partitions.json`; it draws nothing after the first write; exits 1, 2 and 3 leave nothing
 they created under `--output` (every file the command created is removed in reverse order, a
-partial or completed container included; a removal that itself fails is still the
-`OUTPUT_DIRECTORY` refusal, nothing crossing; pre-existing entries untouched).
+partial or completed container included; a removal that itself fails changes nothing, the
+in-flight refusal or exit 3 stands, nothing crossing; the directory the command created is not
+removed, so a failure after its creation leaves only that empty directory; pre-existing entries
+untouched).
 
 - [ ] **Step 1 Focused RED.** Descriptor and partition field mapping (section 5.1, every
   field), the section 5.4 content-hash construction, `validate_dataset_identity` passes,
@@ -950,7 +977,8 @@ partial or completed container included; a removal that itself fails is still th
   `--output` handling of section 6, a refused input writes nothing, exit codes, and the Task 3
   extension of `tests/safety/test_boundaries.py` (the command-module and entry-point scanners with
   their disallowed- and admitted-shape controls, the run-time proofs that a successful run creates
-  exactly `--output` and its three files and that a refused run creates nothing anywhere). The
+  exactly `--output` and its three files and that a run refused before its first write creates
+  nothing anywhere). The
   golden-equality tests are added after the first GREEN run captures the goldens.
 - [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN** (`pytest-focused tests/unit/test_metadata.py tests/unit/test_cli.py tests/integration/test_core_contract_roundtrip.py tests/unit/test_candle_csv.py tests/safety/test_boundaries.py -q`).
 - [ ] **Step 5** `verify-offline.ps1` green; the core's `scripts/verify.ps1` green; review of R3 and the goldens; commit
