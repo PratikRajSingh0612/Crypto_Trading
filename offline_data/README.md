@@ -1,15 +1,21 @@
 # Crypto Trading Lab - offline historical candle data (`offline_data`)
 
-**Status:** Project 2, first bounded slice - Task 2 authored to plan revision 15, pending
-acceptance. The Task 0 scaffold and Task 1 are committed. Of
+**Status:** Project 2, first bounded slice - Task 3 authored to plan revision 22, pending
+acceptance. The Task 0 scaffold, Task 1 and Task 2 are committed. Of
 `docs/superpowers/plans/2026-11-09-project-2-offline-data-first-slice-implementation-plan.md`:
 
 | Task | Delivers | Status |
 |---|---|---|
 | 0 | scaffold, launcher, verify script, pinned lock | committed |
 | 1 | the `ohlcv-csv/1` reader (`candle_csv`), refusal diagnostics and the provider contract exception (`diagnostics`), injected identity and clock providers (`providers`), fixtures, boundary guards | committed |
-| 2 | section 4 validation with explicit missing and duplicate intervals (`validation`), the interim normalized container, its checksums and the raw input checksum (`normalize`), five fixtures, the writer's exclusive-create and partial-file-removal pins in the boundary guards | authored; awaits the controller's verification, independent review and acceptance |
-| 3 | `DatasetDescriptor` and `DatasetPartition` emission, the content hash, the command entry, goldens | not started |
+| 2 | section 4 validation with explicit missing and duplicate intervals (`validation`), the interim normalized container, its checksums and the raw input checksum (`normalize`), five fixtures, the writer's exclusive-create and partial-file-removal pins in the boundary guards | committed |
+| 3 | `DatasetDescriptor` and `DatasetPartition` emission with the core content hash (`metadata`), the `normalize` command and its module entry point (`cli`, `__main__`), six golden files, the consumer round trip, the one new refusal code `OFFLINE_DATA.METADATA_FIELD` with its closed-set pin, the command's directory-creation, JSON-write and reverse-order-removal pins in the boundary guards | authored; awaits the controller's verification, independent review and acceptance |
+
+Pending after Task 3 and outside this slice (plan section 1.4): registration of the emitted
+metadata into a core dataset registry (slice 2, a temporary-database contract test owned by
+Workstream A, fed by the committed goldens), finalization through the artifact finalizer
+(slice 3, after the Stage 9 merge), Parquet emission (the P2-B1 lift) and the real-source
+verification. No interim container enters a persistent registry.
 
 ## Scope
 
@@ -117,10 +123,12 @@ sub-project verifier and the core verifier alone, never concurrently.
   an explicitly labelled interim NDJSON container; nothing names it a Parquet partition;
   every descriptor carries the limitation in `known_limitations` and every partition in
   `quality_observations`; and no interim container is ever registered in a persistent
-  registry. Lifting P2-B1 is a separately authorized acquisition and a later task. Task 2's
+  registry. Lifting P2-B1 is a separately authorized acquisition and a later task.
   `normalize.write_normalized_container` emits the interim container described under
-  "Normalized container" below; the descriptor and partition that carry the limitation
-  text are Task 3.
+  "Normalized container" below; `metadata.build_dataset_metadata` records the limitation
+  text in every descriptor's `known_limitations` and every partition's
+  `quality_observations` (see "Dataset metadata" below), and nothing here registers an
+  interim container anywhere.
 - **P2-B2 - offline lock resolution.** If `lock-resolve-offline`, `lock-check` or
   `sync` cannot be satisfied from the local uv cache, the exact missing distribution
   and the exact uv message are reported once as P2-B2 and nothing is acquired. P2-B2
@@ -229,11 +237,10 @@ Whole-input rules, in order:
 - **Timeframe.** Exactly `1m`, `5m`, `15m`, `1h`, `4h` or `1d`
   (`SUPPORTED_TIMEFRAME_SECONDS`). Any other value, including the core grammar's `1s` and
   `1w`, is `OFFLINE_DATA.TIMEFRAME_GRID` at line `0` with the argument's length as its
-  `value_length` and never the value. Note for the reviewer: plan revision 15 states this
-  rule explicitly in section 5.4. Line `0` denotes a refusal of the whole input or of an
-  argument (`INPUT_PATH`, `SIZE_CEILING` by bytes, `OUTPUT_DIRECTORY`, and
-  `TIMEFRAME_GRID` for an unsupported timeframe argument, whose `value_length` is the
-  argument's length); every other refusal names the one-based line. The tests pin it.
+  `value_length` and never the value. Line `0` denotes a refusal of the whole input or of
+  an argument (`INPUT_PATH`, `SIZE_CEILING` by bytes, `OUTPUT_DIRECTORY`, `METADATA_FIELD`,
+  and `TIMEFRAME_GRID` for an unsupported timeframe argument, whose `value_length` is the
+  argument's length); every other refusal names the one-based line.
 - **Empty series.** Zero rows is `OFFLINE_DATA.EMPTY_SERIES` at line `2` with value
   length `0`: field for field the same `Failure` the reader returns for a header-only
   file, so Task 1 and Task 2 pin one answer.
@@ -285,8 +292,9 @@ Quality facts, recorded and never repaired:
   `duplicate_intervals`.
 
 Both interval tuples are in time order and unique, as the core descriptor requires. The
-validation status (reading R4) is decided by Task 3 from these facts: no missing and no
-duplicate interval is `VALID`; either is `VALID_WITH_WARNINGS`; a refusal emits nothing.
+validation status (reading R4) is decided by `metadata.build_dataset_metadata` from these
+facts: no missing and no duplicate interval is `VALID`; either is `VALID_WITH_WARNINGS`; a
+refusal emits nothing.
 
 The committed `btcusdt-1m-gaps-duplicates.valid.csv` holds 60 rows and 58 distinct open
 times from `2024-01-01T00:00:00Z` to `2024-01-01T01:00:00Z`: minutes 20 to 22 are missing
@@ -341,7 +349,7 @@ path inside `write_normalized_container`:
   link, refused on its own attributes), a directory that is a file, or one in which the
   exclusive create is denied is refused with nothing opened or created. A regular
   directory reached through a junction in an ancestor is not itself a reparse point and
-  is used, the reader's rule for its input. The command of Task 3 creates its `--output`
+  is used, the reader's rule for its input. The `normalize` command creates its `--output`
   directory immediately before this write.
 - Every such case, and a path the platform rejects outright (an embedded NUL), is the
   refusal `OFFLINE_DATA.OUTPUT_DIRECTORY` at line `0` with value length `0`; the path and
@@ -370,8 +378,169 @@ failing read or a path the platform rejects is `OFFLINE_DATA.INPUT_PATH` at line
 value length `0`, the path never recorded; an input over the ceiling is
 `OFFLINE_DATA.SIZE_CEILING` at line `0` with value length `max_bytes + 1`. `max_bytes` has
 no default: the caller passes the ceiling it gave the reader, so both reads of one input
-are bounded alike. Task 3 records the digest as the descriptor's `source_hash` and
-`raw_checksums` entry and the partition's `raw_checksum`.
+are bounded alike. `metadata.build_dataset_metadata` records the digest as the
+descriptor's `source_hash` and `raw_checksums` entry and the partition's `raw_checksum`.
+
+## Dataset metadata
+
+`crypto_lab_offline_data.metadata.build_dataset_metadata(series, container, raw, *,
+instrument, timeframe, source, input_name, ids, clock)` turns a `ValidatedSeries`, the
+`NormalizedContainer` of its write and the `RawChecksum` of the input into a
+`Success[DatasetBundle]` (`descriptor`: the core `DatasetDescriptor`; `partitions`: the one
+core `DatasetPartition`) or one refusal `Failure`. `instrument` is the core `InstrumentRef`
+the command builds with the core's `parse_instrument_id`; `source` is the command's
+`--source` text; `input_name` is the input file's name. Every field follows plan section
+5.1:
+
+| Descriptor field | Value |
+|---|---|
+| `schema_version` | `1.0.0` |
+| `dataset_id` | one `ds_` draw of the injected `IdProvider` |
+| `source` | `--source` (default `local-fixture`), 1 to 1024 characters |
+| `venue`, `instrument` | the venue of, and the whole, `InstrumentRef` parsed from `--instrument` (`VENUE:BASE/QUOTE:MARKET`) |
+| `data_type` | `OHLCV` |
+| `timeframe` | `--timeframe`, one of the six supported values |
+| `start_utc`, `end_utc` | the validated series' half-open bounds |
+| `original_timezone` | `UTC` (the input contract admits only `Z`) |
+| `normalized_to_utc` | `true` |
+| `imported_at_utc`, `created_at_utc` | one `now_utc` draw of the injected `Clock`, used for both |
+| `raw_source_provenance` | one entry: `source_name` `ohlcv-csv`, `source_version` `1.0.0`, `source_record` the input file name, `source_hash` the raw checksum |
+| `normalization_implementation`, `normalization_version` | `crypto-lab-offline-data`, `0.1.0` |
+| `validation_status` | `VALID` without missing or duplicate intervals, else `VALID_WITH_WARNINGS` (reading R4); `INVALID` is never emitted because a refused input emits nothing |
+| `partition_ids` | the one `part_` draw |
+| `missing_intervals`, `duplicate_intervals` | the validated series' tuples (sorted, unique) |
+| `diagnostic_ids` | empty |
+| `raw_checksums`, `normalized_checksums` | one entry each: the raw checksum and the container's SHA-256 |
+| `column_schema_version` | `0.1.0` |
+| `known_limitations` | exactly `interim container normalized-ndjson/0.1.0; Parquet partition emission requires the pyarrow acquisition (P2-B1)` |
+| `content_hash` | the construction below |
+
+| Partition field | Value |
+|---|---|
+| `schema_version`, `partition_id`, `dataset_id`, `ordinal` | `1.0.0`, the `part_` draw, the descriptor's id, `0` |
+| `relative_path` | `datasets/<dataset_id>/part-0000.ndjson` (registry-relative POSIX, never a filesystem path) |
+| `content_hash`, `normalized_checksum` | both the SHA-256 of the container bytes (equal by construction in this slice) |
+| `row_count` | the container's line count, duplicates included |
+| `start_utc`, `end_utc`, `raw_checksum`, `column_schema_version`, `raw_source_provenance` | the descriptor's |
+| `quality_observations` | the P2-B1 limitation text above, plus `DIFFERING_DUPLICATE_OBSERVATION` when the series raised it, sorted |
+
+**Content hash (plan section 5.4).** The descriptor is first built with a placeholder
+`content_hash` of sixty-four zeros, `dataset_metadata_hash(descriptor, partitions)` is
+computed by the core (its profile `dataset-metadata/v1` excludes `content_hash`,
+`created_at_utc`, `dataset_id`, `diagnostic_ids`, `imported_at_utc` and `partition_ids`,
+and the partition's `dataset_id`, `partition_id` and `relative_path`), the descriptor is
+re-created through `DatasetDescriptor.model_validate` over its dump with the digest in
+place, and `validate_dataset_identity` is called. `model_copy(update=...)` is never used,
+so every value passes the core validators. Because the identifiers and instants are
+excluded, the hash of a fixture is the same under any providers: the two committed golden
+hashes are properties of the fixtures, not of the test doubles.
+
+**Boundary.** An unsupported `timeframe` is `OFFLINE_DATA.TIMEFRAME_GRID` at line `0` with
+the argument's length, decided before any provider is drawn. The `ds_` and `part_`
+identifiers and the instant are drawn and validated before any core model is built and
+outside every handler; a value the core refuses raises `ProviderContractError` (reading
+R7), and the `diag_` identifier is drawn only for a refusal, after the handler below. A
+core model refusing a value the function records from its arguments or its consumed
+products is the refusal `OFFLINE_DATA.METADATA_FIELD` (plan section 5.4): a `source` or
+`input_name` outside the core's `BoundedText` bounds of 1 to 1024 characters; a
+`content_hash`, `normalized_checksum` or `sha256` of the consumed `NormalizedContainer` or
+`RawChecksum` that is not the core's `Sha256` form of 64 lowercase hexadecimal characters;
+and any other recorded field of the consumed `ValidatedSeries`, `NormalizedContainer` or
+`RawChecksum` (`row_count`, `start_utc`, `end_utc`, the interval tuples, the observations)
+the core refuses. It is emitted at line `0` with value length `0` because the one handler
+that converts the core's `ValueError` covers every recorded field and does not inspect the
+core's error, so it attributes no length; the message names the rule and never the value.
+It is never emitted for `INPUT_PATH`'s cases and never replaced by `INPUT_PATH`, and it is
+not reachable through the command, whose `--source` is bounded at argument parsing, whose
+`input_name` is the name of the regular file the reader opened and whose digests are the
+hashing functions' own; the command maps it like any refusal, exit `1`. No core
+`ValidationError` escapes. On success the function draws `dataset_id`, `partition_id` and
+`now_utc` exactly once each; on a `METADATA_FIELD` refusal it draws those three first and
+the `diag_` identifier and the diagnostic's instant after the handler.
+
+## Command
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\offline_data\scripts\invoke-offline-uv.ps1 <profile> ...
+```
+
+is the launcher for tooling; the product command itself is the package's module entry
+point, run by the sub-project's interpreter as
+
+```text
+python -m crypto_lab_offline_data normalize --input <file> --output <directory> --instrument VENUE:BASE/QUOTE:MARKET --timeframe <tf> [--source <text>]
+```
+
+(`crypto_lab_offline_data.cli.normalize_command(argv, *, ids, clock) -> int` is the same
+command with injected providers; `argv=None` reads the process arguments, as the entry
+point does with `Uuid4IdProvider` and `SystemClock`). It writes three files into
+`--output`: `part-0000.ndjson` (the interim container), `descriptor.json` and
+`partitions.json` (the canonical JSON bytes of the `DatasetDescriptor` and of the JSON
+array of `DatasetPartition` models, no trailing newline). The sequence is the plan's: read
+(`read_ohlcv_csv`), validate (`validate_series`), `raw_checksum`, then one draw of each
+provider value (`dataset_id`, `partition_id`, `diagnostic_id`, `now_utc`, in that order,
+each validated when drawn) snapshotted into fixed providers, then `--output` inspected and
+created immediately before the first write, then the container, the metadata and the two
+JSON files. Everything after the snapshot receives the fixed providers, so nothing is drawn
+after the first write and every later refusal carries the reserved `diag_` identifier and
+instant.
+
+| Exit | Meaning |
+|---|---|
+| `0` | success; nothing is printed (also argparse's own exit for `--help`, which prints the usage text) |
+| `1` | refusal: the `Failure` of any step, `OFFLINE_DATA.INPUT_PATH`, `OFFLINE_DATA.METADATA_FIELD` (mapped like any refusal, though unreachable through the command, see "Dataset metadata") and `OFFLINE_DATA.OUTPUT_DIRECTORY` included; the `Failure` is printed as one canonical JSON line |
+| `2` | argument parsing only (argparse's own exit): a missing or unknown argument, an `--instrument` the core helper cannot parse or a `--source` outside 1 to 1024 characters, each with a message that never echoes the value. An unsupported `--timeframe` is not an argument error: it is `validate_series`'s `TIMEFRAME_GRID` refusal, exit `1` |
+| `3` | provider fault: `ProviderContractError` from any step; its message, naming the provider method only, is printed |
+
+The printed lines name no value and no path. They go to standard output because the
+sub-project's boundary guards admit no `sys` import and therefore no standard-error handle.
+
+**`--output`.** The path is taken as given (a relative path is relative to the working
+directory) and inspected on its own entry without following it: an absent path is created
+with one `mkdir()`, so its parent must exist (a missing parent is "cannot be created"); an
+existing regular directory is used when it holds none of the three output names (any entry
+at one of those names, a dangling reparse point included, is refused); a file, a reparse
+point (junction or symbolic link, refused on its own attributes), a path that cannot be
+created and a path the platform rejects are the `OUTPUT_DIRECTORY` refusal, exit `1`,
+drawn from the snapshot. Nothing is written outside `--output`, unrelated entries inside it
+are never touched, and nothing is ever overwritten: a second run into the same directory is
+the refusal, while two runs into two fresh directories produce identical bytes.
+
+**Cleanup.** The command records each file as soon as its exclusive create has returned
+and, when a later step fails (a metadata refusal, a failed `descriptor.json` or
+`partitions.json` write) or a provider fault is raised, removes those files in reverse
+order, the completed container included, attempting each removal even after one fails; a
+removal that itself fails changes nothing: the outcome in flight (the refusal, or a provider
+fault's exit `3`) stands and nothing crosses. A partial container is the writer's own to
+remove. Exits `1`, `2` and `3` therefore leave under `--output` nothing the command created
+beyond the directory itself and any created file whose removal failed; the directory, when
+the command created it, is never removed and is empty when every removal succeeded;
+pre-existing entries are never touched.
+
+**Goldens and the consumer check.** `tests/fixtures/candles/golden/` holds, for each valid
+fixture, `<stem>.descriptor.json`, `<stem>.partitions.json` and `<stem>.content_hash.txt`
+(the hash and one line feed), captured once from the first green run with the fixed test
+identifiers and clock and committed as a review oracle; there is no regeneration command and
+no update option. `tests/integration/test_core_contract_roundtrip.py` compares the command's
+output with them byte for byte and, independently of the hash files, re-parses both golden
+JSON documents through the core models in strict JSON mode, recomputes the identity with the
+core's `dataset_metadata_hash`, checks it with `validate_dataset_identity` and ties the
+partition's `content_hash` and `raw_checksum` to the container and fixture bytes. Golden
+hashes: clean `9377a6d4...`, gaps-duplicates `41acb380...` (full digests in the files).
+
+## Interim format and pending obligations
+
+- The partition container is `normalized-ndjson/0.1.0`, an interim format (P2-B1). It is
+  not a Parquet partition and is never called one; every descriptor and partition says so.
+- No interim container is registered in a persistent core dataset registry. Registration
+  is slice 2, a temporary-database contract test through `SqliteDatasetRepository` owned by
+  Workstream A and fed by the committed goldens; finalization through the artifact finalizer
+  is slice 3, after the Stage 9 merge; both stay pending here.
+- One input format, one instrument, one partition per dataset; the real-source adapter
+  waits for the authorized source verification.
+- The command prints to standard output only, creates no parent directory for `--output`
+  and does not remove a directory it created; `--instrument` and `--source` are argument
+  refusals (exit `2`), the one argument refusal with a diagnostic is `--timeframe`.
 
 ## Safety scope
 
