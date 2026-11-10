@@ -8,7 +8,16 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 12 (round 11 REQUEST_CHANGES on sha256 `ace22812...`, revision 11: two
+**Status.** Revision 13 (the P2-T2 independent review of 2026-11-10 01:15Z found the plan jointly
+unsatisfiable at the Task 2 writer: its published signature took no providers, so a failed
+write could build no `Failure` and an `OSError` crossed the boundary against R7, and the exit
+table had no mapping; the advisor decided BLOCKED for P2-T2 at 01:16Z. This revision gives the
+writer the providers and a `Failure` return with `OFFLINE_DATA.OUTPUT_DIRECTORY` as its
+refusal, forbids overwriting (idempotency is proven across fresh output directories), adds
+Task 2's `raw_checksum` so the raw checksum section 1.2 assigns to Task 2 exists, puts the
+unsupported-timeframe refusal among the line-0 cases, and records
+`offline_data/tests/safety/test_boundaries.py` in the Task 2 and Task 3 file maps; nothing else
+changes. Revision 12 history: round 11 REQUEST_CHANGES on sha256 `ace22812...`, revision 11: two
 IMPORTANT findings folded in here, the exit table's `--output` contradiction (an `--output`
 refusal is `OUTPUT_DIRECTORY`, exit 1; exit 2 is argument parsing only) and the untestable
 "leave nothing under --output" wording with its unstated creation order (now: write nothing,
@@ -271,8 +280,9 @@ JSON schemas, inside an isolated sub-project environment.
   `ValidationError`; a refused value raises `ProviderContractError`, a sub-project exception
   deriving from `RuntimeError` (so the boundary's `ValueError` conversion can never swallow
   it), defined in `diagnostics.py`, naming the provider method and never carrying the value,
-  from the public functions `refusal` and `read_ohlcv_csv` (Task 1), `validate_series` (Task 2)
-  and `build_dataset_metadata` and `normalize_command` (Task 3). The command draws its provider
+  from the public functions `refusal` and `read_ohlcv_csv` (Task 1), `validate_series`,
+  `write_normalized_container` and `raw_checksum` (Task 2) and `build_dataset_metadata` and
+  `normalize_command` (Task 3). The command draws its provider
   values after the input is read and validated and before its first write, snapshots them
   into fixed providers that it passes to `build_dataset_metadata`, draws none after the first
   write, and creates `--output` immediately before that first write; so a provider fault
@@ -551,12 +561,18 @@ documentation calls it a Parquet partition, and it never enters a persistent reg
   `OFFLINE_DATA.CSV_NUMBER`, `OFFLINE_DATA.SIZE_CEILING`, `OFFLINE_DATA.ORDERING`,
   `OFFLINE_DATA.TIMEFRAME_GRID`, `OFFLINE_DATA.PRICE_SANITY`, `OFFLINE_DATA.VOLUME`,
   `OFFLINE_DATA.EMPTY_SERIES`, `OFFLINE_DATA.OUTPUT_DIRECTORY` (emitted by `normalize_command`
-  for an `--output` that is a file, a reparse point or cannot be created; exit 1),
+  for an `--output` that is a file, a reparse point or cannot be created, or that already
+  holds `descriptor.json`, `partitions.json` or `part-0000.ndjson`, and by
+  `write_normalized_container` when the container path already exists, its directory is
+  missing, a reparse point or unwritable, or the write fails: `line` 0, `value_length` 0, the
+  message names the rule and never the path; nothing is overwritten; exit 1),
   `OFFLINE_DATA.INPUT_PATH` (the input path is missing, unreadable, a directory or a reparse
   point, or the bounded read fails: `line` 0, `value_length` 0, the message names the rule and
   never the path; raised by `read_ohlcv_csv` and mapped by the command like any refusal);
-  `line` 0 denotes a whole-input refusal (`INPUT_PATH`, `SIZE_CEILING` by bytes) and every
-  other refusal names the one-based line; `severity = ERROR`;
+  `line` 0 denotes a refusal of the whole input or of an argument (`INPUT_PATH`, `SIZE_CEILING`
+  by bytes, `OUTPUT_DIRECTORY`, and `TIMEFRAME_GRID` for an unsupported timeframe argument,
+  whose `value_length` is the argument's length) and every other refusal names the one-based
+  line; `severity = ERROR`;
   `category` `SCHEMA_VALIDATION`; `source_component = "crypto-lab-offline-data"`;
   `retriable = False`; `message` names the line and rule only; `details` carries
   `{"line": n, "rule": code, "value_length": k}`; `timestamp_utc` from the injected clock.
@@ -590,7 +606,9 @@ Deterministic tests (`offline_data/tests/unit/`): reader grammar (one test per r
 asserting the diagnostic code, line and the absence of the value), rule matrix of
 section 4 (one test per row, both valid fixtures), normalization bytes and checksums,
 descriptor and partition construction, golden equality, identity validation, re-run
-idempotency (same bytes, same hash), output-directory confinement (`--output` may be
+idempotency (two runs into two fresh output directories produce identical bytes and hashes;
+a run into a directory already holding any of the three outputs is the `OUTPUT_DIRECTORY`
+refusal and writes nothing), output-directory confinement (`--output` may be
 absolute or relative; it is resolved, created when absent, must be a directory, reparse
 points are refused, and nothing is written outside it), size ceilings, the boundary
 tests of section 2.6. A consumer check re-parses the emitted JSON through the core
@@ -760,18 +778,30 @@ worker, never provisioned by it.
 `offline_data/tests/fixtures/candles/invalid/off-grid.csv`.
 
 **Files modified.** `offline_data/src/crypto_lab_offline_data/__init__.py`,
-`offline_data/README.md`.
+`offline_data/README.md`, `offline_data/tests/safety/test_boundaries.py` (the module census,
+import-root allowlist and no-write guards admit the new modules; nothing else in it changes).
 
 **Interfaces produced.** `validate_series(rows, *, timeframe, ids, clock) -> Success[ValidatedSeries] | Failure`
 (provider faults raise `ProviderContractError`, R7)
 (`ValidatedSeries`: rows, `missing_intervals: tuple[TimeInterval, ...]`,
 `duplicate_intervals: tuple[DuplicateInterval, ...]`, `observations: tuple[str, ...]`,
-`start_utc`, `end_utc`, `row_count`); `write_normalized_container(series, path) -> NormalizedContainer`
-(`bytes_written`, `content_hash`, `normalized_checksum`, `row_count`).
+`start_utc`, `end_utc`, `row_count`); `write_normalized_container(series, path, *, ids, clock) -> Success[NormalizedContainer] | Failure`
+(`bytes_written`, `content_hash`, `normalized_checksum`, `row_count`; a container path that already
+exists, a missing, reparse-point or unwritable directory, or a failed write is the
+`OFFLINE_DATA.OUTPUT_DIRECTORY` refusal; the writer never overwrites, creates the file exclusively,
+and removes a partial file it created when the write fails; provider faults raise
+`ProviderContractError`, R7); `raw_checksum(path, *, max_bytes, ids, clock) -> Success[RawChecksum] | Failure`
+(`RawChecksum`: `sha256` hex and `byte_count` of the input bytes, read once under the reader's byte
+ceiling with the reader's `INPUT_PATH` and `SIZE_CEILING` refusals; the pipeline's one deliberate
+second read of the input, because the reader's single bounded read yields rows, not bytes).
 
 - [ ] **Step 1 Focused RED.** One test per section 4 row for both valid fixtures and the
   four new invalid fixtures; container byte-exactness and checksum tests; `row_count`
-  equals the container's line count; idempotency.
+  equals the container's line count; idempotency across two fresh directories; the writer's
+  `OUTPUT_DIRECTORY` refusals (existing target, missing directory, reparse point, unwritable
+  directory, a write that fails mid-way leaving no partial file) with no `OSError` escaping;
+  `raw_checksum` on the clean fixture, at and over the byte ceiling, and on a missing path; an
+  unsupported timeframe refused at line 0 with the argument's length.
 - [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN** (`pytest-focused tests/unit/test_validation.py tests/unit/test_normalize.py tests/unit/test_candle_csv.py -q`).
 - [ ] **Step 5** `verify-offline.ps1` green; the core's `scripts/verify.ps1` green; review of R4, R5 and the no-fabrication rule; commit
   `feat(offline-data): validate and normalize ohlcv-csv/1 series with explicit gaps and duplicates`.
@@ -796,13 +826,15 @@ through a command, with goldens and the consumer check.
 `offline_data/tests/fixtures/candles/golden/btcusdt-1m-gaps-duplicates.content_hash.txt`.
 
 **Files modified.** `offline_data/src/crypto_lab_offline_data/__init__.py`,
-`offline_data/README.md`.
+`offline_data/README.md`, `offline_data/tests/safety/test_boundaries.py` (census and
+import-root allowlist for the new modules only).
 
 **Interfaces produced.** `build_dataset_metadata(series, container, *, instrument, timeframe, source, ids, clock) -> Success[DatasetBundle] | Failure`
 (`DatasetBundle`: `descriptor`, `partitions`); `normalize_command(argv, *, ids, clock) -> int` writing
 `descriptor.json`, `partitions.json`, `part-0000.ndjson` into `--output`; exit codes 0 success;
 1 refusal (`Failure`, including `OFFLINE_DATA.INPUT_PATH` and `OFFLINE_DATA.OUTPUT_DIRECTORY`:
-an `--output` that is a file, a reparse point or cannot be created); 2 argument parsing only;
+an `--output` that is a file, a reparse point or cannot be created, or that already holds any
+of the three outputs; the command never overwrites); 2 argument parsing only;
 3 provider fault (`ProviderContractError`, R7). The command reads and validates the input,
 then draws its provider values once and snapshots them into fixed providers passed to
 `build_dataset_metadata`, creates `--output` immediately before its first write, and draws
