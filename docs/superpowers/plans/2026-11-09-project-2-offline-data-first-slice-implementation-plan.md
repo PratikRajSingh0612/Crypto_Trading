@@ -8,7 +8,13 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 18 (round 17 APPROVE on sha256 `7083f837...`, revision 17, with one MINOR folded in
+**Status.** Revision 19 (round 18 APPROVE on sha256 `c5029287...`, revision 18; P2-T3 attempt 04 of
+2026-11-10 08:07Z then found a second omission in Task 3's file map: Task 1's
+`tests/unit/test_candle_csv.py` pins the closed section 5.4 set by exact list equality
+(`test_the_refusal_codes_are_the_closed_section_five_four_set`), so the one new `RefusalCode`
+member fails that test and the sub-project verifier with it; revision 19 adds that file to Task 3's
+modified files for the one new literal only and to Task 3's focused GREEN set; nothing else
+changes; revision 18 history: round 17 APPROVE on sha256 `7083f837...`, revision 17, with one MINOR folded in
 here: the Task 3 Step 1 RED list names one consumed-series `METADATA_FIELD` case beside the argument
 and digest cases, so every class section 5.4 names is a specified, proven case; nothing else changes;
 revision 17 history: round 16 APPROVE on sha256 `d2c67583...`, revision 16, with two MINOR wording
@@ -880,7 +886,11 @@ through a command, with goldens and the consumer check.
 `offline_data/README.md`, `offline_data/tests/safety/test_boundaries.py` (census and
 import-root allowlist for the new modules only),
 `offline_data/src/crypto_lab_offline_data/diagnostics.py` (the one new `RefusalCode` member
-`METADATA_FIELD` of section 5.4 only; `refusal` and every other member unchanged).
+`METADATA_FIELD` of section 5.4 only; `refusal` and every other member unchanged), and
+`offline_data/tests/unit/test_candle_csv.py` (its closed-set pin
+`test_the_refusal_codes_are_the_closed_section_five_four_set` gains the one literal
+`OFFLINE_DATA.METADATA_FIELD` after `OFFLINE_DATA.INPUT_PATH`, in member order; nothing else in
+it changes).
 
 **Interfaces produced.** `build_dataset_metadata(series, container, raw, *, instrument, timeframe, source, input_name, ids, clock) -> Success[DatasetBundle] | Failure`
 (`raw: RawChecksum` from Task 2's `raw_checksum`, feeding `source_hash`, `raw_checksums` and the
@@ -917,7 +927,7 @@ partial or completed container included; a removal that itself fails is still th
   draw counts of section 5.4),
   `--output` handling of section 6, a refused input writes nothing, exit codes. The
   golden-equality tests are added after the first GREEN run captures the goldens.
-- [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN** (`pytest-focused tests/unit/test_metadata.py tests/unit/test_cli.py tests/integration/test_core_contract_roundtrip.py -q`).
+- [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN** (`pytest-focused tests/unit/test_metadata.py tests/unit/test_cli.py tests/integration/test_core_contract_roundtrip.py tests/unit/test_candle_csv.py tests/safety/test_boundaries.py -q`).
 - [ ] **Step 5** `verify-offline.ps1` green; the core's `scripts/verify.ps1` green; review of R3 and the goldens; commit
   `feat(offline-data): emit dataset descriptor and partition metadata with the core identity hash`.
 
