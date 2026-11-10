@@ -8,7 +8,15 @@
 > network access, real downloads, exchange credentials, live trading, cloud deployment,
 > GitNexus activation or a dependency acquisition.
 
-**Status.** Revision 19 (round 18 APPROVE on sha256 `c5029287...`, revision 18; P2-T3 attempt 04 of
+**Status.** Revision 20 (round 19 APPROVE on sha256 `691c89ee...`, revision 19; P2-T3 attempt 06 of
+2026-11-10 08:44Z then met the live advisor's BLOCKED at 08:47Z: Task 3's file map restricted
+`tests/safety/test_boundaries.py` to "census and import-root allowlist for the new modules only",
+yet Task 2 left that file's no-write rule at "no module writes except `normalize.py`", which the
+planned command cannot satisfy, so the candidate necessarily extends the guard family, pinning the
+command's directory creation, exclusive-create writes and removals and the entry point's single
+guarded call, with run-time proofs; revision 20 states that extension in the Task 3 file map, in
+section 2.6 and in the Task 3 RED list; nothing else changes; revision 19 history: round 18 APPROVE
+on sha256 `c5029287...`, revision 18; P2-T3 attempt 04 of
 2026-11-10 08:07Z then found a second omission in Task 3's file map: Task 1's
 `tests/unit/test_candle_csv.py` pins the closed section 5.4 set by exact list equality
 (`test_the_refusal_codes_are_the_closed_section_five_four_set`), so the one new `RefusalCode`
@@ -444,8 +452,13 @@ families by name in the sub-project lock; forbids any `socket`, `urllib`, `http`
 records `crypto-trading-lab` with a `directory = "../"` source; asserts every package
 version recorded in `offline_data/uv.lock` equals the section 2.7 list (so the
 `constraint-dependencies` under `[tool.uv]` are proven honoured, like the path source);
-and asserts the reader writes nothing. The command's `--output` confinement is asserted
-in Task 3's `tests/unit/test_cli.py` (Task 3 Step 1, the `--output` handling of section 6).
+and asserts the reader writes nothing. Task 2 extends the no-write rule with the writer's pinned
+exclusive create and partial-file removal (Task 2 file map), and Task 3 extends it with the
+command's pinned directory creation, exclusive-create writes and removals of files it created and
+the entry point's single guarded call (Task 3 file map); each extension pins a named function and
+an exact call shape and weakens no guard. The command's `--output` confinement is asserted
+in Task 3's `tests/unit/test_cli.py` (Task 3 Step 1, the `--output` handling of section 6) and at
+run time in `tests/safety/test_boundaries.py`.
 
 ### 2.7 Toolchain gates and the exact pinned closure
 
@@ -883,8 +896,17 @@ through a command, with goldens and the consumer check.
 `offline_data/tests/fixtures/candles/golden/btcusdt-1m-gaps-duplicates.content_hash.txt`.
 
 **Files modified.** `offline_data/src/crypto_lab_offline_data/__init__.py`,
-`offline_data/README.md`, `offline_data/tests/safety/test_boundaries.py` (census and
-import-root allowlist for the new modules only),
+`offline_data/README.md`, `offline_data/tests/safety/test_boundaries.py` (the module census and
+import-root allowlist admit the three new modules; the no-write guard family, which Task 2 left at
+"no module writes except `normalize.py`", necessarily extends to the command and does so by pinning
+rather than exempting: `cli.py` may create `--output` with one directory-creation call, write only
+through one exclusive-create helper and remove only files it created through one removal helper,
+each admitted by an AST scanner pinned to a named function and an exact call shape, with
+disallowed-shape and admitted-shape controls; `__main__.py` holds exactly one guarded
+`raise SystemExit(normalize_command())`; run-time proofs that a successful run creates exactly
+`--output` and its three files and that a refused run creates nothing anywhere; no existing guard
+is weakened or removed, no other module gains a write allowance, and the dependency, lock,
+import-root, environment, network and process guards do not change),
 `offline_data/src/crypto_lab_offline_data/diagnostics.py` (the one new `RefusalCode` member
 `METADATA_FIELD` of section 5.4 only; `refusal` and every other member unchanged), and
 `offline_data/tests/unit/test_candle_csv.py` (its closed-set pin
@@ -925,7 +947,10 @@ partial or completed container included; a removal that itself fails is still th
   field of a consumed `ValidatedSeries` the core refuses (for instance a naive `start_utc` or an
   empty observation) (code, line 0, `value_length` 0, the value absent from the diagnostic, the
   draw counts of section 5.4),
-  `--output` handling of section 6, a refused input writes nothing, exit codes. The
+  `--output` handling of section 6, a refused input writes nothing, exit codes, and the Task 3
+  extension of `tests/safety/test_boundaries.py` (the command-module and entry-point scanners with
+  their disallowed- and admitted-shape controls, the run-time proofs that a successful run creates
+  exactly `--output` and its three files and that a refused run creates nothing anywhere). The
   golden-equality tests are added after the first GREEN run captures the goldens.
 - [ ] **Step 2** Record the failures. - [ ] **Step 3 Minimum GREEN.** - [ ] **Step 4 Focused GREEN** (`pytest-focused tests/unit/test_metadata.py tests/unit/test_cli.py tests/integration/test_core_contract_roundtrip.py tests/unit/test_candle_csv.py tests/safety/test_boundaries.py -q`).
 - [ ] **Step 5** `verify-offline.ps1` green; the core's `scripts/verify.ps1` green; review of R3 and the goldens; commit
