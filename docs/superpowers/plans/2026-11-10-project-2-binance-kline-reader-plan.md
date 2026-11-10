@@ -1,11 +1,14 @@
 # Project 2, second slice: the `binance-spot-kline-csv/1` reader (compact just-in-time plan)
 
-**Status.** Revision 2 (revision 1, commit `f97ba9b1`, was REJECTED by the advisor on 2026-11-10 at 14:06Z
+**Status.** Revision 3 (round 2 of the independent review APPROVED revision 2, commit `c2ad1c83`, with four
+MINOR prose items folded in here: the Status typo below, the non-goals list under the `1m` rule, the line-1
+wording of the header rule, and the exit-code sentence qualified for `ohlcv-csv/1`). Revision 2 (revision 1,
+commit `f97ba9b1`, was REJECTED by the advisor on 2026-11-10 at 14:06Z
 with six conditions and received REQUEST_CHANGES from the independent review with six IMPORTANT and six
 MINOR findings; all are folded in: Binance-format support restricted to `1m`; `InputFormat` as a `StrEnum`
 with a literal identity table so the import-time guard stays unchanged; the timestamp window checked on the
 integer with a bounded digit run, so no `int()` of an unbounded token, no overflow and no exception crosses;
-every fixture file prefixed `SYNTHETIC-`; the limitation literal renamed P2-B3 (P2-B3 already names the
+every fixture file prefixed `SYNTHETIC-`; the limitation literal renamed P2-B3 (P2-B2 already names the
 offline lock-resolution boundary) and `known_limitations` sorted; line-1 precedence of the header rule stated
 and the offending rows of the row-level fixtures placed at line 2 or later; comma delimiter, line endings and
 exponent-free numerics marked UNVERIFIED and decided conservatively; the two-worker cap and the serial
@@ -52,8 +55,9 @@ UNVERIFIED below and decided conservatively: the reader refuses what differs and
   integration. A second limitation literal, P2-B3, records what this format drops (section 2.6).
 - Fixtures are SYNTHETIC and labelled so; passing them establishes no successful ingestion of an actual
   Binance archive. No claim of real-source execution is made without separately authorized evidence.
-- Non-goals: futures or margin klines (different timestamp notes and `Ignore` values), the `1s`, `3m`, `30m`,
-  `2h`, `6h`, `8h`, `12h`, `3d`, `1w`, `1mo` intervals (the pipeline supports six timeframes), zip archives
+- Non-goals: futures or margin klines (different timestamp notes and `Ignore` values), every Binance
+  interval other than `1m` for this format (the pipeline's six timeframes stay available to `ohlcv-csv/1`
+  only), zip archives
   and `.CHECKSUM` files (the reader takes the extracted CSV; the archive checksum is not modelled), header
   rows (section 2.2), multi-file concatenation.
 
@@ -79,14 +83,16 @@ and `clock`; no `OSError` or core `ValueError` crosses).
   accepted; a blank body line refused by the row rule). The comma delimiter, the line endings and the
   absence of exponent notation in numeric fields are UNVERIFIED by the documentation and are decided
   conservatively here: a file using another delimiter, another line ending or exponent notation is refused
-  by the rule it violates (`CSV_ROW_SHAPE`, `CSV_ENCODING` or `CSV_NUMBER`), never repaired.
+  by the rule it violates (`CSV_HEADER` for a pipe-delimited line 1, `CSV_ROW_SHAPE`, `CSV_ENCODING` or
+  `CSV_NUMBER`), never repaired.
 - No header row. The documented layout has none and header presence is UNVERIFIED, so the reader accepts
   none: every line is a data row. The line-1 rule comes first and applies to line 1 only: a first line
   whose first comma-separated field is not an unsigned decimal integer of 1 to 20 digits, a blank line 1
   included, is `OFFLINE_DATA.CSV_HEADER` at line 1 with the line's length (this is how a
-  documented-column-names header line is refused, explicitly, never skipped); from line 2 on the row rules
-  below apply in order. An empty file is `OFFLINE_DATA.EMPTY_SERIES` at line 1, the line at which the first
-  data row was expected.
+  documented-column-names header line is refused, explicitly, never skipped); once the line-1 rule passes,
+  every line, line 1 included, is parsed by the row rules below in order (so a wrong-unit value on line 1
+  is `TIMESTAMP_UNIT` at line 1). An empty file is `OFFLINE_DATA.EMPTY_SERIES` at line 1, the line at which
+  the first data row was expected.
 - Row shape: exactly twelve comma-separated fields, no quoting, no surrounding whitespace; anything else,
   a blank line included, is `OFFLINE_DATA.CSV_ROW_SHAPE` with the line's length (on line 1 the header rule
   above takes precedence).
@@ -155,8 +161,10 @@ argparse error (exit 2, the parser's own text, no value echoed beyond argparse's
 documented in the README). The command sequence of the slice-1 plan is
 unchanged: read (through the selected reader), validate, `raw_checksum`, draw and snapshot providers,
 create `--output` immediately before the first write, write the container, build the metadata, write
-`descriptor.json` and `partitions.json`; exits 0, 1, 2, 3 keep their slice-1 meaning, cleanup rules
-included. `__main__.py` is unchanged.
+`descriptor.json` and `partitions.json`; exits 0, 1, 2, 3 keep their slice-1 meaning for `ohlcv-csv/1`
+(where an unsupported `--timeframe` stays the `TIMEFRAME_GRID` refusal, exit 1, never an argparse error),
+while for `binance-spot-kline-csv/1` a `--timeframe` other than `1m` is an argparse error (exit 2) by
+the coupling above; cleanup rules are unchanged. `__main__.py` is unchanged.
 
 ### 2.5 Source identity and checksum
 
