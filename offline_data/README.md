@@ -1,8 +1,13 @@
 # Crypto Trading Lab - offline historical candle data (`offline_data`)
 
-**Status:** Project 2, first bounded slice - scaffold only. No reader, validation,
-normalization, metadata emission or command entry exists yet; they land in Tasks 1-3
-of `docs/superpowers/plans/2026-11-09-project-2-offline-data-first-slice-implementation-plan.md`.
+**Status:** Project 2, first bounded slice - Task 1 authored to plan revision 12, pending
+acceptance. The Task 0 scaffold is committed. Task 1 of
+`docs/superpowers/plans/2026-11-09-project-2-offline-data-first-slice-implementation-plan.md`
+has authored the `ohlcv-csv/1` reader (`candle_csv`), its refusal diagnostics and the
+provider contract exception (`diagnostics`) and the injected identity and clock providers
+(`providers`), with their tests and fixtures; that work awaits the controller's
+verification, independent review and acceptance. Validation and normalization (Task 2)
+and metadata emission and the command entry (Task 3) do not exist yet.
 
 ## Scope
 
@@ -110,8 +115,8 @@ sub-project verifier and the core verifier alone, never concurrently.
   an explicitly labelled interim NDJSON container; nothing names it a Parquet partition;
   every descriptor carries the limitation in `known_limitations` and every partition in
   `quality_observations`; and no interim container is ever registered in a persistent
-  registry. Lifting P2-B1 is a separately authorized acquisition and a later task. The
-  current scaffold emits no container.
+  registry. Lifting P2-B1 is a separately authorized acquisition and a later task. No
+  code in this slice emits a container yet.
 - **P2-B2 - offline lock resolution.** If `lock-resolve-offline`, `lock-check` or
   `sync` cannot be satisfied from the local uv cache, the exact missing distribution
   and the exact uv message are reported once as P2-B2 and nothing is acquired. P2-B2
@@ -124,7 +129,84 @@ sub-project verifier and the core verifier alone, never concurrently.
 
 ## Input format
 
-The `ohlcv-csv/1` section is written by Task 1.
+The one supported input format of this slice is `ohlcv-csv/1`, read by
+`crypto_lab_offline_data.candle_csv.read_ohlcv_csv(path, *, ids, clock, max_rows, max_bytes)`.
+The reader is strict: every violation below is a refusal, and nothing is truncated,
+converted or repaired.
+
+- **Input path.** The path must be a readable regular file. A missing path, a
+  directory, an unreadable file (for example one another process holds open without
+  sharing), a reparse point (a junction or symbolic link is refused on its own
+  attributes, never followed) or a bounded read that fails is
+  `OFFLINE_DATA.INPUT_PATH` at line `0` with value length `0`; the path and its file
+  name never enter the diagnostic, and no `OSError` escapes the reader. A regular file
+  reached through a junction in an ancestor directory is not itself a reparse point and
+  is read.
+- **Encoding and line endings.** UTF-8 text without a byte order mark; LF or CRLF line
+  endings; a missing final newline is accepted, a blank line inside the body is not. A
+  carriage return is a line ending only when a line feed follows it: an unpaired
+  carriage return (for example a final `\r` with no `\n` after it) stays in its line,
+  which is then refused by the rule it violates, with the carriage return counted in
+  the recorded length. Undecodable bytes are refused with `OFFLINE_DATA.CSV_ENCODING`,
+  naming the line that holds the first undecodable byte and that line's byte length.
+- **Header.** The first line is exactly `open_time_utc,open,high,low,close,volume`
+  (case, order and field count included). Anything else, including an empty file, is
+  `OFFLINE_DATA.CSV_HEADER` at line 1. A file holding only the header is
+  `OFFLINE_DATA.EMPTY_SERIES` at line 2, the line at which the first data row was
+  expected; the plan assigns the same code to an empty validated series in Task 2.
+- **Rows.** Exactly six comma-separated fields, no quoting, no surrounding whitespace.
+  Any other field count, including a blank line, is `OFFLINE_DATA.CSV_ROW_SHAPE`.
+- **`open_time_utc`.** `YYYY-MM-DDTHH:MM:SSZ`: seconds precision, literal uppercase
+  `Z`, and a real calendar instant. Naive values, numeric offsets, fractional seconds,
+  lowercase `z`, Unix epochs and impossible dates (`2024-02-30`, hour `24`) are
+  `OFFLINE_DATA.CSV_TIMESTAMP`. Parsed values are timezone-aware UTC `datetime`s;
+  nothing is converted.
+- **`open`, `high`, `low`, `close`, `volume`.** A run of digits optionally followed by
+  one point and a run of digits: no sign or leading `+`, no exponent, no bare `.5` or
+  `5.`, no thousands separator, no `NaN` or `Infinity`, and at most the core's 256
+  canonical characters. Values are `decimal.Decimal` built from the exact source text
+  (`42000.10` keeps its trailing zero; `007.50` is the Decimal `7.50`); no float is
+  ever constructed. A price of zero is refused because prices must be positive; a zero
+  volume is accepted. Every violation is `OFFLINE_DATA.CSV_NUMBER`.
+- **Size ceilings.** At most 1,048,576 data rows and 64 MiB per input by default
+  (`max_rows`, `max_bytes`). The row ceiling is `OFFLINE_DATA.SIZE_CEILING` at the line
+  of the first row beyond it. The byte ceiling is the same code at line `0`, meaning
+  the whole input, after one bounded read that stops one byte past the ceiling, so its
+  recorded value length is `max_bytes + 1`. A negative `max_bytes` is a ceiling no input
+  can satisfy: it is the same refusal at line `0` with value length `0`, returned
+  before the input path is inspected or opened, so no negative size ever reaches a read
+  call and an absent path with a negative ceiling is the ceiling refusal.
+
+Each refusal is one core `Failure` holding one core `Diagnostic` built by
+`crypto_lab_offline_data.diagnostics.refusal`: severity `ERROR`, category
+`SCHEMA_VALIDATION`, source component `crypto-lab-offline-data`, `retriable = false`, a
+`message` naming the line and the rule only, and
+`details = {"line": n, "rule": code, "value_length": k}`. The offending value never
+enters a diagnostic: only its one-based line (`0` for the whole input) and its length in
+characters (bytes for the encoding and byte-ceiling rules) are recorded. The diagnostic
+identifier and timestamp come from the injected `IdProvider` and `Clock` protocols of
+`crypto_lab_offline_data.providers` (production providers `Uuid4IdProvider` and
+`SystemClock`); tests inject fixed values, so every diagnostic is deterministic.
+
+The reader performs at most one bounded read of the input and writes nothing. Ordering,
+the timeframe grid, missing and duplicate bars, price sanity across fields and the
+normalized form (`format_decimal`) belong to Task 2's validation, not to the reader.
+
+**Provider faults (plan reading R7).** An injected provider whose value the core refuses
+(a `diagnostic_id` that is not a lowercase canonical `diag_` UUID4, a `now_utc` that is
+naive, carries a non-zero offset or is not a `datetime`) is a fault of the caller's
+composition, not of the input: no core `Diagnostic` can be built from it, so no `Failure`
+exists to return. Each provider value is validated when it is drawn, before any core
+model is constructed from it and outside every handler that converts a data-dependent
+core error, and a refused value raises
+`crypto_lab_offline_data.diagnostics.ProviderContractError`. It derives from
+`RuntimeError`, so no `ValueError` conversion at a boundary can swallow it; it names the
+provider method (`method` attribute) and never carries the value, and the core error
+that refused the value is not chained. It is raised by `refusal` and, through it, by
+`read_ohlcv_csv`; the reader draws its providers only when it builds a refusal, so a
+faulty provider is never observed on an accepted input. It is the only exception that
+crosses the sub-project's public boundary: neither the core `ValidationError` nor an
+`OSError` escapes.
 
 ## Safety scope
 
