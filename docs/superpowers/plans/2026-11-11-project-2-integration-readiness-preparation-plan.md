@@ -1,6 +1,6 @@
 # Project 2 integration-readiness preparation — bounded plan
 
-**Status.** Revision 2 (revision 1 plus the independent review's five MINOR findings folded), proposed under STANDING OWNER AUTHORIZATION 2026-11-10, AUTONOMOUS PROGRAMME DELIVERY (revision 1 was extracted verbatim from the advisor's selection of 2026-11-11 05:06Z with the two sentences that described Stage 9 publication as pending replaced, because the owner published main at 05:03Z while that turn ran). Requires independent plan APPROVE and advisor DELEGATED_PLAN_ACCEPTED against the exact committed plan. This document records no runtime acceptance.
+**Status.** Revision 3 (revision 1 plus the independent review's five MINOR findings and its revision-2 citation MINOR folded), proposed under STANDING OWNER AUTHORIZATION 2026-11-10, AUTONOMOUS PROGRAMME DELIVERY (revision 1 was extracted verbatim from the advisor's selection of 2026-11-11 05:06Z with the two sentences that described Stage 9 publication as pending replaced, because the owner published main at 05:03Z while that turn ran). Requires independent plan APPROVE and advisor DELEGATED_PLAN_ACCEPTED against the exact committed plan. This document records no runtime acceptance.
 
 **Plan location.** `docs/superpowers/plans/2026-11-11-project-2-integration-readiness-preparation-plan.md`.
 
@@ -22,7 +22,7 @@ Sources:
 - `offline_data/README.md:376`: retained refusal-table follow-up; `:724-749`: interim format, temporary-registration restriction and pending finalization.
 - Stage 9 `src/crypto_lab/persistence/migrations/versions/r0002_stage9_artifacts.py:1-22`, `:32-33`: migration increment over the Stage 8 baseline.
 - `P2CTL/src/clabctl/gitops.py:540-549`: main-acceptance and checked-out-branch publication requirements.
-- `offline_data/scripts/invoke-offline-uv.ps1:21-33`, `:168-249`: closed offline profiles (bootstrap profiles at :168-198; ruff-format-all, ruff-check-all and mypy-all at :222-249).
+- `offline_data/scripts/invoke-offline-uv.ps1:21-33`, `:168-254`: closed offline profiles (bootstrap profiles at :168-198; ruff-format-all, ruff-check-all and mypy-all at :222-254).
 - `offline_data/scripts/verify-offline.ps1:21-49`: unchanged sub-project acceptance script.
 
 Consumed versions remain:
