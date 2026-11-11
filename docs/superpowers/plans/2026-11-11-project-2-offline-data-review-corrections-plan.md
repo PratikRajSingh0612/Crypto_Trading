@@ -1,6 +1,6 @@
 # Project 2: offline-data review corrections — bounded implementation plan
 
-**Status.** Revision 1, proposed under STANDING OWNER AUTHORIZATION 2026-11-10, AUTONOMOUS PROGRAMME DELIVERY (extracted verbatim from the advisor's selection of 2026-11-11 01:15Z; the controller session substituted the registered PowerShell executable form in the six command lines, as in the slice-3 plan, and nothing else). Awaiting independent plan APPROVE and advisor DELEGATED_PLAN_ACCEPTED. This document is not an acceptance record.
+**Status.** Revision 1, proposed under STANDING OWNER AUTHORIZATION 2026-11-10, AUTONOMOUS PROGRAMME DELIVERY (extracted verbatim from the advisor's selection of 2026-11-11 01:15Z; the controller session substituted the registered PowerShell executable form in the seven command lines, as in the slice-3 plan, and nothing else). Awaiting independent plan APPROVE and advisor DELEGATED_PLAN_ACCEPTED. This document is not an acceptance record.
 
 **Plan location.** `docs/superpowers/plans/2026-11-11-project-2-offline-data-review-corrections-plan.md`.
 
