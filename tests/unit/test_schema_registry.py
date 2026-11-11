@@ -3063,6 +3063,9 @@ def test_the_stage_three_digests_are_keyed_on_paths_not_on_a_count() -> None:
         assert name in _STAGE3_SHA256, name
     for name in _STAGE4_PATHS:
         assert name not in _STAGE3_SHA256, name
+    # Stage 9 plan section 2.6: the Stage-9-absent half, added by Stage 9 Task 9.
+    for name in _STAGE9_PATHS:
+        assert name not in _STAGE3_SHA256, name
 
 
 # --- Stage 5 Task 1: the nine Stage 4 schemas are pinned the same way ----------
@@ -3125,6 +3128,9 @@ def test_the_stage_four_digests_are_keyed_on_paths_not_on_a_count() -> None:
     for name in _STAGE3_PATHS:
         assert name not in _STAGE4_SHA256, name
     for name in _STAGE5_PATHS:
+        assert name not in _STAGE4_SHA256, name
+    # Stage 9 plan section 2.6: the Stage-9-absent half, added by Stage 9 Task 9.
+    for name in _STAGE9_PATHS:
         assert name not in _STAGE4_SHA256, name
 
 
@@ -3223,6 +3229,9 @@ def test_the_stage_five_digests_are_keyed_on_paths_not_on_a_count() -> None:
         assert name not in _STAGE5_SHA256, name
     # Stage 6 plan section 2.6: the Stage-6-absent half, added by Stage 6 Task 9.
     for name in _STAGE6_PATHS:
+        assert name not in _STAGE5_SHA256, name
+    # Stage 9 plan section 2.6: the Stage-9-absent half, added by Stage 9 Task 9.
+    for name in _STAGE9_PATHS:
         assert name not in _STAGE5_SHA256, name
     assert not set(_STAGE5_SHA256) & set(_STAGE3_SHA256)
     assert not set(_STAGE5_SHA256) & set(_STAGE4_SHA256)
@@ -4237,12 +4246,116 @@ def test_the_stage_six_digests_are_keyed_on_paths_not_on_a_count() -> None:
         assert name in _STAGE6_SHA256, name
     for name in _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS:
         assert name not in _STAGE6_SHA256, name
+    # Stage 9 plan section 2.6: the Stage-9-absent half, added by Stage 9 Task 9.
+    for name in _STAGE9_PATHS:
+        assert name not in _STAGE6_SHA256, name
     assert not set(_STAGE6_SHA256) & set(_STAGE3_SHA256)
     assert not set(_STAGE6_SHA256) & set(_STAGE4_SHA256)
     assert not set(_STAGE6_SHA256) & set(_STAGE5_SHA256)
     assert not set(_STAGE6_SHA256.values()) & set(_STAGE3_SHA256.values())
     assert not set(_STAGE6_SHA256.values()) & set(_STAGE4_SHA256.values())
     assert not set(_STAGE6_SHA256.values()) & set(_STAGE5_SHA256.values())
+
+
+# --- Stage 9 Task 9: the thirteen Stage 9 schemas are pinned the same way ------------
+#
+# Stage 9 plan section 2.6 ("Schema registry") assigns this block to Task 9: thirteen
+# digests keyed on `_STAGE9_PATHS` (the Task-3-excluded branch: Task 1's eight, Task
+# 2's three and Task 7's two), with key equality, `== 13`, unique values and
+# Stage-3/4/5/6-absent assertions, so a renamed, dropped or hand-edited Stage 9 file
+# fails rather than passing vacuously; the four earlier digest blocks above are not
+# edited and the thirty-five pre-existing digests are re-verified against both the
+# live render and the committed files by the preservation tests of this module. Each
+# value was captured from the committed bytes of the Task 9 tree through this test's
+# own `hashlib.sha256` read (one deliberately failing capture run, recorded in the
+# Task 9 report, then the literals written down); the bytes themselves were committed
+# and reviewed under Tasks 1, 2 and 7, which this block does not re-review.
+
+_STAGE9_SHA256: Final[dict[str, str]] = {
+    "artifacts/candidate-artifact-v1.schema.json": (
+        "77f5e88a4333e82fd015b43c941cd5f165ef3c0f908a21064fb296a16f24d43e"
+    ),
+    "artifacts/artifact-ref-v1.schema.json": (
+        "03137b71d9c5b195cd812d3f9b3f389fec37bd78ce4812c4a2cc005817e3e73e"
+    ),
+    "artifacts/artifact-finalization-purpose-v1.schema.json": (
+        "c7f6de919a6dfb317a0f7cc68e6cb5b7b09b227f2cd09d8a5ab03b23079aeff5"
+    ),
+    "artifacts/artifact-manifest-v1.schema.json": (
+        "bcefbbc28a65545463bb4b56764df79f3636548960b9250530243104fb03f7b8"
+    ),
+    "artifacts/result-finalization-request-v1.schema.json": (
+        "63329b4626321a4a79138108664f39b2005ac51b46dc6138c08ba78c2828564c"
+    ),
+    "artifacts/evidence-finalization-request-v1.schema.json": (
+        "e79da981246dd83c6c844532036e47a1efa8af33ceb6a8756b3632dbf4d3d012"
+    ),
+    "artifacts/finalization-result-v1.schema.json": (
+        "22ef34a01b1522d4f4975a8c248c88a00973068e30a3d9f0a51211111cbaa180"
+    ),
+    "artifacts/finalization-journal-entry-v1.schema.json": (
+        "dc46e8f07b4da3b2bfe58aac601f835532cd831ed8b1c830f13f9678135d3800"
+    ),
+    "audit/audit-event-v1.schema.json": (
+        "c7ea6057e6b7d5aa3a14ce35da79f0d75fadd1d932a77048400305bb04c6e2b5"
+    ),
+    "audit/log-record-v1.schema.json": (
+        "9e615e138cb575fe2131e6c25d47734e4748425d80078f843f714c6b9a84681d"
+    ),
+    "domain/metric-value-v1.schema.json": (
+        "f618e4a6b088884a7e5a9a9b5aad8479002ab4952285c09aa45916d427822ffd"
+    ),
+    "experiments/run-manifest-v1.schema.json": (
+        "fd9654885007005fc8f627a84884dd68a55da774cb26395ac217e90f8de1c4ac"
+    ),
+    "experiments/normalized-result-provenance-v1.schema.json": (
+        "04f77c718baf09e3d1f1a207abab98df1d998cc3570e14383b5591ee4fb6f3ee"
+    ),
+}
+
+
+def test_the_thirteen_stage_nine_schema_files_match_their_reviewed_digests() -> None:
+    """The one assertion a simultaneous Stage 9 model change and regeneration fails."""
+    assert tuple(sorted(_STAGE9_SHA256)) == tuple(sorted(_STAGE9_PATHS))
+    assert len(_STAGE9_SHA256) == 13
+    rendered = render_schema_files()
+    mismatches: list[str] = []
+    for name, expected in _STAGE9_SHA256.items():
+        actual = hashlib.sha256((_COMMITTED_ROOT / name).read_bytes()).hexdigest()
+        if actual != expected:
+            mismatches.append(f"{name}: committed {actual}")
+        if hashlib.sha256(rendered[PurePosixPath(name)]).hexdigest() != expected:
+            mismatches.append(f"{name}: rendered differs from the pinned digest")
+    assert not mismatches, "\n".join(mismatches)
+    assert len(set(_STAGE9_SHA256.values())) == 13
+
+
+def test_the_stage_nine_digests_are_keyed_on_paths_not_on_a_count() -> None:
+    """A renamed or dropped Stage 9 file must fail rather than pass vacuously."""
+    for name in _STAGE9_PATHS:
+        assert (_COMMITTED_ROOT / name).is_file(), name
+        assert name in _STAGE9_SHA256, name
+    for name in _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS + _STAGE6_PATHS:
+        assert name not in _STAGE9_SHA256, name
+    for earlier in (_STAGE3_SHA256, _STAGE4_SHA256, _STAGE5_SHA256, _STAGE6_SHA256):
+        assert not set(_STAGE9_SHA256) & set(earlier)
+        assert not set(_STAGE9_SHA256.values()) & set(earlier.values())
+
+
+def test_the_thirty_five_earlier_schemas_are_byte_identical_after_stage_nine() -> None:
+    """Stage 9 plan 2.4 and Task 9: registering thirteen entries changed none of
+    the thirty-five; the four earlier digest blocks are held unedited against both
+    the live render and the committed files."""
+    frozen = {**_STAGE3_SHA256, **_STAGE4_SHA256, **_STAGE5_SHA256, **_STAGE6_SHA256}
+    assert len(frozen) == 35
+    earlier = _STAGE3_PATHS + _STAGE4_PATHS + _STAGE5_PATHS + _STAGE6_PATHS
+    assert set(frozen) == set(earlier)
+    rendered = render_schema_files()
+    for name, expected in frozen.items():
+        path = PurePosixPath(name)
+        assert hashlib.sha256(rendered[path]).hexdigest() == expected, name
+        committed = hashlib.sha256((_COMMITTED_ROOT / name).read_bytes()).hexdigest()
+        assert committed == expected, name
 
 
 # --- Stage 6 Task 9: the published contracts of the eight schemas ---------------------

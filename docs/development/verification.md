@@ -91,7 +91,7 @@ The script stops at the first failure and runs, in order:
 11. direct `git diff --check`
 
 A successful partial command does not establish repository acceptance. Schema
-generation checks the closed 35-file registry without writing; distribution
+generation checks the closed 48-file registry without writing; distribution
 verification byte-compares the reviewed source schemas with their sole wheel
 and sdist locations.
 
@@ -194,6 +194,30 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pyte
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\safety\test_stage8_boundaries.py tests\unit\test_schema_registry.py -q
 ```
 
+Stage 9's focused targets are the following. `tests\unit\artifacts`,
+`tests\unit\audit`, `tests\integration\artifacts`, the Stage 9 modules under
+`tests\unit\persistence`, `tests\unit\experiments`,
+`tests\integration\persistence` and `tests\property`,
+`tests\doubles\artifacts.py`, `tests\persistence_support\artifacts.py` and
+`tests\safety\test_stage9_boundaries.py` are new in Stage 9; `tests\unit\domain`,
+`tests\unit\persistence`, `tests\unit\experiments`,
+`tests\integration\persistence`, `tests\property`, `tests\safety`,
+`tests\architecture` and `tests\unit\test_schema_registry.py` are older modules
+whose contract Stage 9 widened from 35 schemas to 48 and extended with the
+artifact, audit and metric contracts, the Stage 9 persistence increments, the
+result registrar and the evidence producers, the finalizing supervised flow and
+the Stage 9 boundary guard; the relational schema has one Alembic head,
+`r0002_stage9_artifacts`, the single successor of the Stage 8 baseline.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\artifacts tests\unit\audit -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\persistence tests\unit\domain -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\integration\artifacts -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\unit\experiments tests\property -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\integration\persistence -q
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 pytest-focused -o addopts= tests\safety tests\architecture tests\unit\test_schema_registry.py -q
+```
+
 The `addopts` override removes the repository-wide coverage threshold only
 from a focused diagnostic run. The later complete suite must satisfy the
 configured branch-coverage gate.
@@ -215,7 +239,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 sche
 
 `--write` is an intentional source update reviewed in the schema task. The
 operator must supply the reviewed repository `schemas` root explicitly; the
-generator targets only the 35 fixed lexical descendants, rejects an existing
+generator targets only the 48 fixed lexical descendants, rejects an existing
 symlink root or entry, and refuses every unexpected file without deleting it.
 Stage 7 retains physical ancestor reparse-point and volume containment. The
 `--check` mode writes nothing and fails on a missing, changed, or unexpected
@@ -224,11 +248,12 @@ schema. The distribution check requires one wheel copy under
 to the reviewed source, and rejects every unexpected payload beneath either
 schema prefix.
 
-### The closed 35-file registry
+### The closed 48-file registry
 
 `SCHEMA_DEFINITIONS` holds the eleven Stage 3 entries first, in their original
 order, then the nine Stage 4 entries, then the seven Stage 5 entries, then the
-eight Stage 6 protocol entries, in this order:
+eight Stage 6 protocol entries, then the thirteen Stage 9 entries, in this
+order:
 
 | # | Path | `$id` |
 |---|---|---|
@@ -256,6 +281,19 @@ eight Stage 6 protocol entries, in this order:
 | 33 | `schemas/protocol/adapter-validation-result-v1.schema.json` | `urn:crypto-lab:schema:protocol:adapter-validation-result:1.0.0` |
 | 34 | `schemas/protocol/adapter-result-manifest-v1.schema.json` | `urn:crypto-lab:schema:protocol:adapter-result-manifest:1.0.0` |
 | 35 | `schemas/protocol/sanitized-adapter-result-manifest-v1.schema.json` | `urn:crypto-lab:schema:protocol:sanitized-adapter-result-manifest:1.0.0` |
+| 36 | `schemas/artifacts/candidate-artifact-v1.schema.json` | `urn:crypto-lab:schema:artifacts:candidate-artifact:1.0.0` |
+| 37 | `schemas/artifacts/artifact-ref-v1.schema.json` | `urn:crypto-lab:schema:artifacts:artifact-ref:1.0.0` |
+| 38 | `schemas/artifacts/artifact-finalization-purpose-v1.schema.json` | `urn:crypto-lab:schema:artifacts:artifact-finalization-purpose:1.0.0` |
+| 39 | `schemas/artifacts/artifact-manifest-v1.schema.json` | `urn:crypto-lab:schema:artifacts:artifact-manifest:1.0.0` |
+| 40 | `schemas/artifacts/result-finalization-request-v1.schema.json` | `urn:crypto-lab:schema:artifacts:result-finalization-request:1.0.0` |
+| 41 | `schemas/artifacts/evidence-finalization-request-v1.schema.json` | `urn:crypto-lab:schema:artifacts:evidence-finalization-request:1.0.0` |
+| 42 | `schemas/artifacts/finalization-result-v1.schema.json` | `urn:crypto-lab:schema:artifacts:finalization-result:1.0.0` |
+| 43 | `schemas/artifacts/finalization-journal-entry-v1.schema.json` | `urn:crypto-lab:schema:artifacts:finalization-journal-entry:1.0.0` |
+| 44 | `schemas/audit/audit-event-v1.schema.json` | `urn:crypto-lab:schema:audit:audit-event:1.0.0` |
+| 45 | `schemas/audit/log-record-v1.schema.json` | `urn:crypto-lab:schema:audit:log-record:1.0.0` |
+| 46 | `schemas/domain/metric-value-v1.schema.json` | `urn:crypto-lab:schema:domain:metric-value:1.0.0` |
+| 47 | `schemas/experiments/run-manifest-v1.schema.json` | `urn:crypto-lab:schema:experiments:run-manifest:1.0.0` |
+| 48 | `schemas/experiments/normalized-result-provenance-v1.schema.json` | `urn:crypto-lab:schema:experiments:normalized-result-provenance:1.0.0` |
 
 Existing entries are never reordered and a published `$id` is never reused: the
 registry order is the generation order and the identifier is a permanent
@@ -311,6 +349,21 @@ adapter reads or writes, are trust class W and are never persisted; `run-event`
 and `sanitized-adapter-result-manifest` are the core-preserved forms and carry
 only `attempt_token_hash`; `bootstrap-descriptor-envelope`,
 `negotiation-result` and `adapter-validation-result` are token-free by contract.
+
+**The eight Stage 6 schemas are frozen in the same way, and Stage 9 leaves all
+thirty-five earlier files byte-identical.** The `_STAGE3_SHA256`,
+`_STAGE4_SHA256`, `_STAGE5_SHA256` and `_STAGE6_SHA256` blocks in
+`tests/unit/test_schema_registry.py` are unedited and re-verified against both
+the live render and the committed files in the Stage 9 tree, the thirteen new
+files are pinned alongside them in `_STAGE9_SHA256`, keyed on the thirteen
+known relative paths, and the four earlier digest blocks are asserted disjoint
+from the Stage 9 paths in both keys and values. Registering thirteen entries
+changed none of the thirty-five published byte sequences. The Stage 9 guard
+reads the same digest block by AST and hashes every committed Stage 9 file
+against it, so the registry positions 35-47 and the digests are cross-pinned
+from two modules without a second copy of the digests. No Stage 9 schema
+carries the raw attempt token: the requests, the journal entry and the run
+manifest carry only `attempt_token_hash`.
 
 ### Stage 4 timestamp projections
 
@@ -599,8 +652,10 @@ over-rejection or widen unnoticed. The register:
   `if`/`then`, but every such rule lives in a Task 2-5 domain model outside Task
   9's file map, so none is published and each is recorded here;
 - `finalization_deadline_utc` on `EngineRunRecord`: published as an optional
-  property that the Stage 5 runtime always rejects (plan section 3.8 row 15), so
-  Stage 9 can snapshot it without changing the published `$id`;
+  property that the Stage 5 runtime always rejected (plan section 3.8 row 15);
+  Stage 9 Task 5 admits it only in the six deadline-snapshot states as a
+  behaviour-only change that left the published `$id` and bytes untouched, and
+  the state-governed presence stays a runtime rule of `domain/engine_run.py`;
 - `RetryDecisionRecord.predecessor_terminal_state` publishes the full
   twelve-member `EngineRunState` and the runtime narrows it to the five
   non-success terminals (plan section 3.9);
@@ -713,11 +768,96 @@ coarse hang ceiling, and the cost per byte stays linear. The measurements are
 recorded in the stage ledger; re-derive rather than cite them if a later stage
 changes a published Stage 6 record.
 
+### Runtime rules the Stage 9 schemas cannot express
+
+The thirteen Stage 9 schemas publish every closed enumeration member by member
+(`CandidateArtifactState`, `CandidateArtifactProducerKind`,
+`ArtifactFinalizationPurpose`, `ArtifactSourceRole`, `FinalizationJournalState`,
+the 25-member `AuditAction`, `AuditOutcome`, `AuditActorKind`, `LogSeverity`,
+`MetricValueType`, `MetricStatus`, the two-member run-manifest semantic status
+and the evidence correlation kinds), the identifier prefixes and SHA-256 shapes
+as patterns, the content-addressed `objects/<hh>/<sha256>` grammar of a
+finalized path, the relative staging-path grammar, the declared collection
+bounds and whole-value `uniqueItems` positions, every required field set in
+declaration order and `additionalProperties: false` on every record object;
+the two audit schemas' bounded detail mappings publish their value schema as
+`additionalProperties` instead of closing the object. The purpose- and
+producer-governed presence rules Draft 2020-12 can express are published as
+shallow `if`/`then` clauses and are exact in both directions: an `ADAPTER`
+candidate carries all three adapter-declared fields and a `CORE` candidate
+none; an `EVIDENCE` reference has a `CORE` producer; a `RESULT` finalization
+result carries both run-manifest facts and an `EVIDENCE` one neither; a
+`RESULT` journal entry carries the run, invocation, token-hash, manifest-hash,
+deadline and revision fields and no correlation while an `EVIDENCE` entry
+carries the correlation and none of them, and `abandon_reason` is present
+exactly for an `ABANDONED` entry; an evidence correlation carries exactly the
+identifier its `kind` names; a `DEFINED` metric carries `value` and an
+`UNDEFINED` or `NOT_COMPUTED` metric does not; the invocation-tied audit
+actions require `invocation_id`; and a `SUCCEEDED` run manifest carries no
+warning while a `SUCCEEDED_WITH_WARNINGS` manifest carries at least one.
+`tests/unit/test_schema_registry.py` asserts that the committed bytes equal
+the registry render, the closed vocabularies and the presence of the run
+manifest's coupling clauses; the model suites under `tests/unit/artifacts`,
+`tests/unit/audit`, `tests/unit/domain` and `tests/unit/experiments` exercise
+the runtime side of each rule, and the audit suite the published invocation
+clause.
+
+What stays runtime-only is recorded here as a maintained enumeration. Unlike
+the Stage 5 and Stage 6 registers, no one-directional sweep was run for Stage
+9 and no one-directional pin exists for these residuals; the direction of each
+follows from the strict runtime validators refusing what the published bytes
+admit, and is recorded as such rather than measured. The register:
+
+- hash and identity recomputation, inexpressible: `artifact_id` equal to
+  `artifact_id_for(source candidate, content_hash)` on references, manifests
+  and finalization mappings; `candidate_set_hash` over the sorted candidate
+  identities; `finalization_id` and `idempotency_key` through
+  `finalization_identity` over the purpose-specific tuple; `details_hash` over
+  an audit event's details; `artifact_manifest_hash` and `run_manifest_hash`
+  as self-hashes with the one field omitted; and `manifest_id` equal to
+  `run_manifest_id_for(run_id, run_invocation_id)`;
+- comparisons between two values of one document, inexpressible: a finalized
+  path addressing its own `content_hash`; `finalized_at_utc` not before
+  `created_at_utc`, `completed_at_utc` not before `started_at_utc` and
+  `updated_at_utc` not before `prepared_at_utc`; a journal deadline not before
+  `prepared_at_utc` and a lease not past that deadline; owner identities equal
+  to the top-level identities of a `RESULT` request, journal entry or manifest
+  lineage; `planned_paths` naming exactly the sorted candidate identities and
+  every observed move restating one planned move; every metric's
+  `source_artifact_id` among the manifest's references; every reference of a
+  run manifest `RUN`-owned by the manifest's experiment, run and invocation;
+  and `superseded_artifact_id` never naming the manifest's own artifact;
+- sortedness of collections whose element domains are unbounded:
+  `candidate_artifact_ids`, `validation_diagnostic_ids`, `diagnostics`,
+  `approximations` and the order of the planned moves;
+- the role table of plan section 3.1.1 (the nine `(purpose, producer, role,
+  owner kind)` tuples) and the correlation column (which correlation kinds a
+  role and owner admit): both closed and finite, so expressible as `if`/`then`
+  over the owner discriminator, but unpublished and held by
+  `validate_role_combination` and `validate_evidence_correlation_kind` in the
+  runtime; recorded as a known gap rather than silently approximated;
+- state-governed presence that is expressible but unpublished:
+  `source_adapter_manifest_id` only on an `ADAPTER` candidate at `VALIDATING`
+  or later; a `QUARANTINED` or `CORRUPT` candidate naming a failed observation;
+  a `FAILED` observation carrying `error_code` and a passed `HASH` observation
+  carrying the observed size and hash; a `RESULT` purpose requiring a `RUN`
+  owner with `invocation_id`; the owner-variant lineage rule of the artifact
+  manifest; an `ADAPTER` audit actor carrying both adapter fields and the other
+  two kinds neither; a `PREPARED` journal entry having observed no move and a
+  `MOVED` or `REGISTERED` entry having observed every planned move;
+- the redaction fixed point: no token-shaped run in a log message or in any
+  audit, log or journal detail string, and the bounded detail ceilings, held
+  by `BoundedDetails` and `contains_token_shape` in the runtime rather than by
+  a published pattern over every nested string.
+
 ## Migration workflow
 
 The relational schema is owned by the declarative metadata in
 `src/crypto_lab/persistence/schema.py` and is created only by the Alembic
-baseline revision `r0001_stage8_baseline` under
+baseline revision `r0001_stage8_baseline` and its single successor
+`r0002_stage9_artifacts` (the Stage 9 artifact, reference, manifest, journal,
+audit and validation-result tables, the `engine_runs.finalization_deadline_utc`
+column with its partial index and the Stage 9 trigger set) under
 `src/crypto_lab/persistence/migrations/`; there is no `alembic.ini`, and the
 runner in `src/crypto_lab/persistence/migration_runner.py` configures Alembic
 programmatically. Startup opens a database through `open_database`, which
@@ -773,19 +913,21 @@ runtime, verification, and acceptance paths.
 
 ## Stage scope
 
-Project 1 Stage 8 is complete. SQLite write-ahead-log persistence with foreign
-keys, `synchronous=FULL` and a bounded busy timeout, SQLAlchemy mappings kept
-separate from the canonical models, repositories and short units of work with
-revision compare-and-swap, the Alembic baseline migration and its offline
-consistency check, durable retry decisions with their delay, invocation-scoped
-sanitized events, owner relations, and the persistence-side reconciliation
-source are implemented, and the application operations and the production
-supervisor run over them. Stage 8 implementation completed at the
-implementation checkpoint the roadmap's status table records for Stage 8; the
-Stage 8 boundary guard and this status were added by the separate Task 8
-commit, which is not the implementation hash. No schema was added: the closed
-35-schema registry is preserved byte-identical; the relational schema has one
-Alembic head, `r0001_stage8_baseline`. Stage 9 is not started.
+Project 1 Stage 9 is complete. Candidate and finalized artifact records with
+disjoint RESULT and EVIDENCE identities, lexical and physical path confinement,
+streaming hashing with the exact-byte token scan, the content-addressed store
+with same-volume atomic moves, the purpose-tagged finalization journal with
+crash recovery and quarantine, the core run manifest, normalized result
+provenance, diagnostic causal chains, the bounded rotated JSON Lines log,
+append-only audit events and the post-run raw-token scans are implemented, and
+the first success run states of the project are committed only through the
+result registrar over the production supervisor and SQLite. Stage 9
+implementation completed at the implementation checkpoint the roadmap's status
+table records for Stage 9; the Stage 9 boundary guard and this status were
+added by the separate Task 9 commit, which is not the implementation hash. The
+closed 48-schema registry — 13 new Stage 9 schemas with the 35 Stage 3–6
+schemas preserved byte-identical — is published; the relational schema has one
+Alembic head, `r0002_stage9_artifacts`. Stage 10 is not started.
 
 The independent sweeps agree on the falsifiable results: zero
 over-rejections, and zero disagreement between the four schema surfaces.
@@ -944,3 +1086,94 @@ command root while a timeout after the running handoff records
 flow seeds its availability observations through the writer exactly as the
 Stage 5 flow seeds them, because it runs no describe command that could mint
 one.
+
+Stage 9 finalizes artifacts into a content-addressed store beside the Stage 8
+database: a candidate is confined lexically and physically before it is
+opened, rechecked by identity before hashing and before each move, hashed in a
+stream and scanned for the exact raw attempt token, validated against the
+seven-row purpose, producer, role and owner table, moved on the same volume
+and registered in one short transaction under a purpose-tagged journal whose
+`PREPARED`, `MOVED`, `REGISTERED` and `ABANDONED` states bridge the filesystem
+and the database; only the `RESULT` branch creates a `RunManifest`, run links
+and the first `SUCCEEDED` and `SUCCEEDED_WITH_WARNINGS` run states of the
+project, and `EVIDENCE` never changes a run's semantic state. Recovery
+resumes, quarantines or abandons every crash point without a false success,
+the audited `purge_quarantine` operation and the lease-close cleanup remove
+raw bytes, every artifact-family action appends an audit event in the
+transaction that changed state, the JSON Lines writer rotates and redacts, and
+the post-run scan finds the raw token in none of the database file, its
+write-ahead log, any JSON column, the logs, artifacts, quarantine and staging
+roots, the attempt's command roots, the evidence blobs or the manifests while
+a planted positive control is found. It opens no network connection, hands no
+database handle, store path or finalized path to an adapter, and runs no
+retention or recovery command: those compositions belong to the next stage.
+`tests/safety/test_stage9_boundaries.py` pins the twenty-five Stage 9 source
+modules, proves `artifacts` and `audit` import `domain` and themselves alone
+and that `experiments` reaches them only from its finalization and
+run-manifest modules, confines `os` to the artifact store and to `fstat` and
+`fsync`, denies the fifteen roots no new module imports, the raw-token
+annotation, the bare identifiers and the dynamic-code surface, proves each of
+the twenty released names is defined once in its module and the thirteen
+still-deferred names nowhere, pins the `HashingProfile` tail, the thirteen
+schema entries at positions 35-47 against the digest block of
+`tests/unit/test_schema_registry.py`, the one Alembic head and the closed
+`AuditAction` vocabulary, and records the roadmap's Stage 9 completion.
+
+The Stage 9 evidence is recorded with its limits rather than rounded up. The
+normalized record family of the plan's section 1.6 item 1 ran on the plan's
+default: no human confirmation was recorded, so Task 3 did not run, the
+registry closed at 48 schemas rather than 54, the thirteen names of the Stage 3
+deferred set that Task 3 would have released stay deferred, and the normalized
+half of the result-record requirements moves to the converter plan. The
+diagnostic-reference foreign keys stay deferred (section 1.6 item 4); the Stage
+8 control query and the zero-dangling assertion after every Stage 9 row remain
+the evidence. No normalized-result producer and no Parquet reader exists
+(section 1.6 item 6): the `NORMALIZED_RESULT` role, its provenance record,
+validation profile and schema exist and are tested with JSON fixtures. The
+named forward obligations of the plan's section 1.4 stay open for Stage 10 or a
+corrective plan: the production producers for `DATASET`, `STRATEGY`,
+`EXPERIMENT` and `SYSTEM` evidence, audit emission inside the Stage 4 and Stage
+5 operations, the production projection of `SupervisionTraceEntry` into audit
+events (the carried note O-13), the `PROCESS.PID_REUSE_DETECTED` finding on a
+live `RUNNING` invocation, the startup order and reconciliation lease, the
+retention command and backup checkpoint, the log console projection and
+evidence bundle, the physical confinement of dataset paths, the artifact
+correction operation and the retention limits snapshotted in audit events.
+Three decisions are part of the Stage 9 history and amend no plan text: the
+owner's prospective canonical evidence validation clarification of 2026-11-09
+(`docs/decisions/2026-11-09-stage9-canonical-evidence-validation-clarification.md`);
+the owner ruling of 2026-11-10, under which the RV-10 predicate of recovery
+resumes independently recoverable core evidence instead of quarantining it, the
+three input-snapshot kinds qualify against their authoritative registry facts
+with the frozen configuration's strings classified by key position, and the
+Task 8 test support projects every supervision trace entry into a `LogRecord`
+through the production JSON Lines writer rather than into an `AuditEvent`,
+which discharges nothing of the production projection; and the file-map
+correction recorded under the owner's standing delegation that keeps
+`FinalizingSupervisedFlow` in `tests/persistence_support/artifacts.py` beside
+the bounded `tests/persistence_support/supervised.py` wiring and the
+crash-child adaptation. The Task 8 commit records an APPROVE independent
+review verdict; that review, `S9-T8-review-04797f3e`, returned four MINOR
+findings, restated here as recorded model-review findings, distinct from the
+three decisions above; this record changes no test for any of them: (1)
+`assert_no_child_survives` delegates to a sweep that terminates a matching
+survivor before asserting absence, so its name overstates leak detection, and
+the leak facet of the in-process rows is carried by the invocation `EXITED`
+and `cleanup_complete` assertions; (2) the repository documentation should
+make the 2026-11-10 owner amendment discoverable, so it is restated here:
+Task 8 projects each supervision trace entry through the production writer
+into a correlated, sanitized `LogRecord`, the closed 25-member `AuditAction`
+contract remains intact, and the Stage 10 O-13 production audit projection
+remains outstanding; (3) the token-absence suite lacks a conformant
+token-bearing `VALIDATE`-root byte-scan row, and the filename-based cleanup
+assertions do not supply that byte-scan evidence, which stays pending; (4)
+the accepted placement of `FinalizingSupervisedFlow` in
+`tests/persistence_support/artifacts.py` and the crash-child adaptation
+should be documented, which the file-map correction above records with the
+exact import and importer pins preserved. The test improvements of findings
+(1) and (3) stay pending, and the Stage 9 evidence stands with those two
+limits. The open risks carried from the controller checkpoint (the plan's
+section 1.5 note 18) stay open rather than closed by a later passing run:
+the Stage 7 open-handle intermittent, positional skip attribution, the
+unprobed `C:\Windows\Temp`, the WAL first-opener susceptibility and earlier
+failed runs standing on the record.

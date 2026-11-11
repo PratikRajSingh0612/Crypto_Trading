@@ -1,10 +1,10 @@
 # Crypto Trading Lab
 
-**Status:** Project 1 Stages 1-8 complete
+**Status:** Project 1 Stages 1-9 complete
 
-Crypto Trading Lab is a personal, local-only Windows project for building an engine-neutral research and simulated-trading foundation. Stage 1 supplies the Python scaffold and offline workflow; Stage 2 records GitNexus as `DISABLED_WITH_EVIDENCE`; Stage 3 completes the strict canonical-value, explicit-configuration, deterministic-hashing, dataset-metadata, structural-descriptor, artifact-ownership, and generated-schema foundation; Stage 4 adds portable strategy specification, static validation, a deterministic reference feature evaluator, strategy versioning and hashing, the capability vocabulary and compatibility resolver, and the comparison-eligibility predicate; Stage 5 adds the experiment, engine-run, and command-invocation lifecycles with closed transition tables, queue-time immutability, revision compare-and-swap, the immutable six-gate retry decision with durable delay, deterministic terminal aggregation, and application-owned repository ports exercised through in-memory doubles; Stage 6 adds the adapter protocol: explicit adapter catalog contracts, bootstrap descriptors and negotiation, command-discriminated request envelopes, invocation-scoped stdout events, validation results, adapter result manifests reconciled into core-sanitized manifests, stable exit mappings, raw-token redaction, and executable fake adapters exercised through a test-resident offline harness; Stage 7 adds the production Windows process supervisor: shell-free absolute argument-array launch of the registered executable with a fresh empty environment, bounded stdout and stderr readers with incremental protocol parsing, paired UTC and monotonic deadlines, heartbeat liveness, graceful and forced termination with Job Object process-tree cleanup, durable PID creation identity, path preflight, stale-invocation rejection, and restart reconciliation, and drives the Stage 6 fake-adapter contract matrix and the Windows platform cases through that supervisor; Stage 8 adds SQLite persistence and migrations: write-ahead-log storage with foreign keys and a bounded busy timeout, SQLAlchemy mappings separate from the canonical models, repositories and short units of work with revision compare-and-swap, the Alembic baseline migration and its offline consistency check, durable retry decisions, invocation-scoped sanitized events, owner relations, and a persistence-side reconciliation source, and composes the Stage 5 operations and the Stage 7 supervisor over them. None of these stages adds an engine, an exchange connection, or a runtime service.
+Crypto Trading Lab is a personal, local-only Windows project for building an engine-neutral research and simulated-trading foundation. Stage 1 supplies the Python scaffold and offline workflow; Stage 2 records GitNexus as `DISABLED_WITH_EVIDENCE`; Stage 3 completes the strict canonical-value, explicit-configuration, deterministic-hashing, dataset-metadata, structural-descriptor, artifact-ownership, and generated-schema foundation; Stage 4 adds portable strategy specification, static validation, a deterministic reference feature evaluator, strategy versioning and hashing, the capability vocabulary and compatibility resolver, and the comparison-eligibility predicate; Stage 5 adds the experiment, engine-run, and command-invocation lifecycles with closed transition tables, queue-time immutability, revision compare-and-swap, the immutable six-gate retry decision with durable delay, deterministic terminal aggregation, and application-owned repository ports exercised through in-memory doubles; Stage 6 adds the adapter protocol: explicit adapter catalog contracts, bootstrap descriptors and negotiation, command-discriminated request envelopes, invocation-scoped stdout events, validation results, adapter result manifests reconciled into core-sanitized manifests, stable exit mappings, raw-token redaction, and executable fake adapters exercised through a test-resident offline harness; Stage 7 adds the production Windows process supervisor: shell-free absolute argument-array launch of the registered executable with a fresh empty environment, bounded stdout and stderr readers with incremental protocol parsing, paired UTC and monotonic deadlines, heartbeat liveness, graceful and forced termination with Job Object process-tree cleanup, durable PID creation identity, path preflight, stale-invocation rejection, and restart reconciliation, and drives the Stage 6 fake-adapter contract matrix and the Windows platform cases through that supervisor; Stage 8 adds SQLite persistence and migrations: write-ahead-log storage with foreign keys and a bounded busy timeout, SQLAlchemy mappings separate from the canonical models, repositories and short units of work with revision compare-and-swap, the Alembic baseline migration and its offline consistency check, durable retry decisions, invocation-scoped sanitized events, owner relations, and a persistence-side reconciliation source, and composes the Stage 5 operations and the Stage 7 supervisor over them; Stage 9 adds artifact finalization, recovery, provenance and audit: candidate and finalized artifact records with disjoint `RESULT` and `EVIDENCE` identities, owner, purpose and role validation, lexical and physical path confinement, streaming hashing with the exact-byte token scan, the content-addressed store with same-volume atomic moves, the purpose-tagged finalization journal with crash recovery and quarantine, the core `RunManifest` created only for a successful run, normalized result provenance, diagnostic causal chains, the bounded rotated JSON Lines log, append-only audit events and the post-run raw-token scans, and commits the first success run states of the project only through the result registrar over the production supervisor and SQLite. None of these stages adds an engine, an exchange connection, or a runtime service.
 
-Project 1 Stage 8 is complete. SQLite write-ahead-log persistence with foreign keys, `synchronous=FULL` and a bounded busy timeout, SQLAlchemy mappings kept separate from the canonical models, repositories and short units of work with revision compare-and-swap, the Alembic baseline migration and its offline consistency check, durable retry decisions with their delay, invocation-scoped sanitized events, owner relations, and the persistence-side reconciliation source are implemented, and the application operations and the production supervisor run over them. Stage 8 implementation completed at the implementation checkpoint the roadmap's status table records for Stage 8; the Stage 8 boundary guard and this status were added by the separate Task 8 commit, which is not the implementation hash. No schema was added: the closed 35-schema registry is preserved byte-identical; the relational schema has one Alembic head, `r0001_stage8_baseline`. Stage 9 has not started.
+Project 1 Stage 9 is complete. Candidate and finalized artifact records with disjoint RESULT and EVIDENCE identities, lexical and physical path confinement, streaming hashing with the exact-byte token scan, the content-addressed store with same-volume atomic moves, the purpose-tagged finalization journal with crash recovery and quarantine, the core run manifest, normalized result provenance, diagnostic causal chains, the bounded rotated JSON Lines log, append-only audit events and the post-run raw-token scans are implemented, and the first success run states of the project are committed only through the result registrar over the production supervisor and SQLite. Stage 9 implementation completed at the implementation checkpoint the roadmap's status table records for Stage 9; the Stage 9 boundary guard and this status were added by the separate Task 9 commit, which is not the implementation hash. The closed 48-schema registry — 13 new Stage 9 schemas with the 35 Stage 3–6 schemas preserved byte-identical — is published; the relational schema has one Alembic head, `r0002_stage9_artifacts`. Stage 10 has not started.
 
 ## Planned future engine adapters
 
@@ -40,6 +40,8 @@ Stage 5 adds none of them either. It records experiment, engine-run, and command
 Stage 6 adds none of them either. It defines the adapter protocol as strict data and exercises it only through executable fake adapters launched by a test-resident harness: no real engine or adapter, no production process supervision, no shell invocation, no network or credentials, no database, no final artifact registration, and no success run state; every adapter output is untrusted until reconciled, and every raw attempt token is redacted before any core record exists.
 
 Stage 8 adds none of them either. It stores the canonical lifecycle, retry, invocation, event, diagnostic, registry, snapshot, and ownership records in one local SQLite file through short transactions that never span a child process or a file operation; it opens no network connection, hands no database path to an adapter, finalizes no artifact, creates no `RunManifest`, and commits no success run state.
+
+Stage 9 adds none of them either. It finalizes the bytes a fake adapter or the core produced under a test-resident root into a content-addressed store, registers them in the local SQLite file through short transactions that never span hashing or a file move, and records audit events and local JSON Lines logs; it opens no network connection, hands no database path, store path or finalized path to an adapter, relabels no failed result as evidence, finalizes no unsanitized stdout, raw-token input, original adapter-result candidate or quarantined bytes, and converts no normalized result, because no normalized-result producer and no Parquet reader exists.
 
 ## Prerequisites
 
@@ -91,9 +93,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 sche
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\invoke-uv.ps1 schema-generate-check
 ```
 
-The registry is closed at **35** schemas: the eleven Stage 3 files, which
-Stages 4, 5 and 6 leave byte-identical, followed by the nine Stage 4 files
-below, which Stages 5 and 6 also leave byte-identical.
+The registry is closed at **48** schemas: the eleven Stage 3 files, which
+Stages 4, 5, 6 and 9 leave byte-identical, followed by the nine Stage 4 files
+below, which Stages 5, 6 and 9 also leave byte-identical.
 
 ```text
 schemas/strategy/strategy-spec-v1.schema.json
@@ -139,14 +141,42 @@ the protocol event envelope, and the adapter result manifest); they are
 never persisted. The sanitized `RunEvent` and the sanitized manifest are
 the core-preserved forms and carry only the token's hash.
 
+The thirteen Stage 9 files follow them, in registry order; Stage 9 leaves the
+thirty-five earlier files byte-identical:
+
+```text
+schemas/artifacts/candidate-artifact-v1.schema.json
+schemas/artifacts/artifact-ref-v1.schema.json
+schemas/artifacts/artifact-finalization-purpose-v1.schema.json
+schemas/artifacts/artifact-manifest-v1.schema.json
+schemas/artifacts/result-finalization-request-v1.schema.json
+schemas/artifacts/evidence-finalization-request-v1.schema.json
+schemas/artifacts/finalization-result-v1.schema.json
+schemas/artifacts/finalization-journal-entry-v1.schema.json
+schemas/audit/audit-event-v1.schema.json
+schemas/audit/log-record-v1.schema.json
+schemas/domain/metric-value-v1.schema.json
+schemas/experiments/run-manifest-v1.schema.json
+schemas/experiments/normalized-result-provenance-v1.schema.json
+```
+
+The eight artifact files sit beside the frozen Stage 3 owner-reference entry,
+the two audit files open a new group, the metric value joins the frozen Stage
+3 domain entries and the run manifest and the normalized result provenance
+join the Stage 5 experiments entries. No Stage 9 schema carries a raw attempt
+token: the requests, journal entries and the run manifest carry only
+`attempt_token_hash`, and the normalized record family stays unpublished
+because Task 3 of the Stage 9 plan was excluded by the plan's default and did
+not run.
+
 Generated schemas are reviewed canonical source artifacts, not incidental
 build output: every byte is read before it is committed, and a published `$id`
-is a permanent contract. The complete verifier checks that exactly those 35
+is a permanent contract. The complete verifier checks that exactly those 48
 schemas are packaged once in the wheel and once in the sdist with identical
 bytes.
 
-Every timestamp field reachable from the published Stage 4, Stage 5 and Stage 6
-schema graphs uses the calendar- and clock-valid forward schema view, so an impossible
+Every timestamp field reachable from the published Stage 4, Stage 5, Stage 6
+and Stage 9 schema graphs uses the calendar- and clock-valid forward schema view, so an impossible
 instant such as `2026-02-30T00:00:00Z`, `2026-01-01T24:00:00Z`,
 `2026-01-01T00:60:00Z`, or `2026-01-01T00:00:60Z` is rejected by the published
 schema as well as by the runtime. The three released Stage 3 `$id`s keep their

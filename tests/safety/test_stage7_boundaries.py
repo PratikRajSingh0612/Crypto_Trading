@@ -738,7 +738,12 @@ def test_the_roadmap_records_stage_seven_complete_and_stage_eight_complete(
     "Stage 8 complete", the deferred Stage 8 row is gone, the Stage 7 hash stays
     once in the roadmap and has left README and the guide (whose Stage 7 status
     blocks were replaced by the Stage 8 blocks), and the five Stage 8 negatives of
-    the Stage 7 form are inverted where the new prose uses them."""
+    the Stage 7 form are inverted where the new prose uses them. Stage 9 plan
+    section 2.6 (Task 9) advanced the inverted forms once more: "Stage 8 complete"
+    survives in the roadmap through this row's clause, the README and guide
+    status blocks now read "Stage 9 is complete", the roadmap and README headers
+    count nine stages, the Stage 9 not-started forms are denied beside the Stage 7
+    and Stage 8 ones, and the containment literal is "Stage 10"."""
     roadmap = _read(repository_root, _ROADMAP)
     readme = _read(repository_root, _README)
     guide = _read(repository_root, _VERIFICATION_GUIDE)
@@ -753,18 +758,23 @@ def test_the_roadmap_records_stage_seven_complete_and_stage_eight_complete(
     assert "Stage 8 not started" not in roadmap
     assert "Stage 8 has not started" not in readme
     assert "Stage 8 is not started" not in guide
+    assert "Stage 9 not started" not in roadmap
+    assert "Stage 9 has not started" not in readme
+    assert "Stage 9 is not started" not in guide
     # The Stage 7 implementation hash stays in the roadmap's history row alone.
     assert roadmap.count(STAGE7_IMPLEMENTATION_COMMIT) == 1
     assert readme.count(STAGE7_IMPLEMENTATION_COMMIT) == 0
     assert guide.count(STAGE7_IMPLEMENTATION_COMMIT) == 0
-    # The inverted negatives: every surface now records the Stage 8 completion.
+    # The inverted negatives: every surface now records the Stage 9 completion;
+    # "Stage 8 complete" survives through this guard's Stage 7 row clause.
     assert "Stage 8 complete" in roadmap
-    assert "Stage 8 is complete" in readme
-    assert "Stage 8 is complete" in guide
-    assert "Stages 1-8" in readme
-    assert "Stages 1 through 8" in roadmap
+    assert "Stage 9 complete" in roadmap
+    assert "Stage 9 is complete" in readme
+    assert "Stage 9 is complete" in guide
+    assert "Stages 1-9" in readme
+    assert "Stages 1 through 9" in roadmap
     for text in (roadmap, readme, guide):
-        assert "Stage 9 has started" not in text
+        assert "Stage 10 has started" not in text
 
 
 def test_the_guide_states_the_committed_descendant_creation_time_rule(

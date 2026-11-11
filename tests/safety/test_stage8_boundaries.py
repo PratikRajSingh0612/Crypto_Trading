@@ -10,7 +10,10 @@ identifiers and every deferred name inside persistence, proves the
 ``diagnostic_ids`` column is written only through the whole-row
 command-invocation encode, pins the one Alembic head, pins every census value
 the stage reconciled, and records the roadmap, README and guide status of a
-complete Stage 8 with Stage 9 not started.
+complete Stage 8 -- advanced by Stage 9 Task 9 (Stage 9 plan section 2.6, status
+pins) to the Stage 9 successors: the Stage 8 row's clause reads "Stage 9
+complete", the Stage 8 status blocks are denied, the Stage 9 deferred row is
+denied and the later-stage claims are the Stage 10 forms.
 
 Declared readings:
 
@@ -507,8 +510,12 @@ _STAGE8_COMPLETION_ROW: Final = (
     "checks and status pins and this status were added by the separate Task 8 "
     "commit, which is not the implementation hash; verified offline on the "
     "complete verifier; GitNexus remains `DISABLED_WITH_EVIDENCE` with the manual "
-    "source, reference, and diff fallback recorded; Stage 9 not started |"
+    # Stage 9 plan section 2.6: the one clause of this row Task 9 changes.
+    "source, reference, and diff fallback recorded; Stage 9 complete |"
 )
+#: The roadmap's deferred Stage 9 row: a positive pin while Stage 9 was not
+#: started, a negative since Stage 9 Task 9 replaced it with the completion row
+#: the Stage 9 guard pins (Stage 9 plan section 2.6).
 _STAGE9_DEFERRED_ROW: Final = (
     "| 9 — Artifact Finalization, Recovery, Provenance, and Audit | Intentionally "
     f"deferred until Stages 6{chr(0x2013)}8 completion | Not started | Not evaluated |"
@@ -625,12 +632,13 @@ _VERIFICATION_STAGE8_LIMITATIONS: Final = "\n".join(
         "one.",
     )
 )
+#: Stage 9 plan section 2.6 (status pins): advanced to the Stage 10 forms in Task 9.
 _LATER_STAGE_CLAIMS: Final[tuple[str, ...]] = (
-    "Stage 9 has started",
-    "Stage 9 is complete",
-    "Stage 9 complete",
-    "Stages 1-9",
-    "Stages 1 through 9",
+    "Stage 10 has started",
+    "Stage 10 is complete",
+    "Stage 10 complete",
+    "Stages 1-10",
+    "Stages 1 through 10",
 )
 
 
@@ -1077,29 +1085,41 @@ def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_roadmap_records_stage_eight_complete_and_stage_nine_not_started(
+def test_the_roadmap_records_stage_eight_complete_and_stage_nine_complete(
     repository_root: Path,
 ) -> None:
+    """Stage 9 plan section 2.6 (status pins, Task 9): the Stage 8 row's clause
+    reads "Stage 9 complete", the Stage 9 deferred row is gone (the Stage 9 guard
+    pins its completion successor and the Stage 10 deferred row), the Stage 8
+    status blocks have left README and the guide (replaced by the Stage 9 blocks
+    the Stage 3 guard pins), the counting forms read nine, the not-started forms
+    are the Stage 10 ones with the Stage 9 ones denied, and the hash rules hold
+    for the Stage 7 and Stage 8 hashes exactly as before."""
     roadmap = _read(repository_root, _ROADMAP)
     readme = _read(repository_root, _README)
     guide = _read(repository_root, _VERIFICATION_GUIDE)
     assert _STAGE8_COMPLETION_ROW in roadmap
+    assert _STAGE8_COMPLETION_ROW.endswith("Stage 9 complete |")
     assert _STAGE8_ROADMAP_ROW not in roadmap  # the deferred row is gone
-    assert _STAGE9_DEFERRED_ROW in roadmap
+    assert _STAGE9_DEFERRED_ROW not in roadmap  # replaced by the completion row
     assert (
         _STAGE7_ROADMAP_ROW in roadmap
-    )  # its last clause now reads "Stage 8 complete"
+    )  # its last clause still reads "Stage 8 complete"
     assert _STAGE7_ROADMAP_ROW.endswith("Stage 8 complete |")
     assert f"**Approved detailed implementation plan:** `{STAGE8_PLAN}`." in roadmap
     assert f"**Planned detailed implementation plan:** `{STAGE8_PLAN}`." not in roadmap
     assert "Stage 8 not started" not in roadmap
     assert "Stage 8 has not started" not in readme
     assert "Stage 8 is not started" not in guide
+    assert "Stage 9 not started" not in roadmap
     assert "Stage 8 complete" in roadmap
-    assert "Stages 1 through 8" in roadmap
-    assert "Stages 1-8" in readme
-    assert _README_STAGE8_STATUS in readme
-    assert _VERIFICATION_STAGE8_STATUS in guide
+    assert "Stage 9 complete" in roadmap
+    assert "Stages 1 through 9" in roadmap
+    assert "Stages 1-9" in readme
+    assert "Stages 1 through 8" not in roadmap
+    assert "Stages 1-8" not in readme
+    assert _README_STAGE8_STATUS not in readme
+    assert _VERIFICATION_STAGE8_STATUS not in guide
     # The hash rules: the Task 7 hash once in the roadmap and nowhere else; the
     # Stage 7 hash likewise, now that it has left README and the guide.
     assert roadmap.count(STAGE8_IMPLEMENTATION_COMMIT) == 1
@@ -1115,8 +1135,10 @@ def test_the_roadmap_records_stage_eight_complete_and_stage_nine_not_started(
     # the guide never use the word (the Stage 7 guard pins the same rule).
     assert "sandbox" not in readme.lower()
     assert "sandbox" not in guide.lower()
-    assert "Stage 9 has not started." in readme
-    assert "Stage 9 is not started." in guide
+    assert "Stage 10 has not started." in readme
+    assert "Stage 10 is not started." in guide
+    assert "Stage 9 has not started." not in readme
+    assert "Stage 9 is not started." not in guide
 
 
 def test_the_guide_records_the_stage_eight_focused_checks_and_evidence(
