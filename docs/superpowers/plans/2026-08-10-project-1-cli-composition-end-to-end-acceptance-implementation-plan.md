@@ -1,6 +1,10 @@
 # Project 1 Stage 10 - CLI Composition and End-to-End Acceptance Implementation Plan
 
-**Status:** Revision 2: the five reviewed parts consolidated with every independent-review finding folded; awaiting the final independent review and advisor acceptance; not an acceptance record.
+**Status:** Revision 3: the five reviewed parts consolidated with every
+independent-review finding folded, plus the final review's findings (closure and
+bounds mandates, 2026-11-11: ten MINOR and three IMPORTANT prose items, no bound
+change) folded by the controller session under the delegated plan_wording class;
+awaiting advisor acceptance; not an acceptance record.
 
 Prepared under the owner's standing authorization of 2026-11-10,
 "AUTONOMOUS PROGRAMME DELIVERY".
@@ -459,8 +463,8 @@ Source:
 | D08 / implementation_interpretation | Conditional B3 branch | Original QUEUED-CAS instant plus stored-spec replay; B2-dependent durable proof; no hidden store/schema |
 | D09 / implementation_interpretation | Acceptance evidence | CLI matrices, actual overlap, pre-cleanup survivor observation and conformant VALIDATE exact-byte scans |
 | D10 / file_map_correction | Guards and ownership | Exact module import budgets, coordinated census mirrors, CLI persistence carve-out and preserved negative controls |
-| D11 / task_sequencing | Launcher timing | P1 follows concrete reviewed grammar and closes before T6 dispatch |
-| D11 / commit_grouping | Launcher commit | One operator-run reviewed launcher-and-pins change; human commit; hook re-pin before dependent dispatch |
+| D11a / task_sequencing | Launcher timing | P1 follows concrete reviewed grammar and closes before T6 dispatch |
+| D11b / commit_grouping | Launcher commit | One operator-run reviewed launcher-and-pins change; human commit; hook re-pin before dependent dispatch |
 | D12 / plan_wording | Status and documentation | Plan approval is plan-only; T8 reconciles truthful status with blocked cells visible |
 | D13 / state_reconciliation | Resumed delivery records | Match parent, manifest, subject bytes and accepted evidence; never infer acceptance/publication |
 | D14 / correction_ordering | Corrective dependencies | Reinspect integrated corrections; revise interfaces, counts, pins and gated dispatch subjects before use |
@@ -1119,7 +1123,7 @@ They do not create additional file bounds.
 | Application edges | T3 releases strategy/datasets only; retain concrete infrastructure denials |
 | Stage 9 importer sets | Add application.py and scheduler.py to permitted and actual sets in their introducing tasks |
 | Reach assertions | Application reaches artifacts/audit; scheduler reaches audit; application_ports reaches neither |
-| Persistence port imports | Two existing query modules may import application_ports alongside experiments.ports |
+| Persistence port imports | Two existing query modules add application_ports to their exact import sets (neither lists experiments.ports today); the family set and denial exception admit it alongside experiments.ports |
 | Persistence direction | T2 creates the exact CLI carve-out and planted experiments control; T5 extends named membership |
 | Frozen contracts | Stage 10 itself preserves schemas/hash profiles/actions/tables/migrations; D14 reinspects external corrections |
 
@@ -1159,7 +1163,8 @@ Mirror the existing whole-block, pair-by-pair discipline:
 - `datetime.datetime.utcnow` still fails in `cli/runtime.py`.
 - `datetime.date.today` still fails there.
 - `datetime.datetime.now` still fails in sibling `cli/main.py`.
-- The same read still fails in a planted `cli/probe.py`.
+- The same read still fails in a planted `cli/probe.py` (a synthetic label fed to
+  the extracted checker, never a file on disk).
 - Aliased spellings resolve to the same pass/fail decisions.
 - Import-time draws still fail the fresh-import probe.
 - No environment access follows from the clock exemption.
@@ -1223,7 +1228,7 @@ Reconcile all nine census owners:
 | SQLite migration cross-pins | `tests/unit/persistence/test_sqlite_migrations.py:1072` |
 | Supervisor preflight cross-pins | `tests/unit/process_supervision/test_supervisor_preflight.py:1246` |
 | Restart cross-pins | `tests/unit/process_supervision/test_restart_reconciliation.py:1760` |
-| Artifact-store cross-pins | `tests/unit/artifacts/test_artifact_store.py:2047` |
+| Artifact-store cross-pins | `tests/unit/artifacts/test_artifact_store.py:2030` |
 
 Advance quoted source-text mirrors together with the literals they inspect.
 Preserve negative historical pins.
@@ -1755,7 +1760,7 @@ installation contains `crypto_lab/schemas`.
 The observed packaging uses `dev-mode-dirs = ["src"]` and wheel force-inclusion
 from `schemas` to `crypto_lab/schemas`.
 
-Sources: `pyproject.toml:40`, `pyproject.toml:42`.
+Sources: `pyproject.toml:38-40` (wheel target), `pyproject.toml:42-44` (force-include).
 
 Wheel/sdist membership and byte checks remain the operator verifier's
 distribution responsibility. They do not choose the product startup root.
@@ -2101,7 +2106,10 @@ Preserve `types` confinement and every cwd/home/expanduser denial.
 ### 6.3 T2 ownership: startup, typed queries and phased artifact recovery
 
 T2 owns the proposed startup coordinator, its units, detached startup-query
-tests and the bounded extensions to existing database/reconciliation modules.
+tests, the reconciliation-source unit module
+(`tests/unit/persistence/test_sqlite_reconciliation_source.py`), the bounded
+extensions to existing database/reconciliation modules and its Stage 10 guard
+reconciliation (`tests/safety/test_stage10_boundaries.py`).
 
 Its produced interfaces are:
 
@@ -2124,9 +2132,11 @@ They add no source module and preserve the omitted-selector complete pass.
 Advance source/package mirrors to 138.
 Roots/pairs remain 33/19.
 
-Admit exactly `experiments.application_ports` alongside `experiments.ports`
-in the two extended persistence query modules' exact import sets,
-family set and denial exception.
+Add exactly `experiments.application_ports` to the two extended persistence
+query modules' exact import sets (`tests/safety/test_stage8_boundaries.py:223-231`
+and `:311-325` list no `experiments.ports` today); admit it alongside
+`experiments.ports` in `_PERSISTENCE_FAMILIES` (`:417`) and in the `:917-921`
+denial exception (`name != "experiments.ports"`).
 
 Preserve twelve SQLAlchemy and four Alembic importers.
 
@@ -2164,8 +2174,9 @@ guards in addition to its modified guards.
 
 ### 6.4 T3 ownership: explicit application inputs, compatibility and freeze
 
-T3 owns `experiments/application.py`, application units and the input-boundary
-unit module.
+T3 owns `experiments/application.py`, application units, the input-boundary
+unit module and its Stage 10 guard reconciliation
+(`tests/safety/test_stage10_boundaries.py`).
 
 The latter's subject is the reader-contract and typed-input refusal seam of
 `experiments/application.py`, exercised with in-memory doubles.
@@ -2186,6 +2197,10 @@ Roots/pairs remain 33/19.
 
 Release only strategy/datasets application edges.
 Keep concrete persistence, configuration, CLI and process-supervision denied.
+Because the Stage 5 release is package-wide for `experiments` (and `adapters`
+shares that scan while the architecture guard still denies them), the Stage 10
+guard pins `experiments/application.py` as the only module importing `strategy`
+or `datasets`.
 
 Re-point the existing planted architecture strategy control to
 `crypto_lab.process_supervision`.
@@ -2213,7 +2228,8 @@ T3's broader regression targets include unchanged Stage 6/7 guards.
 
 ### 6.5 T4 ownership: scheduler and concrete execution bridge
 
-T4 owns the scheduler, CLI execution bridge and their units.
+T4 owns the scheduler, CLI execution bridge, their units and its Stage 10 guard
+reconciliation (`tests/safety/test_stage10_boundaries.py`).
 
 Its produced interfaces include:
 
@@ -2252,7 +2268,8 @@ or a capacity counter.
 ### 6.6 T5 ownership: grammar, concrete composition and projections
 
 T5 owns the three proposed CLI composition/command/reporting modules,
-the existing main entry point and their command/composition/reporting units.
+the existing main entry point, their command/composition/reporting units and
+its Stage 10 guard reconciliation (`tests/safety/test_stage10_boundaries.py`).
 
 Its produced interfaces are:
 
@@ -2436,7 +2453,7 @@ T8 owns documentation-only reconciliation.
 | Migration census/mirrors; `tests/unit/persistence/test_sqlite_migrations.py:1039` | T1-T5 advance source/module/root literals and quoted preflight/reconciliation strings at :1059-1062 in lockstep |
 | Preflight census; `tests/unit/process_supervision/test_supervisor_preflight.py:1242` | T1-T5 advance source/module/root totals; preserve supervisor placement and existing exports |
 | Restart census; `tests/unit/process_supervision/test_restart_reconciliation.py:1754` | T1-T5 advance source/module totals; preserve reconciliation positional facts |
-| Store census; `tests/unit/artifacts/test_artifact_store.py:2047` | T1-T5 advance source/module/root totals; preserve deferred-name count, store slice and os confinement |
+| Store census; `tests/unit/artifacts/test_artifact_store.py:2030` | T1-T5 advance source/module/root totals; preserve deferred-name count, store slice and os confinement |
 | Stage 3 root equality; `tests/safety/test_stage3_boundaries.py:459` | T1 adds time/secrets/signal, 30 -> 33; T5 adds sys, 33 -> 34; update declaration and exact equality |
 | `types`; `tests/safety/test_stage3_boundaries.py:197`, `tests/safety/test_stage3_boundaries.py:566` | All tasks preserve exactly strategy/models.py's MappingProxyType import; no new types importer |
 | Forbidden path discovery; `tests/safety/test_stage3_boundaries.py:200` | Preserve cwd/home/expanduser denial in every new module |
@@ -2773,7 +2790,8 @@ and refusal paths.
 No skip, xfail, marker or ignored failure substitutes for absent prerequisites.
 
 After focused GREEN, run applicable guard/regression sets and the five
-worker-callable quality profiles, serially.
+worker-callable quality profiles (the six worker profiles minus pytest-focused),
+serially.
 Every accepted task still requires independent APPROVE and the operator's
 complete PASSED verifier on the same subject.
 
@@ -3234,10 +3252,17 @@ A dependent dispatch must reflect the integrated interfaces, guards and criteria
 Do not assume a future correction's signatures or published fields.
 
 Dispatch one worker per task.
-Its exact bounds are the paths in that task's **Files created.** and
-**Files modified.** paragraphs, and nowhere else.
+Its exact bounds are the paths in that task's two file-list paragraphs (the ones
+headed Files created and Files modified), and nowhere else.
 Repeated guard paths authorize only the introducing task's required reconciliation.
 Create no `__init__.py` in the proposed CLI unit or integration test locations.
+Planted controls such as `cli/probe.py` and `experiments/probe.py` are synthetic
+labels fed to the extracted checker (the Stage 5 :575 pattern), never files on
+disk; a real file would fail the Stage 3 source closure and every census.
+No new test or support module, including the Stage 10 guard's denylist prose and
+docstrings, may contain the text `os.system`: the Stage 6 guard
+(`tests/safety/test_stage6_boundaries.py:400-409`) pins the exact set of test
+files mentioning it and is in no Stage 10 task's bounds.
 Additional files require a recorded D10 correction before dispatch.
 
 No worker bound includes a policy-floor file.
@@ -3280,7 +3305,8 @@ Tagged successful facets cannot be counted as passing or closed.
 Structural unit doubles may prove orchestration without authorizing an unsupported
 production mutation or fabricating an `AuditAction`.
 
-The **Section 33 criteria closed** paragraphs reproduce section 7.4's exact inverse.
+The **Section 33 criteria contributed (7.4 inverse)** paragraphs reproduce section 7.4's exact inverse;
+a task's contribution never means that task independently closes the criterion.
 They identify scoped implementation, preservation and evidence contributions.
 They do not claim execution, whole-criterion closure or closure of blocked facets.
 
@@ -3435,7 +3461,7 @@ Reconcile these nine census owners in every introducing task T1-T5:
 | Migration cross-pins | `tests/unit/persistence/test_sqlite_migrations.py:1039` |
 | Preflight cross-pins | `tests/unit/process_supervision/test_supervisor_preflight.py:1242` |
 | Restart cross-pins | `tests/unit/process_supervision/test_restart_reconciliation.py:1754` |
-| Store cross-pins | `tests/unit/artifacts/test_artifact_store.py:2047` |
+| Store cross-pins | `tests/unit/artifacts/test_artifact_store.py:2030` |
 
 For T1:
 
@@ -3487,7 +3513,7 @@ scoped cancellation and inward ports.
 Actual cross-process owner-death proof remains assigned to T7.
 Attach complete operator verification for the reviewed subject.
 
-**Section 33 criteria closed.**
+**Section 33 criteria contributed (7.4 inverse).**
 33.1/1,3; 33.2/2,4-5,9; 33.4/6,12; 33.5/3,8; 33.6/1; 33.7/1-3.
 
 **Decision-register items applied.**
@@ -3642,8 +3668,10 @@ The twelve consistency fields are at
   Preserve every positional slice and historical subtraction.
 - In `tests/safety/test_stage8_boundaries.py:201`,
   `tests/safety/test_stage8_boundaries.py:417` and
-  `tests/safety/test_stage8_boundaries.py:904`, admit application_ports alongside
-  experiments.ports in the two extended query modules only.
+  `tests/safety/test_stage8_boundaries.py:904`: add application_ports to the two
+  extended query modules' exact import sets (:223-231, :311-325; neither lists
+  experiments.ports today) and admit it alongside experiments.ports in the family
+  set (:417) and the denial exception (:917-921) only.
   Permitted application port families 1 -> 2.
 - Separately reconcile the Stage 8 persistence-direction loop at
   `tests/safety/test_stage8_boundaries.py:940`.
@@ -3684,7 +3712,7 @@ Require no premature promotion/sweep, no reconstructed exit and no transaction
 spanning external work.
 Attach same-subject complete operator verification.
 
-**Section 33 criteria closed.**
+**Section 33 criteria contributed (7.4 inverse).**
 33.1/3-4,6; 33.2/1-2,6-7,9; 33.4/6-12; 33.5/1,3-6,8-10;
 33.6/1-9,11; 33.7/1-3.
 
@@ -3848,6 +3876,8 @@ and closed audit vocabulary are at
   Roots/pairs remain 33 -> 33 / 19 -> 19.
 - `tests/safety/test_stage5_boundaries.py:148`:
   out-of-scope entries 5 -> 3, releasing strategy/datasets only.
+- Stage 10 guard: pin `experiments/application.py` as the only `strategy`/`datasets`
+  importer, because the Stage 5 release is package-wide for `experiments`.
 - `tests/architecture/test_package_import_boundaries.py:117`:
   allowed application packages 6 -> 8, adding strategy/datasets only.
   Preserve persistence/configuration/CLI/process-supervision denial.
@@ -3892,7 +3922,7 @@ Gated evidence later includes original/replayed spec bytes, original queue fact
 and restart proof.
 Complete operator verification must match the reviewed dispatch subject.
 
-**Section 33 criteria closed.**
+**Section 33 criteria contributed (7.4 inverse).**
 33.1/3-6; 33.2/2-3,5-9; 33.3/1-2,4-6,8; 33.4/1-11;
 33.5/1-5; 33.6/1-5,7,11; 33.7/1-4.
 
@@ -4072,7 +4102,7 @@ branches, RESULT/EVIDENCE queries and invocation-scoped material release.
 Gated evidence later includes durable ordering/retry and atomic application audits.
 Attach same-subject complete operator verification.
 
-**Section 33 criteria closed.**
+**Section 33 criteria contributed (7.4 inverse).**
 33.1/3-6; 33.2/5; 33.3/4-6; 33.4/1-11; 33.5/1-5,7-9;
 33.6/2-8,10-11; 33.7/1,3.
 
@@ -4207,7 +4237,7 @@ It is a regression target, not a claimed new RED.
 The existing harmless parser assertion is at
 `tests/unit/test_cli.py:68`.
 Source/wheel schema placement differs at
-`pyproject.toml:40` and `pyproject.toml:42`.
+`pyproject.toml:38-40` (wheel target) and `pyproject.toml:42-44` (force-include).
 
 **Guard reconciliation.**
 
@@ -4256,12 +4286,12 @@ P1 separately supplies its patch, raw/normalized hashes, review, human commit
 and old-byte refusal/new-byte hook acceptance before T6.
 Attach same-subject complete operator verification.
 
-**Section 33 criteria closed.**
+**Section 33 criteria contributed (7.4 inverse).**
 33.1/1,3-6; 33.2/2-3,5-9; 33.3/1-2,4-8; 33.4/1-12;
 33.5/1-6,8,10; 33.6/1-8,10-11; 33.7/1-4.
 
 **Decision-register items applied.**
-D01-D11,D13,D14, using only section 1.3's registered classes.
+D01-D10,D11a,D11b,D13,D14, using only section 1.3's registered classes.
 
 T5's acceptance subject is exactly the untagged selectors plus the refusal paths.
 
@@ -4448,12 +4478,12 @@ every visited surface and all six workflow assertion facets.
 Retain B1 partial-evidence limits and B2/B3 blockers.
 Attach same-subject complete operator verification.
 
-**Section 33 criteria closed.**
+**Section 33 criteria contributed (7.4 inverse).**
 33.1/4-6; 33.2/2-9; 33.3/1-2,4-8; 33.4/1-11;
 33.5/1-5,7-10; 33.6/1-8,10-11; 33.7/1-3.
 
 **Decision-register items applied.**
-D01,D02,D05,D06,D08,D09,D10,D11,D13,D14.
+D01,D02,D05,D06,D08,D09,D10,D11a,D11b,D13,D14.
 
 T6's acceptance subject is exactly the untagged selectors plus the refusal paths.
 Tagged workflow/audit facets are authored at D14 reinspection.
@@ -4540,6 +4570,7 @@ Source:
     (B2-gated | B3-gated: authored at the D14 reinspection after integration; not part of this dispatch).
     Current supported scans still reject unreadable required surfaces and use
     T6's independent positive control.
+    T7 edits nothing in TOK; this selector is a regression target only.
 
 New module negatives use missing-module RED plus planted violating GREEN proof.
 Existing regression passes are not relabelled RED.
@@ -4611,7 +4642,7 @@ Gated evidence later includes durable retry and conformant token-bearing recover
 Do not claim historical cleanup/WAL susceptibility fixed by new tests alone.
 Attach same-subject complete operator verification.
 
-**Section 33 criteria closed.**
+**Section 33 criteria contributed (7.4 inverse).**
 33.1/4,6; 33.2/5,9; 33.4/2,4,6-12; 33.5/1,3-6,8-10;
 33.6/2-11; 33.7/1,3.
 
@@ -4812,7 +4843,7 @@ Require independent code/security/diff review and exact branch/merged-main
 verification/hygiene evidence.
 Section 9 governs publication and the owner-held milestone record.
 
-**Section 33 criteria closed.**
+**Section 33 criteria contributed (7.4 inverse).**
 33.1/1-6; 33.2/1-9; 33.3/1-8; 33.4/1-13;
 33.5/1-10; 33.6/1-11; 33.7/1-5.
 
@@ -4820,7 +4851,7 @@ T8 reconciles evidence for these cells.
 Documentation alone closes no runtime criterion.
 
 **Decision-register items applied.**
-D09,D10,D11,D12,D13,D14.
+D09,D10,D11a,D11b,D12,D13,D14.
 
 T8's acceptance subject is exactly the untagged selectors plus the refusal paths.
 Recording NOT CLOSED cells can satisfy bounded ledger delivery;
@@ -4836,7 +4867,8 @@ For each task:
 
 1. Establish the accepted parent, exact bounds and prerequisite state.
 2. Record focused RED -> minimum GREEN -> focused GREEN.
-3. Run broader targets and the five quality profiles serially.
+3. Run broader targets and the five quality profiles (the six worker profiles
+   minus pytest-focused) serially.
 4. Freeze the candidate and complete independent review without concurrent work.
 5. Run the complete product verifier alone through controller `SerialVerifier`,
    readiness checks, execution-identity checks and the shared host verifier lock.
@@ -5190,7 +5222,7 @@ Retain these dispositions exactly:
 | B2 | 33.6/11; required audit facets of 33.5/1, 33.2/8 and 33.6/7; audit facets of C01, C04 and C07 and every other row tagged B2 in T6's marker column | Owner-approved owning-stage audit/persistence correction, compatibility/migration proof and D14 reinspection |
 | Conditional B3 | Correlated creation replay in 33.1/6; complete queue/freeze replay in 33.2/8 and 33.5/2; ordered retry/requeue portions of 33.5/4 and 33.5/8 | Prove original durable QUEUED-CAS fact and stored-spec replay; otherwise owner-held schema/request/spec correction |
 
-For precision, section 7.4's G2-marked required facets remain NOT CLOSED in:
+For precision, section 7.4's G2- or B2-marked required facets remain NOT CLOSED in:
 
 ```text
 33.1/4-6
@@ -5278,111 +5310,113 @@ remain UNVERIFIED.
 Each entry identifies the binding review source and original finding location.
 Resolution locations refer to this assembled revision's sections and tasks.
 These are planning dispositions; execution remains UNVERIFIED.
+Identifiers R2- to R5- name the part-2 to part-5 review findings (R, not P, to keep
+them distinct from the prerequisites P0-P2); F- names the planning-brief fact review.
 
 ### Part 2 review
 
-- P2-I01, draft :280-283; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:12`: resolved in 1.4 P1, 6.7 and T5/T8 by exact path-token admission, explicit first-forwarding design change and documentation ownership.
-- P2-I02, draft :616/:689; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:14`: resolved in 3.1/3.5 and T5/T6 by safe-option regex, preserved harmless echo and distinct nonmatching controls.
-- P2-I03, draft :524; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:16`: resolved in 2.6, 6.2/6.11 and T1 by exact ambient constant/selector and all near misses.
-- P2-M01, draft :52-53; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:18`: resolved in Global Constraints, 7.8 and 9.2 with coverage sources :96/:105.
-- P2-M02, draft :369; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:19`: resolved in 2.2 and T5 with console source pyproject.toml:19.
-- P2-M03, draft :68; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:20`: resolved in Global Constraints and 9.1 with LAUNCHER_PROFILES source :42.
-- P2-M04, draft :392; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:21`: resolved in 2.2 with CORE_PROTOCOL_SUPPORT source :406.
-- P2-M05, draft :44; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:22`: resolved in Global Constraints/1.3 with nondelegable policy source :80.
-- P2-M06, draft :120-121; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:23`: resolved in Global Constraints by lowercase subjects and recorded corrective fix: allowance.
-- P2-M07, draft :613; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:24`: resolved in 3.3 with matching five-column header/delimiter.
-- P2-M08, draft :526-527; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:25`: resolved in 2.6, 6.4/6.5 and T3/T4 by both importer sets and exact reached sets.
-- P2-M09, draft :301-303; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:26`: resolved in P1/6.7 by additive targeted membership and unchanged Python-bearing/verifier pins.
-- P2-M10, draft :270-271; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:27`: resolved in P1, 5.1 and T6-T8 by operator/runbook consumers and hook re-pin before T6.
-- P2-M11, draft :201; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:28`: resolved in 1.2/D08 and T3 by capturing the original QUEUED-CAS instant atomically.
-- P2-M12, draft :409-419; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:29`: resolved in 2.3 and T3/T5 by reserved-key removal and CONFIG.CATALOG_ENTRY_INVALID.
-- P2-M13, draft :374-375; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:30`: resolved in 2.2 and T3 with static callable sources :279/:303.
+- R2-I01, draft :280-283; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:12`: resolved in 1.4 P1, 6.7 and T5/T8 by exact path-token admission, explicit first-forwarding design change and documentation ownership.
+- R2-I02, draft :616/:689; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:14`: resolved in 3.1/3.5 and T5/T6 by safe-option regex, preserved harmless echo and distinct nonmatching controls.
+- R2-I03, draft :524; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:16`: resolved in 2.6, 6.2/6.11 and T1 by exact ambient constant/selector and all near misses.
+- R2-M01, draft :52-53; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:18`: resolved in Global Constraints, 7.8 and 9.2 with coverage sources :96/:105.
+- R2-M02, draft :369; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:19`: resolved in 2.2 and T5 with console source pyproject.toml:19.
+- R2-M03, draft :68; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:20`: resolved in Global Constraints and 9.1 with LAUNCHER_PROFILES source :42.
+- R2-M04, draft :392; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:21`: resolved in 2.2 with CORE_PROTOCOL_SUPPORT source :406.
+- R2-M05, draft :44; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:22`: resolved in Global Constraints/1.3 with nondelegable policy source :80.
+- R2-M06, draft :120-121; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:23`: resolved in Global Constraints by lowercase subjects and recorded corrective fix: allowance.
+- R2-M07, draft :613; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:24`: resolved in 3.3 with matching five-column header/delimiter.
+- R2-M08, draft :526-527; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:25`: resolved in 2.6, 6.4/6.5 and T3/T4 by both importer sets and exact reached sets.
+- R2-M09, draft :301-303; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:26`: resolved in P1/6.7 by additive targeted membership and unchanged Python-bearing/verifier pins.
+- R2-M10, draft :270-271; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:27`: resolved in P1, 5.1 and T6-T8 by operator/runbook consumers and hook re-pin before T6.
+- R2-M11, draft :201; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:28`: resolved in 1.2/D08 and T3 by capturing the original QUEUED-CAS instant atomically.
+- R2-M12, draft :409-419; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:29`: resolved in 2.3 and T3/T5 by reserved-key removal and CONFIG.CATALOG_ENTRY_INVALID.
+- R2-M13, draft :374-375; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part2-draft1-review.md:30`: resolved in 2.2 and T3 with static callable sources :279/:303.
 
 ### Part 3 review
 
-- P3-B01, draft :490/:288-289/:308/:368; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:10`: resolved in 2.6, 6.3/6.6/6.11 and T2/T4/T5 by exact actual CLI persistence membership and planted experiments/probe.py.
-- P3-I01, draft :127/:412/:427-428/:564; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:12`: resolved in 5.1, 6.8/6.9, 7.1 and T6/T7 by in-process W/X/R, RC/RF children and launch-free support.
-- P3-I02, draft :736/:152-171/:26/:223; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:14`: resolved in 1.2, 4.4, 5.1/5.2 and T3-T7 by B2 refusal before mutation/launch and per-row markers including C01.
-- P3-I03, draft :473; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:16`: resolved in 2.6/6.11 and T1-T5 by advancing quoted census mirrors with inspected literals.
-- P3-I04, draft :528-530/:534; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:18`: resolved in 2.6/6.12 and T8 by coordinated Stage 8 :1138/:1139 and Stage 9 status pins.
-- P3-I05, draft :485-486/:332; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:20`: resolved in 2.6/6.4 and T3 by re-pointing architecture and both Stage 5 planted shapes to process_supervision.
-- P3-I06, draft :317; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:22`: resolved in 1.5/5.3/6.4/6.6 and T3/T5 by reader-contract ownership versus physical confinement ownership.
-- P3-I07, draft :39/:94-99; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:24`: resolved in 4.4 and T2/T5/T8 by invocation_base/schemas selection and separate distribution verification.
-- P3-I08, draft :505-511; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:26`: resolved in 2.6/6.11 and T1/T5 by types confinement and metadata/resources-only importlib use.
-- P3-I09, draft :659-724; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:28`: resolved in 7.3/7.4 and T8 by inlined E01-E32 exact selectors and per-cell evidence keys.
-- P3-M01, draft :235; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.3/T2 by explicit recovery ownership without a nonexistent END marker.
-- P3-M02, draft :798; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 7.8/9.2 with coverage sources :96/:105.
-- P3-M03, draft :90; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 4.3 with persistence/disk-failure source specification :2192.
-- P3-M04, draft :498; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.11/T5 by corrected released/deferred ownership sources.
-- P3-M05, draft :533; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.12/T8 with Stage 9 header source :746.
-- P3-M06, draft :473 definition; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.11/T1 with database census definition :1806.
-- P3-M07, draft :536; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.12/T8 by one shared _VERIFICATION_STAGE9_OBLIGATIONS constant.
-- P3-M08, draft :472; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.11/T1-T5 by appending outside every database/migration/preflight/restart/store slice.
-- P3-M09, C01 marker; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 5.2/T6 by explicit B2 marker and inherited setup gates.
+- R3-B01, draft :490/:288-289/:308/:368; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:10`: resolved in 2.6, 6.3/6.6/6.11 and T2/T4/T5 by exact actual CLI persistence membership and planted experiments/probe.py.
+- R3-I01, draft :127/:412/:427-428/:564; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:12`: resolved in 5.1, 6.8/6.9, 7.1 and T6/T7 by in-process W/X/R, RC/RF children and launch-free support.
+- R3-I02, draft :736/:152-171/:26/:223; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:14`: resolved in 1.2, 4.4, 5.1/5.2 and T3-T7 by B2 refusal before mutation/launch and per-row markers including C01.
+- R3-I03, draft :473; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:16`: resolved in 2.6/6.11 and T1-T5 by advancing quoted census mirrors with inspected literals.
+- R3-I04, draft :528-530/:534; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:18`: resolved in 2.6/6.12 and T8 by coordinated Stage 8 :1138/:1139 and Stage 9 status pins.
+- R3-I05, draft :485-486/:332; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:20`: resolved in 2.6/6.4 and T3 by re-pointing architecture and both Stage 5 planted shapes to process_supervision.
+- R3-I06, draft :317; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:22`: resolved in 1.5/5.3/6.4/6.6 and T3/T5 by reader-contract ownership versus physical confinement ownership.
+- R3-I07, draft :39/:94-99; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:24`: resolved in 4.4 and T2/T5/T8 by invocation_base/schemas selection and separate distribution verification.
+- R3-I08, draft :505-511; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:26`: resolved in 2.6/6.11 and T1/T5 by types confinement and metadata/resources-only importlib use.
+- R3-I09, draft :659-724; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:28`: resolved in 7.3/7.4 and T8 by inlined E01-E32 exact selectors and per-cell evidence keys.
+- R3-M01, draft :235; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.3/T2 by explicit recovery ownership without a nonexistent END marker.
+- R3-M02, draft :798; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 7.8/9.2 with coverage sources :96/:105.
+- R3-M03, draft :90; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 4.3 with persistence/disk-failure source specification :2192.
+- R3-M04, draft :498; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.11/T5 by corrected released/deferred ownership sources.
+- R3-M05, draft :533; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.12/T8 with Stage 9 header source :746.
+- R3-M06, draft :473 definition; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.11/T1 with database census definition :1806.
+- R3-M07, draft :536; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.12/T8 by one shared _VERIFICATION_STAGE9_OBLIGATIONS constant.
+- R3-M08, draft :472; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 6.11/T1-T5 by appending outside every database/migration/preflight/restart/store slice.
+- R3-M09, C01 marker; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part3-draft1-review.md:30`: resolved in 5.2/T6 by explicit B2 marker and inherited setup gates.
 
 ### Part 4 review
 
-- P4-I01, draft :86-112/:240-267/:394-424/:557-595; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:11`: resolved in 7.3 and T1-T4 by module-qualified RED selectors.
-- P4-I02, T1/T2/T4 produced interfaces; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:13`: resolved in 6.2/6.3/6.5 and T1/T2/T4 with Matrix B interface names verbatim.
-- P4-I03, draft criteria lists; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:15`: resolved in 7.4's reconciled map/inverse and T1-T4 exact criteria sets.
-- P4-I04, draft gated selectors; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:17`: resolved in 7.2 and T3/T4 by explicit tags and bounded untagged/refusal acceptance subjects.
-- P4-I05, draft :408-409/:433-435; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:19`: resolved in 2.3/T3/T5 by by-value catalog construction and exact EngineIdentity validation.
-- P4-I06, draft :277-279/:310-311; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:21`: resolved in 4.3/T2 by unchanged report/count semantics, bounded phase detail and default-shape pins.
-- P4-I07, draft :92-93; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:23`: resolved in 7.2/T1 RED 3 by missing-module RED and planted eager-initialization GREEN proof.
-- P4-I08, draft :367-369/:404-405/:419-420; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:25`: resolved in 1.5/6.4/T3 by naming IB's application reader-contract subject.
-- P4-M01, draft :58; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 1.3/T1 by referencing the assembled decision register.
-- P4-M02, draft :76-77; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in T1 with Clock/IdentitySource/CancellationToken sources :37/:53/:79.
-- P4-M03, draft :107-110; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 2.6/6.2/T1 with the exact ambient constant and pair-control selector.
-- P4-M04, draft :140-141; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 6.11/T1 by naming all nine census owners and coordinated text mirrors.
-- P4-M05, draft :150; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 6.2/T1 by runtime-owned call-time kernel32 binding, types confinement and path-discovery denial.
-- P4-M06, draft :458-479; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 6.4/T3 by naming/re-pointing both Stage 5 rows and architecture self-test.
-- P4-M07, draft :62-63/:211/:369/:531; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 6.1/8 preamble by explicit no-__init__.py instruction.
-- P4-M08, draft :325/:486; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in T2/T3 focused commands by unchanged Stage 5/6/7 regression targets.
-- P4-M09, draft :628; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in T4 with constructor/material-retention/registration sources distinguished.
-- P4-M10, draft :20 line length; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in section 8 by wrapped prose; exact executable commands remain intact.
+- R4-I01, draft :86-112/:240-267/:394-424/:557-595; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:11`: resolved in 7.3 and T1-T4 by module-qualified RED selectors.
+- R4-I02, T1/T2/T4 produced interfaces; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:13`: resolved in 6.2/6.3/6.5 and T1/T2/T4 with Matrix B interface names verbatim.
+- R4-I03, draft criteria lists; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:15`: resolved in 7.4's reconciled map/inverse and T1-T4 exact criteria sets.
+- R4-I04, draft gated selectors; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:17`: resolved in 7.2 and T3/T4 by explicit tags and bounded untagged/refusal acceptance subjects.
+- R4-I05, draft :408-409/:433-435; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:19`: resolved in 2.3/T3/T5 by by-value catalog construction and exact EngineIdentity validation.
+- R4-I06, draft :277-279/:310-311; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:21`: resolved in 4.3/T2 by unchanged report/count semantics, bounded phase detail and default-shape pins.
+- R4-I07, draft :92-93; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:23`: resolved in 7.2/T1 RED 3 by missing-module RED and planted eager-initialization GREEN proof.
+- R4-I08, draft :367-369/:404-405/:419-420; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:25`: resolved in 1.5/6.4/T3 by naming IB's application reader-contract subject.
+- R4-M01, draft :58; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 1.3/T1 by referencing the assembled decision register.
+- R4-M02, draft :76-77; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in T1 with Clock/IdentitySource/CancellationToken sources :37/:53/:79.
+- R4-M03, draft :107-110; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 2.6/6.2/T1 with the exact ambient constant and pair-control selector.
+- R4-M04, draft :140-141; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 6.11/T1 by naming all nine census owners and coordinated text mirrors.
+- R4-M05, draft :150; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 6.2/T1 by runtime-owned call-time kernel32 binding, types confinement and path-discovery denial.
+- R4-M06, draft :458-479; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 6.4/T3 by naming/re-pointing both Stage 5 rows and architecture self-test.
+- R4-M07, draft :62-63/:211/:369/:531; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in 6.1/8 preamble by explicit no-__init__.py instruction.
+- R4-M08, draft :325/:486; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in T2/T3 focused commands by unchanged Stage 5/6/7 regression targets.
+- R4-M09, draft :628; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in T4 with constructor/material-retention/registration sources distinguished.
+- R4-M10, draft :20 line length; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part4-draft1-review.md:27`: resolved in section 8 by wrapped prose; exact executable commands remain intact.
 
 ### Part 5 review
 
-- P5-I01, draft :80-96; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:14`: resolved in 6.6/6.11/T5 by extending T2's exact persistence set and preserving planted denial.
-- P5-I02, draft :181-182/:284-285/:254-263; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:16`: resolved in 5.1/6.8/6.9/7.3 and T6/T7 by exact RC/RF placement and launch-free support.
-- P5-I03, draft :114/:226/:329; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:18`: resolved in 7.4 and T5-T7 by criteria sets equal to the authoritative inverse.
-- P5-I04, draft :407-411; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:20`: resolved in 6.12/T8 by Stage 8 :1138/:1139 twins and retained Stage 9 not-started denials.
-- P5-I05, draft :145-176; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:22`: resolved in 7.2/T6 by marker column, tagged audit/workflow facets and exact bounded acceptance subject.
-- P5-I06, draft :32-51/:162-176; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:24`: resolved in 7.2/T5/T6 by module-qualified RED, missing-module negative RED and planted eager/wrong-outcome proof.
-- P5-I07, draft :63-65; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:26`: resolved in 2.3/T3/T5 by T3-owned validation/key consumption and T5-owned projection/agreement.
-- P5-I08, draft :617; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:28`: resolved in 7.5/10.3 by exact named B2 cells, complete marker set and enumerated G2 facets.
-- P5-I09, draft :15-29; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:30`: resolved in 6.6/T5 with produced parser/composition/command/reporting interfaces.
-- P5-M01, draft :95-96; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in T5 by correct released/hash/action/deferred pin attribution.
-- P5-M02, draft :409; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.12/T8 with _STAGE10_DEFERRED_ROW source :731.
-- P5-M03, draft :404; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.12/T8 with Stage 5 containment source :536.
-- P5-M04, draft :552; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 9.5 with total-turn ceiling source controller.policy.json:78.
-- P5-M05, draft :355-356; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in T8 by identifying PERMITTED_CHANGE_KINDS as a change-kind registry.
-- P5-M06, draft :395-396/:402/:413; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.12/T8 by preserved shared obligations, external closure block and added subtraction operand.
-- P5-M07, draft :433; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.10/6.12/T8 by explicit Planned -> Approved and GitNexus sentence ownership.
-- P5-M08, draft :414; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.12/T8 by distinguishing guide closed-35-file denial from README schema denial.
-- P5-M09, draft :183-184; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 7.1/T6 by identifying literal child environment as new reviewed behavior.
-- P5-M10, draft :170-171/:38-39; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.8/T5/T6 by distinct unit and integration unknown-argument selectors.
-- P5-M11, draft :369-370; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in T8/9.3 by exact module-qualified selector per cell.
-- P5-M12, long lines; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved by wrapped prose; indivisible registered commands and one-line finding records retain exact spelling.
+- R5-I01, draft :80-96; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:14`: resolved in 6.6/6.11/T5 by extending T2's exact persistence set and preserving planted denial.
+- R5-I02, draft :181-182/:284-285/:254-263; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:16`: resolved in 5.1/6.8/6.9/7.3 and T6/T7 by exact RC/RF placement and launch-free support.
+- R5-I03, draft :114/:226/:329; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:18`: resolved in 7.4 and T5-T7 by criteria sets equal to the authoritative inverse.
+- R5-I04, draft :407-411; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:20`: resolved in 6.12/T8 by Stage 8 :1138/:1139 twins and retained Stage 9 not-started denials.
+- R5-I05, draft :145-176; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:22`: resolved in 7.2/T6 by marker column, tagged audit/workflow facets and exact bounded acceptance subject.
+- R5-I06, draft :32-51/:162-176; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:24`: resolved in 7.2/T5/T6 by module-qualified RED, missing-module negative RED and planted eager/wrong-outcome proof.
+- R5-I07, draft :63-65; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:26`: resolved in 2.3/T3/T5 by T3-owned validation/key consumption and T5-owned projection/agreement.
+- R5-I08, draft :617; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:28`: resolved in 7.5/10.3 by exact named B2 cells, complete marker set and enumerated G2 facets.
+- R5-I09, draft :15-29; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:30`: resolved in 6.6/T5 with produced parser/composition/command/reporting interfaces.
+- R5-M01, draft :95-96; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in T5 by correct released/hash/action/deferred pin attribution.
+- R5-M02, draft :409; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.12/T8 with _STAGE10_DEFERRED_ROW source :731.
+- R5-M03, draft :404; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.12/T8 with Stage 5 containment source :536.
+- R5-M04, draft :552; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 9.5 with total-turn ceiling source controller.policy.json:78.
+- R5-M05, draft :355-356; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in T8 by identifying PERMITTED_CHANGE_KINDS as a change-kind registry.
+- R5-M06, draft :395-396/:402/:413; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.12/T8 by preserved shared obligations, external closure block and added subtraction operand.
+- R5-M07, draft :433; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.10/6.12/T8 by explicit Planned -> Approved and GitNexus sentence ownership.
+- R5-M08, draft :414; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.12/T8 by distinguishing guide closed-35-file denial from README schema denial.
+- R5-M09, draft :183-184; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 7.1/T6 by identifying literal child environment as new reviewed behavior.
+- R5-M10, draft :170-171/:38-39; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in 6.8/T5/T6 by distinct unit and integration unknown-argument selectors.
+- R5-M11, draft :369-370; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved in T8/9.3 by exact module-qualified selector per cell.
+- R5-M12, long lines; `../Crypto_Lab_Dev_Controller/config/records/stage10-plan-part5-draft1-review.md:32`: resolved by wrapped prose; indivisible registered commands and one-line finding records retain exact spelling.
 
 ### Planning-brief fact review
 
-- F-B01, brief :260/:191; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:12`: resolved in 1.4 P1, 6.7, T5/T6 and 9 by operator launcher/pins commit, hook re-pin and no floor worker bound.
+- F-B01, brief :260/:191; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:13`: resolved in 1.4 P1, 6.7, T5/T6 and 9 by operator launcher/pins commit, hook re-pin and no floor worker bound.
 - F-I01, brief :250; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:20`: resolved in D06, 2.5/6.5 and T1/T4 by structural scheduler port and CLI concrete bridge.
-- F-I02, brief :182/:221-222; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:23`: resolved in 2.6/6.11/T1 by clock scanner logic, exact exemption and pair arithmetic.
-- F-I03, brief :182/:222 roots; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:27`: resolved in 2.6/6.11/T1/T5 by per-module root budgets, sys timing and os/types confinement.
-- F-I04, brief :184; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:29`: resolved in 6.4/6.5/T3/T4 by exact permitted/actual importer additions and retained persistence denial.
-- F-I05, brief :304; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:31`: resolved in B3/D08, T3/T4/T7 and 10.3 by durable-fact proof and owner-held corrective branch.
-- F-I06, brief :302-305; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:36`: resolved in 1.3 by the seven controller classes and explicit owner-held exclusions.
-- F-I07, brief :296-329; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:39`: resolved in Global Constraints/P0/7.8/T8/9.2 by measured unchanged-base coverage.
-- F-I08, brief :195; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:41`: resolved in 2.6/6.12/T8 by exact per-file documentation assertions and plan-only approval boundary.
-- F-I09, brief :17/G12; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:48`: resolved in Global Constraints/T1-T8/9.1 by six worker profiles and separate operator set.
-- F-M01, launcher control line; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:50`: resolved in Global Constraints/P1 by distinguishing removal loop :653 from fixed control assignment :660.
-- F-M02, historical duration; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:50`: resolved in 7.8/9.2 by using fresh measured duration and no unsupported historical estimate.
-- F-M03, skip sites; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:51`: resolved in 7.7/9.2 with :811/:1312 and Pydantic must-not-skip rule.
-- F-M04, pending limits; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:52`: resolved in 7.6/T6-T8 by preserved historical passage and new closure evidence outside it.
-- F-M05, verifier step/whitespace lines; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:52`: resolved in 6.13/9.1 with :21/:71 and unchanged eleven-step order.
-- F-M06, uv base arguments; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:53`: resolved in P1 by correct launcher prefix source :178.
-- F-M07, commit casing; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:53`: resolved in Global Constraints/T1-T8 by lowercase conventional subjects under 78 characters.
-- F-M08, 201-turn snapshot; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:54`: resolved in 9.5 as historical snapshot with current balance UNVERIFIED and owner-held reservation.
-- F-M09, static methods; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:54`: resolved in 2.2/T3 by static StrategyLoader.load and CompatibilityResolver.resolve attribution.
+- F-I02, brief :182/:221-222; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:24`: resolved in 2.6/6.11/T1 by clock scanner logic, exact exemption and pair arithmetic.
+- F-I03, brief :182/:222 roots; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:28`: resolved in 2.6/6.11/T1/T5 by per-module root budgets, sys timing and os/types confinement.
+- F-I04, brief :184; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:31`: resolved in 6.4/6.5/T3/T4 by exact permitted/actual importer additions and retained persistence denial.
+- F-I05, brief :304; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:33`: resolved in B3/D08, T3/T4/T7 and 10.3 by durable-fact proof and owner-held corrective branch.
+- F-I06, brief :302-305; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:38`: resolved in 1.3 by the seven controller classes and explicit owner-held exclusions.
+- F-I07, brief :296-329; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:41`: resolved in Global Constraints/P0/7.8/T8/9.2 by measured unchanged-base coverage.
+- F-I08, brief :195; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:43`: resolved in 2.6/6.12/T8 by exact per-file documentation assertions and plan-only approval boundary.
+- F-I09, brief :17/G12; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:49`: resolved in Global Constraints/T1-T8/9.1 by six worker profiles and separate operator set.
+- F-M01, launcher control line; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:51-56`: resolved in Global Constraints/P1 by distinguishing removal loop :653 from fixed control assignment :660.
+- F-M02, historical duration; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:51-56`: resolved in 7.8/9.2 by using fresh measured duration and no unsupported historical estimate.
+- F-M03, skip sites; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:51-56`: resolved in 7.7/9.2 with :811/:1312 and Pydantic must-not-skip rule.
+- F-M04, pending limits; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:51-56`: resolved in 7.6/T6-T8 by preserved historical passage and new closure evidence outside it.
+- F-M05, verifier step/whitespace lines; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:51-56`: resolved in 6.13/9.1 with :21/:71 and unchanged eleven-step order.
+- F-M06, uv base arguments; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:51-56`: resolved in P1 by correct launcher prefix source :178.
+- F-M07, commit casing; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:51-56`: resolved in Global Constraints/T1-T8 by lowercase conventional subjects under 78 characters.
+- F-M08, 201-turn snapshot; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:51-56`: resolved in 9.5 as historical snapshot with current balance UNVERIFIED and owner-held reservation.
+- F-M09, static methods; `../Crypto_Lab_Dev_Controller/config/records/stage10-planning-brief-part1-fact-review.md:51-56`: resolved in 2.2/T3 by static StrategyLoader.load and CompatibilityResolver.resolve attribution.
