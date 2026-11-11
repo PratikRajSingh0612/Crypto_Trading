@@ -1,6 +1,6 @@
 # Project 2: installed-core identity consumer check
 
-**Status.** Proposed under STANDING OWNER AUTHORIZATION 2026-11-10, AUTONOMOUS PROGRAMME DELIVERY. NOT_READY for implementation until independent plan APPROVE, advisor DELEGATED_PLAN_ACCEPTED and dispatch prerequisites are recorded.
+**Status.** Revision 2 (the independent review of revision 1 returned APPROVE with eight MINOR findings; the controller session folded all eight under the delegated `plan_wording` class and changed nothing else). Proposed under STANDING OWNER AUTHORIZATION 2026-11-10, AUTONOMOUS PROGRAMME DELIVERY. NOT_READY for implementation until independent plan APPROVE, advisor DELEGATED_PLAN_ACCEPTED and dispatch prerequisites are recorded.
 
 **Plan location.** `docs/superpowers/plans/2026-11-11-project-2-installed-core-identity-plan.md`.
 
@@ -16,8 +16,8 @@ Unprefixed sources identify the product tree at `5de26812`; its core remains the
 - `offline_data/docs/2026-11-11-integration-readiness.md:376-453`: installation-identity risk and permitted consumer-test solution.
 - `offline_data/scripts/invoke-offline-uv.ps1:199-219`, `offline_data/scripts/invoke-offline-uv.ps1:261-331`: isolated interpreter and admitted focused-test arguments.
 - `offline_data/tests/conftest.py:67-70`: existing checkout-root fixture.
-- `offline_data/tests/safety/test_boundaries.py:303-310`, `offline_data/tests/safety/test_boundaries.py:874-888`: production-package census; adding this test requires no census exemption.
-- `src/crypto_lab/persistence/migration_runner.py:143-154`: installed `expected_head()` observation.
+- `offline_data/tests/safety/test_boundaries.py:303-309` (census helpers), `offline_data/tests/safety/test_boundaries.py:874-888`: production-package census; adding this test requires no census exemption.
+- `src/crypto_lab/persistence/migration_runner.py:91`, `src/crypto_lab/persistence/migration_runner.py:131-140`, `src/crypto_lab/persistence/migration_runner.py:152-154`: the packaged script location derived from the installed module, the programmatic `Config()` (no ini file, no environment) and the installed `expected_head()` observation.
 - `src/crypto_lab/persistence/migrations/versions/r0001_stage8_baseline.py:30-33`: baseline revision.
 - `src/crypto_lab/persistence/migrations/versions/r0002_stage9_artifacts.py:32-35` at `874fb51b`: Stage 9 revision and parent.
 - `offline_data/README.md:344-358`, `offline_data/README.md:376`: established residual-carriage-return behavior and incomplete refusal-table row.
@@ -40,9 +40,9 @@ Consumed versions remain: descriptor and partition schemas `1.0.0`; hash profile
 
 1. Perform filesystem observations inside tests or fixtures. Import the core through the existing non-editable dependency; do not load checkout source as a substitute for the installed package.
 
-2. Verify the running interpreter belongs to this checkout’s `offline_data/.venv`, and that the imported core package and migration runner originate in that environment’s installed package. Reject checkout-source imports, the root environment and another worktree’s installation. Derive paths from the test checkout; embed no host-specific paths.
+2. Verify the running interpreter belongs to this checkout’s `offline_data/.venv`, and that the imported core package and migration runner originate in that environment’s installed package. Reject checkout-source imports, the root environment and another worktree’s installation. Derive paths from the test checkout; embed no host-specific paths. The binding predicate has three parts, all by resolved location: `sys.executable` and `sys.prefix` resolve under the checkout’s `offline_data/.venv`; `crypto_lab.__file__` and `crypto_lab.persistence.migration_runner.__file__` resolve under that environment’s `site-packages`; and the `crypto_trading_lab` distribution’s `direct_url.json` (read through `importlib.metadata`, never emitted) records a `file:` URL that resolves to the checkout root with `editable` false. Only the third part distinguishes a same-content wheel built from another checkout and installed into this environment.
 
-3. Build sorted inventories of every `.py` file beneath the checkout’s `src/crypto_lab` and the installed `crypto_lab` package. Require nonempty, identical relative-path sets and exact byte equality, with SHA-256 identities available for review. Missing, extra or changed Python files fail. This covers the brief’s consumed modules and their Python import closure without importing every module.
+3. Build sorted inventories of every `.py` file beneath the checkout’s `src/crypto_lab` and the installed `crypto_lab` package. Require nonempty, identical relative-path sets and exact byte equality, with SHA-256 identities available for review. Missing, extra or changed Python files fail. This covers the brief’s consumed modules and their Python import closure without importing every module. The `.py`-only inventory deliberately excludes the three non-Python classes the wheel carries: `py.typed`, `persistence/migrations/script.py.mako`, and the JSON schemas force-included from the repository `schemas/` directory into `crypto_lab/schemas` (no source-tree counterpart; the core reads none of them at runtime). Name these three exclusions in the README limit statement and the test docstring.
 
 4. Determine the required migration head from the checkout’s exact known versions inventory:
 
@@ -53,7 +53,7 @@ Consumed versions remain: descriptor and partition schemas `1.0.0`; hash profile
 
 5. Call the installed migration runner’s default `expected_head()` and require the checkout-selected head. Do not pass the checkout as `script_location`, execute migration upgrades, or create a database in this new test.
 
-6. Emit a compact deterministic success record into retained pytest output using the existing capture fixture’s disabled context. Include repository-relative environment/package labels, module count, a documented deterministic inventory digest, migration filenames and observed head. Emit no absolute paths, environment values or file contents. The full verifier must retain this record.
+6. Emit a compact deterministic success record into retained pytest output using pytest’s built-in `capsys` fixture inside `with capsys.disabled():` (a plain `print` is swallowed on a passing test under `pytest-all`). Include repository-relative environment/package labels, module count, a documented deterministic inventory digest, migration filenames and observed head. Emit no absolute paths, environment values or file contents. The full verifier must retain this record.
 
 7. Include isolated synthetic controls under `tmp_path` proving rejection of changed bytes at the same nominal version, missing and extra files, empty inventories, a simulated Stage 9 checkout paired with a baseline installation, an incorrect observed head, and incorrect interpreter/package binding. Include a matching positive control. Never mutate the real checkout, installed package, interpreter or migration directory to obtain negative evidence.
 
@@ -63,7 +63,7 @@ Consumed versions remain: descriptor and partition schemas `1.0.0`; hash profile
 
 Add a short explanation of the identity check, its focused command, retained evidence, and the distinction between checkout identity and combined-tree acceptance. Preserve the current consumed-core pin and pending-finalization statements.
 
-Correct only the recorded `CSV_ROW_SHAPE` refusal-table omission: include wrong field count and residual carriage return in field 12 after fields 1–11 pass. State that `value_length` covers the complete logical row, including residual carriage returns and excluding the consumed LF/CRLF delimiter. Match the existing detailed prose without changing behavior.
+Correct only the recorded `CSV_ROW_SHAPE` refusal-table omission: include wrong field count and residual carriage return in field 12 after fields 1 to 11 pass. State that `value_length` covers the complete logical row, including residual carriage returns and excluding the consumed LF/CRLF delimiter. Match the existing detailed prose without changing behavior.
 
 **Exclusions.** No production-source, core-test, schema, migration, dependency, lock, launcher, verifier, conftest, committed-fixture or golden changes. No guard exemptions, threshold reductions, command profiles, environment repair/reinstallation, network, package acquisition, real data, engines, persistent registration or artifact finalization. No merge, rebase, cherry-pick, main publication or milestone recording belongs to this worker task.
 
@@ -80,7 +80,7 @@ C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionP
 
 Stop on any unavailable interpreter, package or offline-cache prerequisite; acquire nothing.
 
-Implement the test and its synthetic controls, then run:
+Create the test file first (the launcher resolves every focused target to an existing path), implement the test and its synthetic controls, then run:
 
 ```powershell
 C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./offline_data/scripts/invoke-offline-uv.ps1 pytest-focused -o addopts= tests/integration/test_installed_core_identity.py tests/integration/test_sqlite_dataset_registration.py tests/integration/test_core_contract_roundtrip.py tests/safety/test_boundaries.py -q
@@ -106,7 +106,7 @@ Retain every configured gate: offline lock/sync, formatting, lint, strict typing
 
 Bind verification to the accepted parent, exact two-path subject digest, launcher/verifier identities and both environments. Retain the new identity success record from the full offline run. Earlier slice, readiness and Stage 9 passes do not cover this task.
 
-At most two product implementation workers; one heavy verifier/process-test workload under `.crypto-lab-host/verifier.lock`. Keep `dispatch_wait_markers=[verify.ps1]` and give A’s authoritative verification priority. Under the current interim instruction, launch the relay only on a quiet host; any readiness or lock deferral ends the mission step. Preserve counters and limits.
+At most two product implementation workers; one heavy verifier/process-test workload under `.crypto-lab-host/verifier.lock`. Keep `dispatch_wait_markers=[verify.ps1]` and give A’s authoritative verification priority. Under the current interim instruction, launch the relay only on a quiet host; any readiness or lock deferral ends the mission step. Preserve counters and limits. A verifier failure is a failure; at most one rerun of the failing module alone is permitted, only for a documented host-load flake, with both outcomes recorded.
 
 After full PASSED verification, obtain independent implementation review APPROVE on the exact subject, with the worker idle and no concurrent tests/verifier. Review the origin binding, complete inventory comparison, checkout-dependent migration requirement, synthetic rejection controls, retained evidence, README changes and full diff. Any subject change requires renewed verification and review.
 
