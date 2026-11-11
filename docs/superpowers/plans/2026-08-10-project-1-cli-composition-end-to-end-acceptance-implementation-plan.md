@@ -1,10 +1,11 @@
 # Project 1 Stage 10 - CLI Composition and End-to-End Acceptance Implementation Plan
 
-**Status:** Revision 3: the five reviewed parts consolidated with every
+**Status:** Revision 4: the five reviewed parts consolidated with every
 independent-review finding folded, plus the final review's findings (closure and
-bounds mandates, 2026-11-11: ten MINOR and three IMPORTANT prose items, no bound
-change) folded by the controller session under the delegated plan_wording class;
-awaiting advisor acceptance; not an acceptance record.
+bounds mandates, 2026-11-11: fourteen MINOR and three IMPORTANT prose items, no
+bound change; both reviewers re-pinned revision 3 APPROVE) folded by the controller
+session under the delegated plan_wording class; awaiting advisor acceptance; not an
+acceptance record.
 
 Prepared under the owner's standing authorization of 2026-11-10,
 "AUTONOMOUS PROGRAMME DELIVERY".
@@ -1760,7 +1761,7 @@ installation contains `crypto_lab/schemas`.
 The observed packaging uses `dev-mode-dirs = ["src"]` and wheel force-inclusion
 from `schemas` to `crypto_lab/schemas`.
 
-Sources: `pyproject.toml:38-40` (wheel target), `pyproject.toml:42-44` (force-include).
+Sources: `pyproject.toml:38-40` (wheel target), `pyproject.toml:42-43` (force-include).
 
 Wheel/sdist membership and byte checks remain the operator verifier's
 distribution responsibility. They do not choose the product startup root.
@@ -4237,7 +4238,7 @@ It is a regression target, not a claimed new RED.
 The existing harmless parser assertion is at
 `tests/unit/test_cli.py:68`.
 Source/wheel schema placement differs at
-`pyproject.toml:38-40` (wheel target) and `pyproject.toml:42-44` (force-include).
+`pyproject.toml:38-40` (wheel target) and `pyproject.toml:42-43` (force-include).
 
 **Guard reconciliation.**
 
