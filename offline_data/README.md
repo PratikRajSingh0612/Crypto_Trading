@@ -4,7 +4,9 @@
 `docs/superpowers/plans/2026-11-09-project-2-offline-data-first-slice-implementation-plan.md`,
 revision 22); second slice, the `binance-spot-kline-csv/1` reader of
 `docs/superpowers/plans/2026-11-10-project-2-binance-kline-reader-plan.md` (revision 3),
-authored and awaiting the controller's verification, independent review and acceptance.
+published at `4d70f673`; the temporary SQLite dataset-registration contract test of
+`docs/superpowers/plans/2026-11-11-project-2-sqlite-dataset-registration-contract-plan.md`
+published at `970c1fb5`.
 
 | Task | Delivers | Status |
 |---|---|---|
@@ -12,17 +14,16 @@ authored and awaiting the controller's verification, independent review and acce
 | 1 | the `ohlcv-csv/1` reader (`candle_csv`), refusal diagnostics and the provider contract exception (`diagnostics`), injected identity and clock providers (`providers`), fixtures, boundary guards | committed |
 | 2 | section 4 validation with explicit missing and duplicate intervals (`validation`), the interim normalized container, its checksums and the raw input checksum (`normalize`), five fixtures, the writer's exclusive-create and partial-file-removal pins in the boundary guards | committed |
 | 3 | `DatasetDescriptor` and `DatasetPartition` emission with the core content hash (`metadata`), the `normalize` command and its module entry point (`cli`, `__main__`), six golden files, the consumer round trip, the one new refusal code `OFFLINE_DATA.METADATA_FIELD` with its closed-set pin, the command's directory-creation, JSON-write and reverse-order-removal pins in the boundary guards | committed |
-| second slice, Task 1 | the `binance-spot-kline-csv/1` reader with explicit timestamp units (`binance_kline_csv`), the `--input-format` and `--timestamp-unit` arguments, the `InputFormat` source-identity table and the P2-B3 limitation (`metadata`), the one new refusal code `OFFLINE_DATA.TIMESTAMP_UNIT`, twenty-one SYNTHETIC fixtures and nine goldens | authored; awaits the controller's verification, independent review and acceptance |
+| second slice, Task 1 | the `binance-spot-kline-csv/1` reader with explicit timestamp units (`binance_kline_csv`), the `--input-format` and `--timestamp-unit` arguments, the `InputFormat` source-identity table and the P2-B3 limitation (`metadata`), the one new refusal code `OFFLINE_DATA.TIMESTAMP_UNIT`, twenty-one SYNTHETIC fixtures and nine goldens | committed; published at `4d70f673` |
 
-Pending after the second slice and outside it: registration of the emitted metadata into a
-core dataset registry (a temporary-database contract test, placed at
-`offline_data/tests/integration/test_sqlite_dataset_registration.py` under the delegated
-decision in section 1 of
+The temporary-database registration contract test at
+`offline_data/tests/integration/test_sqlite_dataset_registration.py` (placed under the
+delegated decision in section 1 of
 `docs/superpowers/plans/2026-11-11-project-2-sqlite-dataset-registration-contract-plan.md`
-and fed by the committed goldens; its verification, review and acceptance are recorded in
-controller evidence), finalization through the artifact finalizer (after the Stage 9 merge),
-Parquet emission (the P2-B1 lift) and the real-source verification. No interim container
-enters a persistent registry, and no real Binance archive has been ingested.
+and fed by the committed goldens) is published at `970c1fb5`. Pending after it and outside
+this sub-project's slices: finalization through the artifact finalizer (after the Stage 9
+merge), Parquet emission (the P2-B1 lift) and the real-source verification. No interim
+container enters a persistent registry, and no real Binance archive has been ingested.
 
 ## Scope
 
@@ -340,7 +341,7 @@ field order, so a row that breaks two rules is refused by the first:
 | 9 | Number of trades | unsigned decimal integer `[0-9]+` within the canonical bound | `CSV_NUMBER` | checked, not retained |
 | 10 | Taker buy base asset volume | the number grammar | `CSV_NUMBER` | checked, not retained |
 | 11 | Taker buy quote asset volume | the number grammar | `CSV_NUMBER` | checked, not retained |
-| 12 | Ignore | any text without a comma; not interpreted (its value is UNVERIFIED) | none | dropped |
+| 12 | Ignore | any text without a comma or a carriage return; otherwise not interpreted (its value is UNVERIFIED) | `CSV_ROW_SHAPE` with the complete logical row's length for a residual carriage return, checked after fields 1 to 11 | dropped |
 
 Fields 2 to 6, 8, 10 and 11 use the slice-1 `_parse_number` rule (exact `Decimal`, the
 core's 256-character canonical bound, no sign, no exponent, no whitespace; trailing zeros
@@ -348,9 +349,14 @@ such as `4.15070000` are kept and canonicalized only in the normalized container
 field that is not `[0-9]{1,20}` is `CSV_TIMESTAMP` with the field's length, a longer digit
 run included: no `int()` is ever applied to an unbounded token and the interpreter's
 integer-string digit limit is never reached (the tests prove the 20-digit bound, a 21-digit
-token and a 4400-digit token). Because field 12 is not interpreted, a lone trailing carriage
-return on the final line lands in it and the row is accepted; a file of CR-only line
-endings is one line of too many fields, the `CSV_ROW_SHAPE` refusal. The relation shown by
+token and a 4400-digit token). A carriage return is a line ending only when a line feed
+follows it, so an unpaired carriage return stays in its logical row (the shared rule above):
+in fields 1 to 11 it breaks the field's own grammar, and once those fields pass, a residual
+carriage return in field 12 (a lone trailing `\r` on the final line, the first `\r` of a
+`\r\r\n` ending, or a `\r` embedded in the field) is `OFFLINE_DATA.CSV_ROW_SHAPE` at that
+line with the complete logical row's length, every carriage return counted and the consumed
+LF or CRLF excluded; nothing is stripped or repaired. A file of CR-only line endings is one
+line of too many fields, the same `CSV_ROW_SHAPE` refusal. The relation shown by
 the documentation's example row (close time = open time + interval - 1 unit) is not
 enforced because the reader checks no timeframe: grid, spacing, ordering, gaps and
 duplicates stay the `validate_series` rules on `open_time_utc`, so a file of a coarser
@@ -663,13 +669,15 @@ instant.
 
 | Exit | Meaning |
 |---|---|
-| `0` | success; nothing is printed (also argparse's own exit for `--help`, which prints the usage text) |
+| `0` | success; nothing is printed (also argparse's own exit for `--help`, which prints the help text to standard output) |
 | `1` | refusal: the `Failure` of any step, `OFFLINE_DATA.INPUT_PATH`, `OFFLINE_DATA.METADATA_FIELD` (mapped like any refusal, though unreachable through the command, see "Dataset metadata") and `OFFLINE_DATA.OUTPUT_DIRECTORY` included; the `Failure` is printed as one canonical JSON line |
-| `2` | argument parsing only (argparse's own exit): a missing or unknown argument, an `--instrument` the core helper cannot parse, a `--source` outside 1 to 1024 characters, an `--input-format` or `--timestamp-unit` outside its closed choices, a `--timestamp-unit` given with `ohlcv-csv/1` or missing with `binance-spot-kline-csv/1`, or a `--timeframe` other than `1m` with `binance-spot-kline-csv/1`, each with a message that never echoes the value. For `ohlcv-csv/1` an unsupported `--timeframe` is not an argument error: it is `validate_series`'s `TIMEFRAME_GRID` refusal, exit `1` |
+| `2` | argument parsing only (argparse's own exit, its usage and error text on standard error): a missing or unknown argument, an `--instrument` the core helper cannot parse, a `--source` outside 1 to 1024 characters, an `--input-format` or `--timestamp-unit` outside its closed choices, a `--timestamp-unit` given with `ohlcv-csv/1` or missing with `binance-spot-kline-csv/1`, or a `--timeframe` other than `1m` with `binance-spot-kline-csv/1`. The custom converters (`--instrument`, `--source`, `--input-format`, `--timestamp-unit`) and the couplings name the options and the admitted literals only, never the given value; argparse's own messages may echo caller tokens, for example `unrecognized arguments: <token>` for an unknown argument. For `ohlcv-csv/1` an unsupported `--timeframe` is not an argument error: it is `validate_series`'s `TIMEFRAME_GRID` refusal, exit `1` |
 | `3` | provider fault: `ProviderContractError` from any step; its message, naming the provider method only, is printed |
 
-The printed lines name no value and no path. They go to standard output because the
-sub-project's boundary guards admit no `sys` import and therefore no standard-error handle.
+The command's own printed lines, the exit `1` `Failure` and the exit `3` provider message,
+name no value and no path. They go to standard output because the sub-project's boundary
+guards admit no `sys` import and therefore no standard-error handle; argparse's exit `2`
+usage errors use argparse's own standard-error handle, and `--help` its standard output.
 
 **`--output`.** The path is taken as given (a relative path is relative to the working
 directory) and inspected on its own entry without following it: an absent path is created
@@ -742,10 +750,13 @@ across two fresh directories by the integration module. Golden hashes:
 - Two input formats, one instrument, one partition per dataset; `binance-spot-kline-csv/1`
   supports `1m` only; the real-source adapter and any claim of real-source execution wait
   for the authorized source verification.
-- The command prints to standard output only, creates no parent directory for `--output`
-  and does not remove a directory it created; `--instrument`, `--source`, `--input-format`,
-  `--timestamp-unit` and their couplings are argument refusals (exit `2`), the one argument
-  refusal with a diagnostic is `--timeframe` for `ohlcv-csv/1`.
+- The command's own output (the exit `1` `Failure` line, the exit `3` provider message)
+  goes to standard output and names no value and no path; argparse's exit `2` usage errors
+  go to standard error and may echo unrecognized caller arguments, while the
+  `--instrument`, `--source`, `--input-format` and `--timestamp-unit` converters and their
+  couplings never echo the given value. The command creates no parent directory for
+  `--output` and does not remove a directory it created; the one argument refusal with a
+  diagnostic is `--timeframe` for `ohlcv-csv/1`.
 
 ## Source terms
 

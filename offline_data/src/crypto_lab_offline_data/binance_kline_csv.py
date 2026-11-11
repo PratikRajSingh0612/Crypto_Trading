@@ -38,8 +38,14 @@ so a row that breaks two rules is refused by the first:
 - Fields 2 to 5 are positive numbers and fields 6, 8, 10 and 11 numbers under
   the slice-1 grammar (exact ``Decimal``, no sign, no exponent, within the
   core's canonical bound), else ``CSV_NUMBER`` with the field's length; field
-  9 is an unsigned integer within the same bound, else ``CSV_NUMBER``; field
-  12 is any comma-free text and is not interpreted.
+  9 is an unsigned integer within the same bound, else ``CSV_NUMBER``.
+- Field 12, checked last, may hold no carriage return, else ``CSV_ROW_SHAPE``
+  with the line's length: the splitter consumes only LF and CRLF, so a lone
+  terminal carriage return, the first carriage return of a CR CR LF ending and
+  a carriage return embedded in the field all stay in the logical row, whose
+  recorded length counts them and excludes the consumed delimiter; nothing is
+  stripped or repaired. Otherwise field 12 is any comma-free text and is not
+  interpreted.
 
 Only fields 1 to 6 are retained, as the unchanged ``CandleRow``: fields 7 to 12
 are checked for shape and dropped. The open time is converted by integer
@@ -247,6 +253,14 @@ def _parse_row(
             return _field_refusal(
                 RefusalCode.CSV_NUMBER, fields[position], line, ids, clock
             )
+    if "\r" in fields[_IGNORE]:
+        return refusal(
+            RefusalCode.CSV_ROW_SHAPE,
+            line=line,
+            value_length=len(record),
+            ids=ids,
+            clock=clock,
+        )
     open_price, high, low, close, volume = values
     return CandleRow(
         open_time_utc=_instant(open_value, divisor),

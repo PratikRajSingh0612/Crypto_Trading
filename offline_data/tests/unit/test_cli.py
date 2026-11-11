@@ -102,9 +102,32 @@ COMPLETE_ARGV = [
     "--timeframe",
     "1m",
 ]
+#: A harmless token that is no option and no prefix of one, so argparse reports
+#: it as ``unrecognized arguments:`` rather than as an abbreviation.
+UNRECOGNIZED_SENTINEL = "--zz-unrecognized-sentinel"
 OHLCV_FORMAT = "ohlcv-csv/1"
 BINANCE_FORMAT = "binance-spot-kline-csv/1"
 BINANCE_SOURCE = "synthetic-binance-fixture"
+#: One synthetic twelve-field microsecond row (2025-01-01T00:00:00Z), used only
+#: to build malformed carriage-return inputs under ``tmp_path``.
+SYNTHETIC_US_ROW = (
+    "1735689600000000,93500.00000000,93501.00000000,93499.00000000,"
+    "93500.50000000,10.00000000,1735689659999999,935000.50000000,100,"
+    "5.00000000,467500.25000000,0"
+)
+EMBEDDED_CR_IGNORE = "opaque\rtext"
+#: Inputs whose only defect is a residual carriage return in field 12, with the
+#: complete logical-row length the refusal must record (the consumed LF or CRLF
+#: excluded, every carriage return included).
+MALFORMED_CR_INPUTS = [
+    ("lone-terminal-cr", SYNTHETIC_US_ROW + "\r", len(SYNTHETIC_US_ROW) + 1),
+    ("cr-cr-lf", SYNTHETIC_US_ROW + "\r\r\n", len(SYNTHETIC_US_ROW) + 1),
+    (
+        "embedded-cr",
+        SYNTHETIC_US_ROW[:-1] + EMBEDDED_CR_IGNORE + "\n",
+        len(SYNTHETIC_US_ROW) - 1 + len(EMBEDDED_CR_IGNORE),
+    ),
+]
 BINANCE_UNITS = {
     "SYNTHETIC-BTCUSDT-1m-2024-12-31-ms": "milliseconds",
     "SYNTHETIC-BTCUSDT-1m-2025-01-01-us": "microseconds",
@@ -472,6 +495,36 @@ def test_missing_or_unknown_arguments_exit_two_and_draw_nothing(
     assert code == EXIT_ARGUMENTS == 2
     assert captured.out == ""
     assert captured.err.startswith("usage: crypto-lab-offline-data")
+    assert ids.calls == NO_DRAWS
+    assert clock.calls == 0
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_an_unrecognized_argument_is_argparse_s_own_exit_two_naming_the_token(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Argparse's ``unrecognized arguments:`` message echoes the caller's token.
+
+    The command's own refusals name no value; argparse's exit-2 usage errors go
+    to standard error, may echo caller argv, and precede every provider draw
+    and every write. The custom converters and couplings keep their narrower
+    no-echo guarantee, pinned by the tests around this one.
+    """
+    ids = _CountingIds()
+    clock = _CountingClock()
+    argv = [*COMPLETE_ARGV, UNRECOGNIZED_SENTINEL]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.chdir(tmp_path)
+        code = normalize_command(argv, ids=ids, clock=clock)
+
+    captured = capsys.readouterr()
+    assert code == EXIT_ARGUMENTS
+    assert captured.out == ""
+    assert captured.err.startswith("usage: crypto-lab-offline-data")
+    assert "unrecognized arguments:" in captured.err
+    assert UNRECOGNIZED_SENTINEL in captured.err
     assert ids.calls == NO_DRAWS
     assert clock.calls == 0
     assert list(tmp_path.iterdir()) == []
@@ -1853,6 +1906,56 @@ def test_a_refused_binance_input_exits_one_and_creates_nothing(
     assert clock.calls == 1
     assert created == []
     assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    ("text", "value_length"),
+    [case[1:] for case in MALFORMED_CR_INPUTS],
+    ids=[case[0] for case in MALFORMED_CR_INPUTS],
+)
+def test_a_residual_carriage_return_binance_input_exits_one_and_creates_nothing(
+    text: str,
+    value_length: int,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The reader's field-12 refusal is the command's exit 1, nothing written.
+
+    The canonical ``CSV_ROW_SHAPE`` line names the logical line and the complete
+    logical-row length only; no directory is created, no file is written, the
+    input is untouched and the one diagnostic draw is the only draw.
+    """
+    ids = _CountingIds()
+    clock = _CountingClock()
+    output = tmp_path / "output"
+    input_path = tmp_path / "SYNTHETIC-residual-cr.csv"
+    input_path.write_bytes(text.encode("ascii"))
+    argv = _binance_argv(input_path, output, unit="microseconds")
+
+    with pytest.MonkeyPatch.context() as patch:
+        created = _record_mkdirs(patch)
+        exit_code = normalize_command(argv, ids=ids, clock=clock)
+
+    captured = capsys.readouterr()
+    assert exit_code == EXIT_REFUSAL
+    _printed_refusal(
+        captured,
+        RefusalCode.CSV_ROW_SHAPE,
+        line=1,
+        value_length=value_length,
+        diagnostic_id=OTHER_DIAGNOSTIC_ID,
+        instant_text=OTHER_INSTANT_TEXT,
+    )
+    assert "\\r" not in captured.out
+    assert "opaque" not in captured.out
+    _assert_path_absent(captured.out, input_path)
+    _assert_path_absent(captured.out, output)
+    assert ids.calls == REFUSAL_DRAWS
+    assert clock.calls == 1
+    assert created == []
+    assert not output.exists()
+    assert input_path.read_bytes() == text.encode("ascii")
+    assert _names(tmp_path) == [input_path.name]
 
 
 def test_a_failed_partitions_write_on_a_binance_run_removes_every_created_file(

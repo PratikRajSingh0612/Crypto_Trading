@@ -1391,32 +1391,248 @@ def test_the_ignore_field_is_any_comma_free_text_and_is_dropped(
     assert rows == _rows(_read(reference, US, fixed_ids, fixed_clock))
 
 
-def test_a_lone_trailing_carriage_return_lands_in_the_ignore_field(
+def _unit_fields(unit: TimestampUnit, minute: int) -> list[str]:
+    return _ms_fields(minute) if unit is MS else _us_fields(minute)
+
+
+def _consumed_delimiter(ending: str) -> str:
+    """The part of ``ending`` the reader's splitter consumes: LF or CRLF only."""
+    if ending.endswith("\r\n"):
+        return "\r\n"
+    return "\n" if ending.endswith("\n") else ""
+
+
+#: The residual carriage returns field 12 may hold once the splitter has
+#: consumed the LF or CRLF delimiter: a lone terminal ``\r`` on the final line
+#: (which no later line may follow), after opaque text or as the whole field;
+#: the first ``\r`` of a ``\r\r\n`` ending; and a ``\r`` embedded in the opaque
+#: text under either delimiter. Each shape is placed at line 1 and at a later
+#: body line and, where a later line can follow, both as the final line and
+#: before one. (A field that is ``\r`` followed by LF is a CRLF ending with an
+#: empty field 12, accepted, not a residual carriage return.)
+RESIDUAL_CR_SHAPES = [
+    ("lone-terminal-cr", "0", "\r", False),
+    ("cr-only-field", "", "\r", False),
+    ("cr-cr-lf", "0", "\r\r\n", True),
+    ("embedded-cr-lf", "opaque\rtext", "\n", True),
+    ("embedded-cr-crlf", "opaque\rtext", "\r\n", True),
+]
+RESIDUAL_CR_CASES = [
+    (
+        f"{shape}-line-{line}-{'before-final' if followed else 'final'}",
+        ignore,
+        ending,
+        line,
+        followed,
+    )
+    for shape, ignore, ending, may_follow in RESIDUAL_CR_SHAPES
+    for line in (1, 2)
+    for followed in ((False, True) if may_follow else (False,))
+]
+
+
+@pytest.mark.parametrize("unit", [MS, US])
+@pytest.mark.parametrize(
+    ("ignore", "ending", "line", "followed"),
+    [case[1:] for case in RESIDUAL_CR_CASES],
+    ids=[case[0] for case in RESIDUAL_CR_CASES],
+)
+def test_a_residual_carriage_return_in_field_twelve_is_the_row_shape_refusal(
+    ignore: str,
+    ending: str,
+    line: int,
+    followed: bool,
+    unit: TimestampUnit,
     tmp_path: Path,
     fixed_ids: IdProvider,
     fixed_clock: Clock,
 ) -> None:
     """A carriage return is a line ending only when a line feed follows it.
 
-    Unpaired on the final line it stays in field 12, which is not interpreted,
-    so the row is accepted (the ``ohlcv-csv/1`` reader refuses the same bytes
-    because its last field is a number). A file of CR-only line endings is one
-    line of twenty-four fields: the row-shape refusal, nothing repaired.
+    An unpaired carriage return stays in its logical row; once fields 1 to 11
+    pass, a residual one in field 12 is ``CSV_ROW_SHAPE`` at that line with the
+    complete logical row's length (the carriage returns included, the consumed
+    LF or CRLF excluded). Nothing is stripped or repaired, and the twelve-field
+    row proves the width rule is not what refused it.
     """
-    trailing = _write(tmp_path / "trailing-cr.csv", ",".join(_us_fields(0)) + "\r")
+    malformed = ",".join(_with(_unit_fields(unit, line - 1), 11, ignore)) + ending
+    record = malformed[: len(malformed) - len(_consumed_delimiter(ending))]
+    before = "".join(_line(_unit_fields(unit, minute)) for minute in range(line - 1))
+    after = _line(_unit_fields(unit, line)) if followed else ""
+    path = _write(tmp_path / "residual-cr.csv", before + malformed + after)
+
+    result = _read(path, unit, fixed_ids, fixed_clock)
+
+    assert "\r" in record
+    assert record.count(",") == FIELD_COUNT - 1
+    diagnostic = _single_refusal(
+        result,
+        RefusalCode.CSV_ROW_SHAPE,
+        line=line,
+        value_length=len(record),
+        ids=fixed_ids,
+        clock=fixed_clock,
+    )
+    _assert_value_absent(diagnostic, "opaque")
+    _assert_value_absent(diagnostic, "\\r")
+
+
+def test_a_file_of_cr_only_line_endings_is_one_row_of_too_many_fields(
+    tmp_path: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+) -> None:
+    """With CR-only endings the file is one logical line of twenty-three fields.
+
+    Field 12 of the first row and field 1 of the second merge around the
+    carriage return, so the width rule refuses line 1 with the whole text's
+    length; nothing is repaired.
+    """
     cr_only_text = ",".join(_us_fields(0)) + "\r" + ",".join(_us_fields(1)) + "\r"
     cr_only = _write(tmp_path / "cr-only.csv", cr_only_text)
-    reference = _write(tmp_path / "reference.csv", _line(_us_fields(0)))
 
-    accepted = _rows(_read(trailing, US, fixed_ids, fixed_clock))
     refused = _read(cr_only, US, fixed_ids, fixed_clock)
 
-    assert accepted == _rows(_read(reference, US, fixed_ids, fixed_clock))
+    assert cr_only_text.count(",") == 2 * FIELD_COUNT - 2
     _single_refusal(
         refused,
         RefusalCode.CSV_ROW_SHAPE,
         line=1,
         value_length=len(cr_only_text),
+        ids=fixed_ids,
+        clock=fixed_clock,
+    )
+
+
+def test_the_residual_cr_diagnostic_names_line_rule_and_length_only(
+    tmp_path: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+) -> None:
+    """One structured diagnostic, pinned on every edge.
+
+    The existing code, the logical line, the complete logical-row length (the
+    one-character field 12 of the reference row replaced by ``ignore``, plus the
+    terminal carriage return), the standard message, and no value or path.
+    """
+    ignore = "opaque\rtext"
+    record = ",".join(_with(_us_fields(1), IGNORE_POSITION, ignore)) + "\r"
+    path = _write(tmp_path / "cr-diagnostic.csv", _line(_us_fields(0)) + record)
+
+    result = _read(path, US, fixed_ids, fixed_clock)
+
+    assert len(record) == US_ROW_LENGTH - len("0") + len(ignore) + len("\r")
+    diagnostic = _single_refusal(
+        result,
+        RefusalCode.CSV_ROW_SHAPE,
+        line=2,
+        value_length=len(record),
+        ids=fixed_ids,
+        clock=fixed_clock,
+    )
+    assert diagnostic.error_code == "OFFLINE_DATA.CSV_ROW_SHAPE"
+    assert diagnostic.details == {
+        "line": 2,
+        "rule": "OFFLINE_DATA.CSV_ROW_SHAPE",
+        "value_length": len(record),
+    }
+    assert diagnostic.message == "line 2 refused by rule OFFLINE_DATA.CSV_ROW_SHAPE"
+    _assert_value_absent(diagnostic, "opaque")
+    _assert_value_absent(diagnostic, "\\r")
+    _assert_value_absent(diagnostic, record)
+    _assert_value_absent(diagnostic, str(path))
+    _assert_value_absent(diagnostic, path.as_posix())
+    _assert_value_absent(diagnostic, path.name)
+
+
+@pytest.mark.parametrize("unit", [MS, US])
+def test_the_residual_cr_refusal_draws_the_diagnostic_id_and_the_instant_once(
+    unit: TimestampUnit,
+    tmp_path: Path,
+) -> None:
+    ids = _CountingIds()
+    clock = _CountingClock()
+    record = ",".join(_unit_fields(unit, 0)) + "\r"
+    path = _write(tmp_path / "cr-draws.csv", record)
+
+    result = _read(path, unit, ids, clock)
+
+    assert isinstance(result, Failure)
+    assert result.diagnostics[0].error_code == RefusalCode.CSV_ROW_SHAPE.value
+    assert ids.calls == {"dataset_id": 0, "partition_id": 0, "diagnostic_id": 1}
+    assert clock.calls == 1
+
+
+def test_a_refused_provider_value_on_the_residual_cr_refusal_raises(
+    tmp_path: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+) -> None:
+    """The new refusal propagates a provider fault like every other (reading R7)."""
+    path = _write(tmp_path / "cr-fault.csv", ",".join(_us_fields(0)) + "\r")
+
+    with pytest.raises(ProviderContractError) as ids_info:
+        _read(path, US, _MalformedIds(), fixed_clock)
+    with pytest.raises(ProviderContractError) as clock_info:
+        _read(path, US, fixed_ids, _NaiveClock())
+
+    assert ids_info.value.method == "diagnostic_id"
+    assert "not-a-diagnostic-id" not in str(ids_info.value)
+    assert ids_info.value.__cause__ is None
+    assert clock_info.value.method == "now_utc"
+    assert "2026" not in str(clock_info.value)
+
+
+EARLIER_RULE_CASES = [
+    ("header-before-cr", 1, {0: "abc"}, RefusalCode.CSV_HEADER),
+    ("width-before-cr", 2, {11: None}, RefusalCode.CSV_ROW_SHAPE),
+    ("open-time-before-cr", 2, {0: "abc"}, RefusalCode.CSV_TIMESTAMP),
+    ("open-unit-before-cr", 2, {0: "1735686060000"}, RefusalCode.TIMESTAMP_UNIT),
+    ("open-price-before-cr", 2, {1: "0.00000000"}, RefusalCode.CSV_NUMBER),
+    ("volume-before-cr", 2, {5: "-1"}, RefusalCode.CSV_NUMBER),
+    ("close-time-before-cr", 2, {6: "abc"}, RefusalCode.CSV_TIMESTAMP),
+    ("close-order-before-cr", 2, {6: MINUTE_ONE_CLOSE}, RefusalCode.CSV_TIMESTAMP),
+    ("close-unit-before-cr", 2, {6: "1735686119999"}, RefusalCode.TIMESTAMP_UNIT),
+    ("trades-before-cr", 2, {8: "1.5"}, RefusalCode.CSV_NUMBER),
+    ("taker-quote-before-cr", 2, {10: ""}, RefusalCode.CSV_NUMBER),
+]
+
+
+@pytest.mark.parametrize(
+    ("line", "changes", "code"),
+    [case[1:] for case in EARLIER_RULE_CASES],
+    ids=[case[0] for case in EARLIER_RULE_CASES],
+)
+def test_an_earlier_rule_wins_over_a_residual_cr_in_field_twelve(
+    line: int,
+    changes: dict[int, str | None],
+    code: RefusalCode,
+    tmp_path: Path,
+    fixed_ids: IdProvider,
+    fixed_clock: Clock,
+) -> None:
+    """The line-1 header rule, the width rule and every field rule of fields 1
+    to 11 keep precedence over the field-12 carriage return, which is checked
+    last; ``None`` drops field 12 so the width rule fires with the CR present."""
+    fields = _us_fields(line - 1)
+    for index, text in changes.items():
+        fields[index] = "" if text is None else text
+    if None in changes.values():
+        fields = fields[:11]
+    record = ",".join(fields) + "\r"
+    offenders = [index for index, text in changes.items() if text is not None]
+    whole_line = code in {RefusalCode.CSV_HEADER, RefusalCode.CSV_ROW_SHAPE}
+    expected = len(record) if whole_line else len(fields[offenders[0]])
+    before = "".join(_line(_us_fields(minute)) for minute in range(line - 1))
+    path = _write(tmp_path / "earlier-rule.csv", before + record)
+
+    result = _read(path, US, fixed_ids, fixed_clock)
+
+    _single_refusal(
+        result,
+        code,
+        line=line,
+        value_length=expected,
         ids=fixed_ids,
         clock=fixed_clock,
     )

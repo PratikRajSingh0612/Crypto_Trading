@@ -168,10 +168,21 @@ COMMAND_WRITE_FUNCTION = "_write_new_file"
 COMMAND_REMOVAL_FUNCTION = "_remove_created"
 COMMAND_DIRECTORY_CALL = "mkdir"
 #: The entry-point module: its one ``if __name__ == "__main__":`` block, whose
-#: body is exactly ``raise SystemExit(normalize_command(...))``, is the only
-#: import-time call site the module may hold.
+#: body is exactly ``raise SystemExit(normalize_command(...))`` with the exact
+#: production argument shape below, is the only import-time call site the
+#: module may hold.
 ENTRY_POINT_MODULE = "__main__.py"
 ENTRY_POINT_COMMAND = "normalize_command"
+#: The argument shape of that call: one positional argument that is the
+#: literal ``None`` (the process arguments) and exactly these two keywords, in
+#: either order, each the bare zero-argument production constructor; no extra
+#: positional argument, duplicate or extra keyword, starred argument, keyword
+#: unpacking, alternate constructor or constructor argument.
+ENTRY_POINT_PROVIDERS = {"ids": "Uuid4IdProvider", "clock": "SystemClock"}
+_ENTRY_POINT_KEYWORDS = ", ".join(
+    f"{name}={constructor}()" for name, constructor in ENTRY_POINT_PROVIDERS.items()
+)
+ENTRY_POINT_CALL = f"{ENTRY_POINT_COMMAND}(None, {_ENTRY_POINT_KEYWORDS})"
 
 EXPECTED_RUNTIME_DEPENDENCIES = ["crypto-trading-lab"]
 EXPECTED_SOURCES = {"crypto-trading-lab": {"path": "../", "editable": False}}
@@ -745,8 +756,43 @@ def _is_main_guard(test: ast.expr) -> bool:
     )
 
 
+def _is_bare_constructor_call(node: ast.expr, name: str) -> bool:
+    """Whether ``node`` is exactly ``name()``: no argument, keyword or unpacking."""
+    return (
+        isinstance(node, ast.Call)
+        and _qualified_name(node.func) == name
+        and not node.args
+        and not node.keywords
+    )
+
+
+def _is_entry_command_call(call: ast.Call) -> bool:
+    """Whether ``call`` is exactly the production call, ``ENTRY_POINT_CALL``.
+
+    One positional argument that is the literal ``None`` (a starred argument
+    is not a constant), exactly the ``ENTRY_POINT_PROVIDERS`` keywords in
+    either order (a ``**`` unpacking has no name, a repeated name is refused
+    at its second occurrence), each the bare zero-argument production
+    constructor.
+    """
+    if _qualified_name(call.func) != ENTRY_POINT_COMMAND or len(call.args) != 1:
+        return False
+    argv = call.args[0]
+    if not isinstance(argv, ast.Constant) or argv.value is not None:
+        return False
+    given: dict[str, ast.expr] = {}
+    for keyword in call.keywords:
+        if keyword.arg is None or keyword.arg in given:
+            return False
+        given[keyword.arg] = keyword.value
+    return set(given) == set(ENTRY_POINT_PROVIDERS) and all(
+        _is_bare_constructor_call(given[name], constructor)
+        for name, constructor in ENTRY_POINT_PROVIDERS.items()
+    )
+
+
 def _is_entry_raise(statement: ast.stmt) -> bool:
-    """Whether ``statement`` is ``raise SystemExit(normalize_command(...))``."""
+    """Whether ``statement`` is exactly ``raise SystemExit(ENTRY_POINT_CALL)``."""
     if not isinstance(statement, ast.Raise) or statement.cause is not None:
         return False
     exc = statement.exc
@@ -758,10 +804,7 @@ def _is_entry_raise(statement: ast.stmt) -> bool:
     ):
         return False
     inner = exc.args[0]
-    return (
-        isinstance(inner, ast.Call)
-        and _qualified_name(inner.func) == ENTRY_POINT_COMMAND
-    )
+    return isinstance(inner, ast.Call) and _is_entry_command_call(inner)
 
 
 def _entry_point_violations(tree: ast.Module, relative_path: str) -> list[str]:
@@ -769,9 +812,10 @@ def _entry_point_violations(tree: ast.Module, relative_path: str) -> list[str]:
 
     The module body is imports plus exactly one ``if __name__ == "__main__":``
     block without ``else`` whose body is exactly one
-    ``raise SystemExit(normalize_command(...))``; that block is the only
-    admitted import-time call site. Every other statement is held to the
-    import-time rule of every module.
+    ``raise SystemExit(ENTRY_POINT_CALL)``, the command call in its exact
+    production argument shape; that block is the only admitted import-time
+    call site. Every other statement is held to the import-time rule of every
+    module.
     """
     guards = [statement for statement in tree.body if isinstance(statement, ast.If)]
     rest = [statement for statement in tree.body if not isinstance(statement, ast.If)]
@@ -792,7 +836,7 @@ def _entry_point_violations(tree: ast.Module, relative_path: str) -> list[str]:
     if len(guard.body) != 1 or not _is_entry_raise(guard.body[0]):
         violations.append(
             f"{relative_path}:{guard.lineno}: the guard body is not exactly "
-            f"raise SystemExit({ENTRY_POINT_COMMAND}(...))"
+            f"raise SystemExit({ENTRY_POINT_CALL})"
         )
     return violations
 
@@ -890,9 +934,12 @@ def test_the_entry_point_module_holds_exactly_one_guarded_command_call(
 ) -> None:
     """``__main__.py`` holds imports and one guarded ``raise SystemExit(...)``.
 
-    The guard body's arguments are not shaped here; the module stays under the
-    import-root, environment and no-write scans like every other module, so a
-    write-shaped argument (``argparse.FileType`` included) is caught there.
+    The guard body's call is pinned to its exact production argument shape,
+    ``ENTRY_POINT_CALL``: the literal ``None`` argv and the bare zero-argument
+    ``Uuid4IdProvider()`` and ``SystemClock()`` keywords, nothing else. The
+    module also stays under the import-root, environment and no-write scans
+    like every other module, so a write-shaped argument (``argparse.FileType``
+    included) is caught there.
     """
     path = _package_dir(sub_project_root) / ENTRY_POINT_MODULE
 
@@ -1640,27 +1687,77 @@ def test_the_command_scanner_admits_each_confined_shape(source: str) -> None:
     assert _command_module_violations(ast.parse(source), "synthetic.py") == []
 
 
+#: The production call, character for character as ``__main__.py`` spells it.
+ENTRY_CALL = "normalize_command(None, ids=Uuid4IdProvider(), clock=SystemClock())"
 ENTRY_SHAPE = (
     "from crypto_lab_offline_data.cli import normalize_command\n"
     "from crypto_lab_offline_data.providers import SystemClock, Uuid4IdProvider\n"
     "\n"
     'if __name__ == "__main__":\n'
     "    raise SystemExit(\n"
-    "        normalize_command(None, ids=Uuid4IdProvider(), clock=SystemClock())\n"
+    f"        {ENTRY_CALL}\n"
     "    )\n"
 )
 ENTRY_GUARD_LINE = 'if __name__ == "__main__":\n'
-ENTRY_RAISE = (
-    "    raise SystemExit(\n"
-    "        normalize_command(None, ids=Uuid4IdProvider(), clock=SystemClock())\n"
-    "    )\n"
-)
+ENTRY_RAISE = f"    raise SystemExit(\n        {ENTRY_CALL}\n    )\n"
 UNGUARDED_ENTRY = ENTRY_SHAPE.replace(ENTRY_GUARD_LINE, "").replace("\n    ", "\n")
-CHAINED_RAISE = "    raise SystemExit(normalize_command()) from e\n"
-TWO_ARGUMENT_RAISE = "    raise SystemExit(normalize_command(), 2)\n"
-KEYWORD_RAISE = "    raise SystemExit(code=normalize_command())\n"
-PLAIN_RAISE = "    raise SystemExit(normalize_command(None))\n"
+CHAINED_RAISE = f"    raise SystemExit({ENTRY_CALL}) from e\n"
+TWO_ARGUMENT_RAISE = f"    raise SystemExit({ENTRY_CALL}, 2)\n"
+KEYWORD_RAISE = f"    raise SystemExit(code={ENTRY_CALL})\n"
+PLAIN_RAISE = f"    raise SystemExit({ENTRY_CALL})\n"
 MODULE_CALL = "PROVIDER = Uuid4IdProvider()\n"
+#: The same call with the two keywords in the other order: the same AST shape.
+REORDERED_ENTRY_CALL = (
+    "normalize_command(None, clock=SystemClock(), ids=Uuid4IdProvider())"
+)
+#: The same call wrapped over several lines with a trailing comma.
+WRAPPED_ENTRY_CALL = (
+    "normalize_command(\n"
+    "            None,\n"
+    "            ids=Uuid4IdProvider(),\n"
+    "            clock=SystemClock(),\n"
+    "        )"
+)
+#: Calls that differ from the production call in one respect each: an omitted
+#: argv or provider, a non-``None`` argv, a wrong, swapped or foreign provider,
+#: a constructor argument, an extra, duplicate, positional or unpacked
+#: argument, an alternate or attribute constructor, a class instead of its
+#: call, or a qualified command name. None may be admitted; none is executed.
+INCOMPLETE_ENTRY_CALLS = [
+    "normalize_command()",
+    "normalize_command(None)",
+    "normalize_command(ids=Uuid4IdProvider(), clock=SystemClock())",
+    "normalize_command(None, ids=Uuid4IdProvider())",
+    "normalize_command(None, clock=SystemClock())",
+    "normalize_command([], ids=Uuid4IdProvider(), clock=SystemClock())",
+    "normalize_command(argv, ids=Uuid4IdProvider(), clock=SystemClock())",
+    "normalize_command(sys.argv[1:], ids=Uuid4IdProvider(), clock=SystemClock())",
+    'normalize_command("", ids=Uuid4IdProvider(), clock=SystemClock())',
+    "normalize_command(0, ids=Uuid4IdProvider(), clock=SystemClock())",
+    "normalize_command(False, ids=Uuid4IdProvider(), clock=SystemClock())",
+    "normalize_command(None, identifiers=Uuid4IdProvider(), clock=SystemClock())",
+    "normalize_command(None, ids=Uuid4IdProvider(), timer=SystemClock())",
+    "normalize_command(None, ids=SystemClock(), clock=Uuid4IdProvider())",
+    "normalize_command(None, ids=Uuid4IdProvider(), clock=Uuid4IdProvider())",
+    "normalize_command(None, ids=FixedIds(), clock=SystemClock())",
+    "normalize_command(None, ids=Uuid4IdProvider(1), clock=SystemClock())",
+    "normalize_command(None, ids=Uuid4IdProvider(), clock=SystemClock(tz=UTC))",
+    "normalize_command(None, ids=Uuid4IdProvider(), clock=SystemClock(), extra=1)",
+    (
+        "normalize_command(None, ids=Uuid4IdProvider(), "
+        "clock=SystemClock(), ids=Uuid4IdProvider())"
+    ),
+    "normalize_command(None, None, ids=Uuid4IdProvider(), clock=SystemClock())",
+    "normalize_command(None, Uuid4IdProvider(), clock=SystemClock())",
+    "normalize_command(*ARGV, ids=Uuid4IdProvider(), clock=SystemClock())",
+    "normalize_command(None, **PROVIDERS)",
+    "normalize_command(None, ids=Uuid4IdProvider(), **CLOCK)",
+    "normalize_command(None, ids=Uuid4IdProvider.default(), clock=SystemClock())",
+    "normalize_command(None, ids=providers.Uuid4IdProvider(), clock=SystemClock())",
+    "normalize_command(None, ids=Uuid4IdProvider, clock=SystemClock())",
+    "normalize_command(None, ids=Uuid4IdProvider()(), clock=SystemClock())",
+    "cli.normalize_command(None, ids=Uuid4IdProvider(), clock=SystemClock())",
+]
 
 
 @pytest.mark.parametrize(
@@ -1679,16 +1776,15 @@ MODULE_CALL = "PROVIDER = Uuid4IdProvider()\n"
         ENTRY_SHAPE.replace(ENTRY_RAISE, "    raise SystemExit(main())\n"),
         ENTRY_SHAPE.replace(ENTRY_RAISE, "    raise SystemExit(1)\n"),
         ENTRY_SHAPE.replace(ENTRY_RAISE, "    raise SystemExit(normalize_command)\n"),
-        ENTRY_SHAPE.replace(ENTRY_RAISE, "    sys.exit(normalize_command(None))\n"),
-        ENTRY_SHAPE.replace(
-            ENTRY_RAISE, "    raise RuntimeError(normalize_command())\n"
-        ),
+        ENTRY_SHAPE.replace(ENTRY_RAISE, f"    sys.exit({ENTRY_CALL})\n"),
+        ENTRY_SHAPE.replace(ENTRY_RAISE, f"    raise RuntimeError({ENTRY_CALL})\n"),
         ENTRY_SHAPE.replace(ENTRY_RAISE, CHAINED_RAISE),
         ENTRY_SHAPE.replace(ENTRY_RAISE, TWO_ARGUMENT_RAISE),
         ENTRY_SHAPE.replace(ENTRY_RAISE, KEYWORD_RAISE),
         MODULE_CALL + ENTRY_SHAPE,
         ENTRY_SHAPE + "CLOCK = SystemClock()\n",
         ENTRY_SHAPE.replace(ENTRY_GUARD_LINE, MODULE_CALL + ENTRY_GUARD_LINE),
+        *[ENTRY_SHAPE.replace(ENTRY_CALL, call) for call in INCOMPLETE_ENTRY_CALLS],
     ],
 )
 def test_the_entry_point_scanner_detects_each_disallowed_shape(source: str) -> None:
@@ -1702,12 +1798,25 @@ def test_the_entry_point_scanner_detects_each_disallowed_shape(source: str) -> N
         '"""Docstring."""\n\n' + ENTRY_SHAPE,
         "from __future__ import annotations\n\n" + ENTRY_SHAPE,
         ENTRY_SHAPE.replace(ENTRY_RAISE, PLAIN_RAISE),
-        ENTRY_SHAPE.replace(ENTRY_RAISE, "    raise SystemExit(normalize_command())\n"),
+        ENTRY_SHAPE.replace(ENTRY_CALL, REORDERED_ENTRY_CALL),
+        ENTRY_SHAPE.replace(ENTRY_CALL, WRAPPED_ENTRY_CALL),
         "import re\nPATTERN = re.compile('x')\n" + ENTRY_SHAPE,
     ],
 )
 def test_the_entry_point_scanner_admits_each_confined_shape(source: str) -> None:
     assert _entry_point_violations(ast.parse(source), "synthetic.py") == []
+
+
+def test_the_incomplete_entry_calls_are_distinct_and_parse() -> None:
+    """The negative controls are distinct, parse, and are not the admitted call."""
+    assert ENTRY_CALL == ENTRY_POINT_CALL
+    assert ENTRY_CALL in ENTRY_SHAPE
+    assert len(set(INCOMPLETE_ENTRY_CALLS)) == len(INCOMPLETE_ENTRY_CALLS)
+    assert ENTRY_CALL not in INCOMPLETE_ENTRY_CALLS
+    assert REORDERED_ENTRY_CALL not in INCOMPLETE_ENTRY_CALLS
+    for call in INCOMPLETE_ENTRY_CALLS:
+        module = ast.parse(ENTRY_SHAPE.replace(ENTRY_CALL, call))
+        assert isinstance(module, ast.Module)
 
 
 @pytest.mark.parametrize("family", PROHIBITED_FAMILIES)
