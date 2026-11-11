@@ -373,7 +373,7 @@ after `METADATA_FIELD` (fifteen codes). The reader emits:
 | `OFFLINE_DATA.SIZE_CEILING` (by rows) | the first row beyond `max_rows` | the row's line, the line's length |
 | `OFFLINE_DATA.EMPTY_SERIES` | an empty file | 1, 0 |
 | `OFFLINE_DATA.CSV_HEADER` | line 1 whose first field is not 1 to 20 digits | 1, the line's length |
-| `OFFLINE_DATA.CSV_ROW_SHAPE` | a line without exactly twelve fields | the line, its length |
+| `OFFLINE_DATA.CSV_ROW_SHAPE` | a line without exactly twelve fields; a residual carriage return in field 12, checked after fields 1 to 11 pass | the line, the complete logical row's length (every residual carriage return counted, the consumed LF or CRLF excluded) |
 | `OFFLINE_DATA.CSV_TIMESTAMP` | a time field outside `[0-9]{1,20}`; a close time not after the open time | the line, the field's length |
 | `OFFLINE_DATA.TIMESTAMP_UNIT` | a time field outside the window in the declared unit | the line, the field's length |
 | `OFFLINE_DATA.CSV_NUMBER` | a numeric field outside its grammar (zero or signed prices included) | the line, the field's length |
@@ -757,6 +757,82 @@ across two fresh directories by the integration module. Golden hashes:
   couplings never echo the given value. The command creates no parent directory for
   `--output` and does not remove a directory it created; the one argument refusal with a
   diagnostic is `--timeframe` for `ohlcv-csv/1`.
+
+## Installed-core identity check
+
+`tests/integration/test_installed_core_identity.py` is the consumer check of the
+installation itself (Task 1 of
+`docs/superpowers/plans/2026-11-11-project-2-installed-core-identity-plan.md`). The core
+distribution's version is `0.1.0` at the preserved core and at Stage 9 alike, the lock
+records no content identity for the path source and the registration test pins no
+migration revision, so a stale or misbound installation inside `offline_data/.venv` could
+pass every other gate unnoticed. From inside the test process, by resolved location
+only, the check requires that
+
+- the running interpreter (`sys.executable`, `sys.prefix`) resolves under this checkout's
+  `offline_data/.venv`; `crypto_lab` and `crypto_lab.persistence.migration_runner` are
+  imported from that environment's `site-packages`; and the `crypto-trading-lab`
+  distribution's `direct_url.json` (read through `importlib.metadata`, never printed)
+  names exactly this checkout root with a `file:` URL and `"editable": false`. A
+  checkout-source import, the root environment and another worktree's installation are
+  rejected; only the `direct_url.json` part distinguishes a same-content wheel built
+  from another checkout;
+- the sorted inventories of every `.py` file under the checkout's `src/crypto_lab` and
+  under the installed `crypto_lab` package are nonempty and identical, file by file and
+  byte for byte; a missing, extra or changed Python file fails, and the failure names
+  every differing relative path with, for a changed file, the SHA-256 of the checkout
+  bytes and of the installed bytes. Limit: the `.py`-only inventory excludes the three
+  non-Python classes the wheel carries, `py.typed`,
+  `persistence/migrations/script.py.mako` and the JSON schemas force-included from the
+  repository `schemas/` directory into `crypto_lab/schemas`, which have no
+  `src/crypto_lab` counterpart and which the core never reads at runtime;
+- the required migration head follows from the checkout's exact
+  `persistence/migrations/versions/` inventory (`__init__.py` with
+  `r0001_stage8_baseline.py` requires `r0001_stage8_baseline`; those two with
+  `r0002_stage9_artifacts.py` require `r0002_stage9_artifacts`; any other inventory is
+  refused), the installed inventory equals the checkout's, and the installed runner's
+  default `expected_head()` (no `script_location` override, no upgrade, no database)
+  returns that head. On this checkout the inventory is the baseline pair, so the
+  required and observed head is `r0001_stage8_baseline`.
+
+Every location, origin and identity assertion is a bare boolean with a fixed message, so
+no absolute path reaches the test output. Synthetic controls under pytest's `tmp_path`
+run the same checker functions and prove each refusal (changed bytes at the same nominal
+version, a missing file, an extra file, empty inventories, a simulated Stage 9 checkout
+paired with a baseline installation, an incorrect observed head, every incorrect
+interpreter, package and origin binding) beside a matching positive control; nothing
+mutates the real checkout, installation, interpreter or migration directory. The focused
+command, from the repository root, is
+
+```powershell
+C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./offline_data/scripts/invoke-offline-uv.ps1 pytest-focused -o addopts= tests/integration/test_installed_core_identity.py -q
+```
+
+**Retained evidence.** When all three parts hold, the module writes one deterministic
+line past pytest's capture (`capsys.disabled()`), which the full `pytest-all` run of
+`verify-offline.ps1` therefore retains:
+
+```text
+INSTALLED_CORE_IDENTITY environment=offline_data/.venv package=crypto_lab source=src/crypto_lab modules=<count> inventory_sha256=<digest> migrations=<versions file names> head=<observed head>
+```
+
+`modules` is the number of `.py` files compared; `inventory_sha256` is the SHA-256 of the
+UTF-8 text made of one line per checkout file in sorted path order, each line the SHA-256
+hex digest of the file's bytes, two spaces, the POSIX path relative to `src/crypto_lab`
+and a line feed. The record carries no absolute path, no environment value and no file
+content.
+
+**Checkout identity versus combined-tree acceptance.** A pass proves that the core
+installed in this checkout's `offline_data/.venv` is this checkout's `src/crypto_lab` and
+reports the head that checkout selects. It is no evidence about another checkout or
+environment (`direct_url.json` names one root), and it is not the combined-tree
+acceptance: the sub-project suite against a core whose head is `r0002_stage9_artifacts`,
+in environments synchronized from that combined tree, remains owed by the later route,
+together with the finalization steps listed above. The consumed-core pin stated in
+"SQLite registration contract test (temporary database only)" and the pending
+obligations above are unchanged. If synchronization leaves the check failing, the test
+names the relative mismatch and the disposition belongs to the controller; this
+sub-project has no rebuild or reinstallation command.
 
 ## Source terms
 
