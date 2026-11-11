@@ -1,6 +1,6 @@
 # Project 2: offline-data review corrections — bounded implementation plan
 
-**Status.** Revision 1, proposed under STANDING OWNER AUTHORIZATION 2026-11-10, AUTONOMOUS PROGRAMME DELIVERY (extracted verbatim from the advisor's selection of 2026-11-11 01:15Z; the controller session substituted the registered PowerShell executable form in the seven command lines, as in the slice-3 plan, and nothing else). Awaiting independent plan APPROVE and advisor DELEGATED_PLAN_ACCEPTED. This document is not an acceptance record.
+**Status.** Revision 2 (revision 1 plus the independent review's one IMPORTANT and seven MINOR findings folded), proposed under STANDING OWNER AUTHORIZATION 2026-11-10, AUTONOMOUS PROGRAMME DELIVERY (revision 1 was extracted verbatim from the advisor's selection of 2026-11-11 01:15Z with the registered PowerShell executable form substituted in the seven command lines, as in the slice-3 plan). Awaiting independent plan APPROVE and advisor DELEGATED_PLAN_ACCEPTED. This document is not an acceptance record.
 
 **Plan location.** `docs/superpowers/plans/2026-11-11-project-2-offline-data-review-corrections-plan.md`.
 
@@ -17,12 +17,12 @@ Unprefixed source paths refer to the product tree at `970c1fb5`; line references
 - `P2CTL/evidence/mission/reviewer/P2-T3-review-442d0800/reviewer.stdout.log:1`: README exit-2 wording and entry-point scanner MINORs.
 - `docs/superpowers/plans/2026-11-10-project-2-binance-kline-reader-plan.md:79-122`: existing grammar and governing field-12 clause.
 - `offline_data/src/crypto_lab_offline_data/candle_csv.py:69-72`: LF/CRLF splitting leaves an unmatched carriage return in the logical row.
-- `offline_data/src/crypto_lab_offline_data/binance_kline_csv.py:173-250`: header precedence, row parsing and unchecked field 12.
+- `offline_data/src/crypto_lab_offline_data/binance_kline_csv.py:173-250`: header precedence, row parsing and unchecked field 12 (`:102` `_IGNORE = 11`; `:245` the field loop that stops short of index 11; `:219-226` the existing CSV_ROW_SHAPE branch with `value_length=len(record)`); `:41-42`: the module docstring's field-12 clause, corrected by this task.
 - `offline_data/tests/unit/test_binance_kline_csv.py:1375-1422`: opaque-text controls and existing trailing-CR acceptance.
 - `offline_data/tests/safety/test_boundaries.py:748-797`: entry-point call-shape scanner; `:1643-1710`: its controls.
-- `offline_data/README.md:643-672` and `:745-748`: argument-output wording.
-- `offline_data/pyproject.toml:52-53` and `:76-99`: existing core dependency, strict typing and coverage floor.
-- `offline_data/scripts/invoke-offline-uv.ps1:21-33`, `:168-198`, `:221-328`: committed offline profiles.
+- `offline_data/README.md:641-672` and `:745-748`: argument-output wording; `:343`: the field-12 table row ("any text without a comma; not interpreted"); `:351-353`: the trailing-carriage-return acceptance prose, both corrected by this task; `:208-213` (ohlcv-csv/1 line-ending prose) and `:718-721` (the quoted P2-B3 limitation literal) are unchanged.
+- `offline_data/pyproject.toml:52-53` and `:76-100`: existing core dependency, strict typing and coverage floor.
+- `offline_data/scripts/invoke-offline-uv.ps1:21-33`, `:168-198`, `:221-331`: committed offline profiles.
 - `offline_data/scripts/verify-offline.ps1:21-49`: sub-project full gate.
 - `docs/superpowers/plans/2026-11-11-project-2-sqlite-dataset-registration-contract-plan.md:158-227`: task-file syntax and full acceptance route.
 
@@ -51,7 +51,7 @@ Class: plan_wording.
 
 Summary: Resolve the Binance reader’s permissive field-12 wording against its strict line-ending rule.
 
-Affected clauses: Reader plan section 2.2, lines 81-98 and 114; corresponding reader documentation and trailing-carriage-return acceptance test.
+Affected clauses: Reader plan section 2.2, lines 81-98 and 114; the reader module docstring (binance_kline_csv.py:41-42); README lines 343 and 351-353; and the acceptance test `test_a_lone_trailing_carriage_return_lands_in_the_ignore_field` (test_binance_kline_csv.py:1394-1422), whose lone-terminal-CR half is inverted by this amendment.
 
 Chosen solution: Reject residual carriage returns in field 12 after fields 1-11 pass. Return existing OFFLINE_DATA.CSV_ROW_SHAPE with the logical row number and complete logical-row length. Preserve the existing splitter; never strip or repair input.
 
@@ -80,7 +80,7 @@ Tighten the existing AST scanner to require the guarded call’s complete argume
 - No extra positional arguments, duplicate or extra keywords, starred arguments, keyword unpacking, alternate constructors or constructor arguments.
 - Preserve the existing exact main guard, single outer raise SystemExit(...), absence of a raise cause and existing surrounding import-time restrictions.
 
-The production entry point already satisfies this shape and is not modified. Keep other guard policies intact.
+The production entry point already satisfies this shape and is not modified. Keep other guard policies intact. Update the docstring of `test_the_entry_point_module_holds_exactly_one_guarded_command_call` (test_boundaries.py:891-896), which currently says the guard body's arguments are not shaped.
 
 ### README correction
 
@@ -90,7 +90,7 @@ Correct argument-parsing documentation to match existing behavior:
 - Argparse exit-2 usage/errors use standard error and may echo caller argv for unrecognized arguments.
 - Preserve the narrower no-value-echo guarantees of the existing custom converters and coupling errors.
 - Help uses argparse’s existing standard-output behavior.
-- Describe field 12 and residual-CR refusal consistently with this amendment.
+- Describe field 12 and the residual-CR refusal consistently with this amendment at README line 343 (the field-12 table row) and lines 351-353 (the trailing-carriage-return prose, which now states the refusal and its CSV_ROW_SHAPE code and value_length), and in the reader module docstring (binance_kline_csv.py:41-42); the ohlcv-csv/1 line-ending prose at README 208-213 and the P2-B3 limitation literal quoted at README 718-721 are unchanged.
 
 Also reconcile only these already-established status facts: the reader was published at 4d70f673, and the temporary SQLite consumer test was published at 970c1fb5. The stale text is the second-slice status and pending-registration prose; the slice-1 Task 3 table row already says committed. Do not claim acceptance of this correction before controller evidence exists.
 
@@ -110,6 +110,7 @@ Use synthetic test values written under tmp_path; do not acquire data or add fix
 
 - Test both declared timestamp units.
 - Refuse lone terminal CR, CR CR LF rows and embedded field-12 CR.
+- Replace `test_a_lone_trailing_carriage_return_lands_in_the_ignore_field` (test_binance_kline_csv.py:1394-1422) with the lone-terminal-CR refusal pin and retain its CR-only half; the parametrized opaque-text controls at lines 1378-1391 stay positive.
 - Exercise failures on line 1 and a later body line, including a malformed ending before the final line.
 - Retain the CR-only multi-row refusal.
 - Pin one structured diagnostic: existing error code, logical line, complete logical-row length, standard redacted message and no input-value/path disclosure.
@@ -124,7 +125,7 @@ Add synthetic AST negative controls for omitted argv/providers, non-None argv, w
 **Command regressions.**
 
 - Feed malformed-CR Binance input through normalize_command using injected providers. Require exit 1, the canonical CSV_ROW_SHAPE Failure, and no output-directory creation or output-file writes.
-- Pin the existing exit-2 behavior with a harmless unrecognized-argument sentinel: standard-error usage/error output may contain that argv token; standard output is empty; no provider draws or output writes occur.
+- Pin the existing exit-2 behavior with a harmless unrecognized-argument sentinel appended to an otherwise complete argv (as test_cli.py:443-477 already does with `--extra`): assert the token appears in standard error (argparse's `unrecognized arguments:` message), standard output is empty, no provider draws and no output writes occur.
 - Retain existing custom-converter/coupling no-echo tests and module-entry-point behavior tests.
 
 **Preserved consumers.**
