@@ -15,8 +15,12 @@ authored and awaiting the controller's verification, independent review and acce
 | second slice, Task 1 | the `binance-spot-kline-csv/1` reader with explicit timestamp units (`binance_kline_csv`), the `--input-format` and `--timestamp-unit` arguments, the `InputFormat` source-identity table and the P2-B3 limitation (`metadata`), the one new refusal code `OFFLINE_DATA.TIMESTAMP_UNIT`, twenty-one SYNTHETIC fixtures and nine goldens | authored; awaits the controller's verification, independent review and acceptance |
 
 Pending after the second slice and outside it: registration of the emitted metadata into a
-core dataset registry (a temporary-database contract test owned by Workstream A, fed by the
-committed goldens), finalization through the artifact finalizer (after the Stage 9 merge),
+core dataset registry (a temporary-database contract test, placed at
+`offline_data/tests/integration/test_sqlite_dataset_registration.py` under the delegated
+decision in section 1 of
+`docs/superpowers/plans/2026-11-11-project-2-sqlite-dataset-registration-contract-plan.md`
+and fed by the committed goldens; its verification, review and acceptance are recorded in
+controller evidence), finalization through the artifact finalizer (after the Stage 9 merge),
 Parquet emission (the P2-B1 lift) and the real-source verification. No interim container
 enters a persistent registry, and no real Binance archive has been ingested.
 
@@ -46,6 +50,46 @@ in the `dev` dependency group, so the offline lock resolves from the local uv ca
 core populated. The package is `crypto_lab_offline_data` (distribution
 `crypto-lab-offline-data`, version `0.1.0`) under `offline_data/src/`, for CPython
 `>=3.12,<3.13` selected by `uv` from the user-local managed installs only.
+
+### SQLite registration contract test (temporary database only)
+
+`tests/integration/test_sqlite_dataset_registration.py` is the consumer test on the
+registration side of the boundary. For each of the five committed golden families (the two
+`ohlcv-csv/1` goldens under `tests/fixtures/candles/golden/` and the three SYNTHETIC
+`binance-spot-kline-csv/1` goldens under `tests/fixtures/binance/golden/`) it strictly
+re-parses `descriptor.json` and `partitions.json` through the core models, recomputes the
+identity with the core's `dataset_metadata_hash`, registers the pair through the real
+`crypto_lab.persistence.registries.SqliteDatasetRepository` into a fresh SQLite database
+that the core's own `open_for_migration` and `apply_migrations` create under pytest's
+`tmp_path`, commits, closes, reopens through `open_database` and reads the records back by
+content hash (`get_by_hash`) and by ordinal (`list_partitions`). The read-back must equal
+the parsed goldens typed field by field and as canonical JSON bytes, the ordinals must be
+`0..n-1` with the partition IDs in the descriptor's order, re-registration of the identical
+pair must succeed and leave one row per table, and two negative controls pin the structured
+refusal (`CORE.INVARIANT_VIOLATION` with `table`, `operation` and `identity` details): a
+descriptor whose `content_hash` is not its material metadata is refused before any row
+exists, and a descriptor that differs only in `created_at_utc` (excluded from the hash) is
+refused under the already registered hash with the original records unchanged.
+
+The core enters only through the existing non-editable path dependency, pinned to the
+accepted core source `main` `079395bec70f1deda406d0ca14b2d4bf79aaf063`; the test imports no
+core test helper, no `sqlalchemy` module and no `crypto_lab.persistence.schema` name, and
+counts rows with literal SQL on the repository's own connection. The placement follows the
+delegated decision in section 1 of
+`docs/superpowers/plans/2026-11-11-project-2-sqlite-dataset-registration-contract-plan.md`:
+Workstream A keeps sole ownership of the shared core code, contracts and migrations; this
+sub-project owns only the test and this explanation. The registration is temporary only:
+every database lives under `tmp_path` and is closed in `finally`, all five families reuse
+one dataset and one partition identifier so no two families share a database, no
+application or persistent registry is opened, no partition `relative_path` is read, and no
+production module, registration command or production registration authorization is
+added. The focused command, from the repository root, is
+
+```powershell
+C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./offline_data/scripts/invoke-offline-uv.ps1 pytest-focused -o addopts= tests/integration/test_sqlite_dataset_registration.py tests/integration/test_core_contract_roundtrip.py tests/safety/test_boundaries.py -q
+```
+
+and the sub-project's full gates are unchanged.
 
 ## Prerequisites
 
@@ -679,9 +723,22 @@ across two fresh directories by the integration module. Golden hashes:
   each tuple sorted so the `P2-B3:` text precedes the lowercase P2-B1 text. `ohlcv-csv/1`
   outputs are byte-identical to the first slice's and carry P2-B1 alone.
 - No interim container is registered in a persistent core dataset registry. Registration
-  is a later slice, a temporary-database contract test through `SqliteDatasetRepository`
-  owned by Workstream A and fed by the committed goldens; finalization through the artifact
-  finalizer follows the Stage 9 merge; both stay pending here.
+  is exercised only as a temporary-database contract test through
+  `SqliteDatasetRepository`: `tests/integration/test_sqlite_dataset_registration.py`
+  registers each committed golden into a fresh SQLite database under pytest's `tmp_path`
+  against the accepted core source `main` `079395bec70f1deda406d0ca14b2d4bf79aaf063`,
+  reached only through the existing path dependency, and reads it back by hash and
+  ordinal; its focused command is `pytest-focused -o addopts=
+  tests/integration/test_sqlite_dataset_registration.py
+  tests/integration/test_core_contract_roundtrip.py tests/safety/test_boundaries.py -q`
+  through `offline_data/scripts/invoke-offline-uv.ps1` (spelled out in full in "SQLite
+  registration contract test (temporary database only)" above). It is placed here under
+  the delegated decision in section 1 of
+  `docs/superpowers/plans/2026-11-11-project-2-sqlite-dataset-registration-contract-plan.md`
+  (Workstream A keeps the shared core contract). The registration limit is temporary
+  only: no application or persistent registry is opened and no registration command or
+  production registration is added; finalization through the artifact finalizer follows
+  the Stage 9 merge and stays pending here.
 - Two input formats, one instrument, one partition per dataset; `binance-spot-kline-csv/1`
   supports `1m` only; the real-source adapter and any claim of real-source execution wait
   for the authorized source verification.
