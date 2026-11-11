@@ -1,6 +1,6 @@
 # Project 2 integration-readiness preparation — bounded plan
 
-**Status.** Revision 1, proposed under STANDING OWNER AUTHORIZATION 2026-11-10, AUTONOMOUS PROGRAMME DELIVERY (extracted verbatim from the advisor's selection of 2026-11-11 05:06Z; the controller session replaced the two sentences that described Stage 9 publication as pending, because the owner published main at 05:03Z while that turn ran, and nothing else). Requires independent plan APPROVE and advisor DELEGATED_PLAN_ACCEPTED against the exact committed plan. This document records no runtime acceptance.
+**Status.** Revision 2 (revision 1 plus the independent review's five MINOR findings folded), proposed under STANDING OWNER AUTHORIZATION 2026-11-10, AUTONOMOUS PROGRAMME DELIVERY (revision 1 was extracted verbatim from the advisor's selection of 2026-11-11 05:06Z with the two sentences that described Stage 9 publication as pending replaced, because the owner published main at 05:03Z while that turn ran). Requires independent plan APPROVE and advisor DELEGATED_PLAN_ACCEPTED against the exact committed plan. This document records no runtime acceptance.
 
 **Plan location.** `docs/superpowers/plans/2026-11-11-project-2-integration-readiness-preparation-plan.md`.
 
@@ -22,7 +22,7 @@ Sources:
 - `offline_data/README.md:376`: retained refusal-table follow-up; `:724-749`: interim format, temporary-registration restriction and pending finalization.
 - Stage 9 `src/crypto_lab/persistence/migrations/versions/r0002_stage9_artifacts.py:1-22`, `:32-33`: migration increment over the Stage 8 baseline.
 - `P2CTL/src/clabctl/gitops.py:540-549`: main-acceptance and checked-out-branch publication requirements.
-- `offline_data/scripts/invoke-offline-uv.ps1:21-33`, `:168-198`: closed offline profiles.
+- `offline_data/scripts/invoke-offline-uv.ps1:21-33`, `:168-249`: closed offline profiles (bootstrap profiles at :168-198; ruff-format-all, ruff-check-all and mypy-all at :222-249).
 - `offline_data/scripts/verify-offline.ps1:21-49`: unchanged sub-project acceptance script.
 
 Consumed versions remain:
@@ -44,7 +44,7 @@ Do not import Stage 9 into the task branch if main advances. Record any newer ta
 
 Produce a source-grounded readiness brief containing:
 
-1. **Preserved delivery inventory.** Record full commit identities and ancestry for slice 1 `3a47d4c9`, slice 2 `4d70f673`, slice 3 `970c1fb5` and slice 4 `19d4db1e`. Confirm whether the latest stack contains every earlier delivery. Distinguish published work from the preserved, unpublished mission-3 alternative; do not propose replaying both.
+1. **Preserved delivery inventory.** Record full commit identities and ancestry for slice 1 `3a47d4c9`, slice 2 `4d70f673`, slice 3 `970c1fb5` and slice 4 `19d4db1e`. Confirm whether the latest stack contains every earlier delivery. Distinguish published work from the preserved, unpublished mission-3 alternative `refs/tags/preserved/p2-sqlite-registration-contract-mission3` (`ae529fd79b0b158b4a604517f8d529a9533cd987`, not an ancestor of `19d4db1e`; its test module and README equal the published slice 3); do not propose replaying both.
 
 2. **Change and contract inventory.** Compare both branches with common baseline `079395be`. List actual overlapping paths, consumed interfaces and relevant Stage 9 persistence changes. Record unchanged contracts only where the inspected source or diff proves that claim. Separate textual compatibility from runtime compatibility.
 
@@ -68,7 +68,7 @@ The brief must state that this task neither creates nor tests a combined tree. I
 
 **Prerequisites.** Independent plan APPROVE and advisor DELEGATED_PLAN_ACCEPTED bound to the exact plan bytes and commit; gate based on that plan commit; registered branch, worktree and publication refspec; unique mission identity; both environments synchronized offline; admitted execution profiles; resource and accounting preflight passed.
 
-**Files created.** `offline_data/docs/2026-11-11-integration-readiness.md`.
+**Files created.** `offline_data/docs/2026-11-11-integration-readiness.md` (UTF-8 without BOM, LF line endings, no trailing whitespace).
 
 **Files modified.** None.
 
@@ -76,7 +76,7 @@ The brief must state that this task neither creates nor tests a combined tree. I
 
 **Exclusions.** No production-code, test, fixture, golden, README, shared-contract, schema, migration, lock, dependency, launcher, verifier or controller change. No branch combination, rebase, reset, main publication or milestone-acceptance note. No acquisition, network/source access, real-data download, engine execution, persistent registration or artifact finalization.
 
-**Execution.** Work from the registered worktree root. Inspect source through Read/Glob/Grep and the existing admitted read-only Git verbs: status, diff, log, show, rev-parse and hash-object. Inspect Stage 9 through existing committed objects; stop if a required object is unavailable. Do not fetch or widen tool permissions.
+**Execution.** Work from the registered worktree root. Inspect source through Read/Glob/Grep and the existing admitted read-only Git verbs: status, diff, log, show and rev-parse (blob identities via `git rev-parse <commit>:<path>`; `hash-object` and `diff --raw` are not admitted). Inspect Stage 9 through existing committed objects; stop if a required object is unavailable. Read the two controller trees read-only, cited by the CTL/P2CTL prefix; if they are not readable, derive section 2 item 5 from section 1's cited ranges and mark it for controller-side confirmation. Do not fetch or widen tool permissions.
 
 Write the brief, then run each command separately through the worker’s Bash tool:
 
