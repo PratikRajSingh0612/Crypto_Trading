@@ -161,7 +161,7 @@ These four paths are the maximum worker bound. Production changes require a demo
 
 Use Workstream A and a registered corrective branch whose clean dispatch parent and worker diff base are exactly:
 
-`e44ef7f142dd8315d23470753d532900a753ba82`
+the accepted revision-2 plan commit recorded as the mission gate's base_commit (its product tree is identical to `e44ef7f142dd8315d23470753d532900a753ba82`)
 
 Preserve both accepted planning documents and all three failed P0 records. Do not compute the worker manifest against `bc05568d`: that would incorrectly include the correction-plan document. Record revision 2 approval in controller-owned evidence without adding it to the worker manifest. A changed dispatch parent requires explicit reconciliation before dispatch.
 
@@ -432,7 +432,7 @@ The worker reports the last proved state and requests controller review. It does
 
 **Step 5 — Independently review and fully verify the frozen subject.**
 
-The controller freezes the candidate against `e44ef7f` and commissions independent review.
+The controller freezes the candidate against the mission gate's base_commit and commissions independent review.
 
 Review must assess:
 
@@ -478,7 +478,7 @@ If verification fails or is interrupted, preserve evidence, later NOT_RUN steps 
 
 The controller must:
 
-1. Verify that final diff and staged paths exactly match the approved manifest against `e44ef7f142dd8315d23470753d532900a753ba82`; exclude both planning documents, floor files and unrelated changes.
+1. Verify that final diff and staged paths exactly match the approved manifest against the mission gate's base_commit; exclude both planning documents, floor files and unrelated changes.
 2. Create the single corrective commit on that dispatch parent, using a truthful subject such as `test: correct windows process fixture and resource proofs`, or `fix:` if production behavior changed.
 3. Prove that committed content matches the independently reviewed and fully verified candidate. Record the exact parent and commit.
 4. Publish through the existing authorized route to the registered corrective branch, without force, and verify the remote SHA.
@@ -502,7 +502,7 @@ Until then, report the last proved state and outstanding gate. This plan emits n
 
 - [ ] Obtain independent APPROVE and advisor DELEGATED_PLAN_ACCEPTED for revision 2's exact bytes.
 - [ ] Preserve all three FAILED P0 baselines; prohibit a fourth unchanged complete baseline.
-- [ ] Register the one Workstream A correction with exactly four permitted paths and dispatch parent/diff base `e44ef7f142dd8315d23470753d532900a753ba82`.
+- [ ] Register the one Workstream A correction with exactly four permitted paths and dispatch parent/diff base equal to the mission gate's base_commit (the revision-2 plan commit).
 - [ ] Confirm current ownership, corrective capacity and the later Stage 10 reforecast requirement; assume no transfer or increase.
 - [ ] Resolve managed-Python discovery/cache access and confirm offline prerequisites without acquisition.
 - [ ] Supply historical assertions, P0 evidence, the controller-only Hypothesis example and available termination-shape records.
