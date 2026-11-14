@@ -93,7 +93,7 @@ The correction must:
 - Prove exact acquisition, successful release and explicit retention of every operation-owned resource.
 - Preserve real Windows execution, exact native errors, child absence, PID-plus-creation identity, job membership, cancellation and reader-end assertions.
 - Establish ownership before an intermediate fixture parent may exit, using the permitted acknowledgement channel below.
-- Keep timeout failures distinct from observed natural exits.
+- Keep timeout failures distinct from observed natural exits: a timed-out wait must never become a passing "already exited" case. `_exited` must fail whenever its first bounded wait returns `None`, whatever a later inspection reports.
 - Correct production wherever focused evidence demonstrates defective resume, abandonment, ownership or cleanup.
 - Preserve the existing observation budget on every affected path.
 
@@ -161,7 +161,7 @@ These four paths are the maximum worker bound. Production changes require a demo
 
 Use Workstream A and a registered corrective branch whose clean dispatch parent and worker diff base are exactly:
 
-the accepted revision-2 plan commit recorded as the mission gate's base_commit (its product tree is identical to `e44ef7f142dd8315d23470753d532900a753ba82`)
+the commit recorded as the mission gate's base_commit, whose plan file has exactly the sha256 recorded in that gate (the final reviewed and accepted revision; never an earlier revision-2 commit such as `ff0ce53`); its product tree is identical to `e44ef7f142dd8315d23470753d532900a753ba82`
 
 Preserve both accepted planning documents and all three failed P0 records. Do not compute the worker manifest against `bc05568d`: that would incorrectly include the correction-plan document. Record revision 2 approval in controller-owned evidence without adding it to the worker manifest. A changed dispatch parent requires explicit reconciliation before dispatch.
 
@@ -307,7 +307,7 @@ Use these proposed additional selectors, recording any parameter IDs in the evid
 - `tests/unit/process_supervision/test_windows_process.py::test_readiness_failure_cleans_the_partially_established_tree_and_reader`
 - `tests/unit/process_supervision/test_windows_api.py::test_every_reviewed_handle_creator_has_resource_ledger_coverage`
 
-Strengthen the existing `test_a_child_alive_after_the_ten_second_wait_fails_the_natural_exit_oracle` rather than adding an `_exited` caller or positive wait. Preserve the existing exact-native-exit controls and failed-job test name.
+Strengthen the existing `test_a_child_alive_after_the_ten_second_wait_fails_the_natural_exit_oracle` rather than adding an `_exited` caller or positive wait. It must show RED on `e44ef7f` for the case where the first bounded wait returns `None` and a later inspection reports the identity ABSENT (for example a fake whose bounded wait returns `None` and whose identity is absent), and GREEN once `_exited` fails on every `None` first wait; this stays within the nine-caller pin. Preserve the existing exact-native-exit controls and failed-job test name.
 
 RED must expose the actual incorrect oracle or faulty transition. A missing helper/import is insufficient. Demonstrate that aggregate equality can miss a planted owned leak when an unrelated handle closes and can reject balanced ownership under unrelated churn. Reclaim planted resources after the expected assertion, including on control failure.
 
@@ -330,13 +330,13 @@ The replacement ledger must cover every handle-creating API in the current `_API
 
 Also classify auxiliary resources acquired by the standard-library construction path, including DEVNULL descriptors/handles and temporary process/thread handles where present. A constructor exception before a wrapper returns does not exempt those acquisitions.
 
-Inspect the selected managed CPython 3.12 implementation read-only to choose the necessary seams. A wrapper that observes only a successfully returned `Popen` is insufficient. Instrumentation must use `windows_process_module.subprocess` and its reachable implementation seams; add no subprocess importer or production import root.
+Choose the necessary seams from evidence the worker can obtain inside its read boundary: the standard library lives outside the worktree and `.venv` is a floor path, so where that source is not readable, record the real calls made during a live launch through `windows_process_module.subprocess` and name no machine-local path. Two CPython facts bind the design: `subprocess.Handle.Close` binds `_winapi.CloseHandle` as a default argument when the class is created, so patching `_winapi.CloseHandle` misses `Popen` handle closes; and pipe read ends close through the C runtime (`FileIO`/`os.close`), so a real close there is proved only by probing handle validity after the close. A wrapper that observes only a successfully returned `Popen` is insufficient. Instrumentation must use `windows_process_module.subprocess` and its reachable implementation seams; add no subprocess importer or production import root.
 
 Requirements:
 
 - Partition all current `_API_NAMES` into explicitly reviewed creators and non-creators. Pin exhaustiveness and disjointness against the actual reviewed surface. Any added API name must fail until classified; any handle creator must have ledger coverage and a planted-leak control.
 - Keep the existing reviewed-surface pin. Do not make the new completeness check tautological by deriving both its expected coverage and observed coverage from the same list.
-- Pin the separate standard-library acquisition/close routes used by the supported launch path, including exception paths.
+- Pin the separate standard-library acquisition/close routes used by the supported launch path, including exception paths, and make that pin fail closed: any unclassified handle-returning call reachable through `windows_process_module.subprocess` during the operation fails the test.
 - Record acquisition generations, resource class, owner, transfer, successful real close and permitted retention. Numeric handle reuse must not merge lifetimes.
 - Record release only after the real close succeeds. An attempted or fabricated successful close is insufficient.
 - Do not retain resource-owning objects merely for observation or release a planted leak before the assertion that must detect it.
@@ -350,7 +350,7 @@ If any acquisition class cannot be observed completely within this bound, retain
 
 **Every live whole-process equality site and disposition.**
 
-All references below are on dispatch parent `e44ef7f`; keep the named tests:
+Line references below are on `e44ef7f`, whose product tree is identical to the dispatch parent (the diff base remains the mission gate's base_commit); keep the named tests:
 
 | Site | Required disposition |
 |---|---|
@@ -362,7 +362,7 @@ All references below are on dispatch parent `e44ef7f`; keep the named tests:
 | `test_windows_api.py:522-529`, `test_a_failed_job_limit_closes_the_new_job_and_raises_with_its_number` | Require successful closure of the exact created job and zero outstanding operation resources; retain exact function and error 87. |
 | `test_windows_api.py:553-563`, `test_a_failed_process_snapshot_walk_raises_or_is_empty_by_its_number` | Account for both real snapshots independently; preserve error 87 and the error-18 empty-result branch, proving both snapshots released. |
 
-Update only the R2-related structural pins described in section 3. Keep deterministic settling-helper semantics exact. A live count may remain diagnostic, but must neither establish nor veto resource-cleanup success.
+Update only the R2-related structural pins described in section 3. Keep deterministic settling-helper semantics exact. At sites where the completeness required above holds, a live count may remain diagnostic but must neither establish nor veto resource-cleanup success; where it does not hold, the old live assertion stays as stated above.
 
 **Permitted fixture acknowledgement channel.**
 
@@ -468,7 +468,7 @@ Keep the configured 90-percent floor and measurement settings unchanged. Preserv
 
 Retain probe identities, times, results and attribution limits in controller evidence. Use only approved, task-scoped inspection; do not inspect unrelated process memory, command lines or environment values.
 
-A run leaving a task-owned process or command root is not acceptance evidence whatever its exit status: `docs/development/verification.md:1018-1023`. Missing or inconclusive probes cannot be recorded as zero. Preserve pre-run hygiene evidence for comparison and investigate any survivor.
+A run leaving a task-owned process or command root is not acceptance evidence whatever its exit status: `docs/development/verification.md:1021-1025`. Missing or inconclusive probes cannot be recorded as zero. Preserve pre-run hygiene evidence for comparison and investigate any survivor.
 
 Require journalled independent **APPROVE** and controller-accepted **PASSED** full verification, including these probes, for identical subject bytes. Follow the controller's formal review order, including any required post-verifier review.
 
@@ -502,7 +502,7 @@ Until then, report the last proved state and outstanding gate. This plan emits n
 
 - [ ] Obtain independent APPROVE and advisor DELEGATED_PLAN_ACCEPTED for revision 2's exact bytes.
 - [ ] Preserve all three FAILED P0 baselines; prohibit a fourth unchanged complete baseline.
-- [ ] Register the one Workstream A correction with exactly four permitted paths and dispatch parent/diff base equal to the mission gate's base_commit (the revision-2 plan commit).
+- [ ] Register the one Workstream A correction with exactly four permitted paths and dispatch parent/diff base equal to the mission gate's base_commit (the commit whose plan file has the gate's sha256; never `ff0ce53`).
 - [ ] Confirm current ownership, corrective capacity and the later Stage 10 reforecast requirement; assume no transfer or increase.
 - [ ] Resolve managed-Python discovery/cache access and confirm offline prerequisites without acquisition.
 - [ ] Supply historical assertions, P0 evidence, the controller-only Hypothesis example and available termination-shape records.
