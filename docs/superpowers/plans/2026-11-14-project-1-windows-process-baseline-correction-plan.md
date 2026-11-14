@@ -1,6 +1,6 @@
 # Project 1: Windows process baseline correction (Stage 10 P0 prerequisite)
 
-**Status.** Revision 2, responding to the independent read-only review `independent-review-windows-process-correction-plan-rev1`, verdict **REQUEST_CHANGES**, of revision 1 SHA-256 `fa00409e3e5e4468ac00118e7be9309b6aafcfde1f764ef1f6d45e1e51e6d63b`. Revised by the programme advisor (gpt-6.1-sol, read-only) on 2026-11-14 under the STANDING OWNER AUTHORIZATION of 2026-11-10 and OWNER RULING of 2026-11-14, section 1. Requires independent plan **APPROVE** and advisor **DELEGATED_PLAN_ACCEPTED** for revision 2 before dispatch. This document records no implementation or runtime acceptance.
+**Status.** Revision 2, responding to the independent read-only review `independent-review-windows-process-correction-plan-rev1`, verdict **REQUEST_CHANGES**, of revision 1 SHA-256 `fa00409e3e5e4468ac00118e7be9309b6aafcfde1f764ef1f6d45e1e51e6d63b`. Revised by the programme advisor (gpt-6.1-sol; its CLI was asked for a read-only sandbox, which this host does not enforce, and the advisor changed no file) on 2026-11-14 under the STANDING OWNER AUTHORIZATION of 2026-11-10 and OWNER RULING of 2026-11-14, section 1. Requires independent plan **APPROVE** and advisor **DELEGATED_PLAN_ACCEPTED** for revision 2 before dispatch. This document records no implementation or runtime acceptance.
 
 ## 1. DIAGNOSIS
 
