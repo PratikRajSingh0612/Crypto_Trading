@@ -63,6 +63,7 @@ _ALLOWED_SOURCE_FILES = {
     "cli/__init__.py",
     "cli/__main__.py",
     "cli/main.py",
+    "cli/runtime.py",
     "configuration/__init__.py",
     "configuration/loader.py",
     "configuration/models.py",
@@ -98,6 +99,7 @@ _ALLOWED_SOURCE_FILES = {
     "domain/versioning.py",
     "experiments/__init__.py",
     "experiments/aggregation.py",
+    "experiments/application_ports.py",
     "experiments/comparison.py",
     "experiments/diagnostics.py",
     "experiments/experiment_service.py",
@@ -175,9 +177,12 @@ _ALLOWED_IMPORT_ROOTS = {
     "pydantic",
     "queue",
     "re",
+    "secrets",
+    "signal",
     "sqlalchemy",
     "subprocess",
     "threading",
+    "time",
     "tomllib",
     "types",
     "typing",
@@ -487,8 +492,13 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
     `tests/unit/artifacts/test_artifact_store.py::test_os_is_imported_only_by_the_artifact_store`
     and `::test_os_usage_is_fstat_and_fsync_only`, giving 30. The test name is
     historical and is kept.
+
+    The Stage 10 plan's section 2.6 adds three roots in Task 1, the task that
+    first imports them -- `time`, `secrets` and `signal`, all in `cli/runtime.py`
+    and confined to that module by `tests/safety/test_stage10_boundaries.py` --
+    giving 33.
     """
-    assert len(_ALLOWED_IMPORT_ROOTS) == 30
+    assert len(_ALLOWED_IMPORT_ROOTS) == 33
     assert _ALLOWED_IMPORT_ROOTS == {
         "__future__",
         "alembic",
@@ -512,9 +522,12 @@ def test_the_import_root_allowlist_is_exactly_the_reviewed_twenty_two() -> None:
         "pydantic",
         "queue",
         "re",
+        "secrets",
+        "signal",
         "sqlalchemy",
         "subprocess",
         "threading",
+        "time",
         "tomllib",
         "types",
         "typing",

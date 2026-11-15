@@ -23,7 +23,10 @@ Declared readings, so nothing is inferred silently:
   not exist and every guard already pins the excluded column of the section 2.6
   branch table, so this guard pins that column: 25 Stage 9 source files, 135
   allowed source files, 48 schemas, 13 new schemas, 20 released names and 13
-  deferred names.
+  deferred names. Stage 10 plan section 6.11 subtracts the separately named
+  cumulative Stage 10 set (``STAGE10_SOURCE_FILES``, two modules after Task 1)
+  from the source arithmetic, so the allowed count advances to 137 while the
+  twenty-five-file set and the 51 pre-Stage-5 modules are unchanged.
 - "``experiments`` imports ``artifacts``/``audit`` only from the three new
   modules" is an upper bound; the committed tree reaches them from exactly two,
   ``experiments/finalization.py`` (both) and ``experiments/run_manifest.py``
@@ -106,6 +109,7 @@ from test_stage8_boundaries import (
     _revision_bindings,
     _source_path,
 )
+from test_stage10_boundaries import STAGE10_SOURCE_FILES
 
 from crypto_lab.audit.models import AuditAction
 from crypto_lab.domain.hashing import HashingProfile
@@ -508,11 +512,13 @@ def test_stage_nine_modules_are_exactly_the_plan_paths(repository_root: Path) ->
         assert _source_path(repository_root, relative_path).is_file(), relative_path
     assert set(_STAGE9_PERSISTENCE_FILES) <= set(STAGE9_SOURCE_FILES)
     # The excluded branch: no Task 3 module, 135 files, and the planning base of
-    # 110 minus the Stage 5-8 sets leaves the 51 pre-Stage-5 modules.
+    # 110 minus the Stage 5-8 sets leaves the 51 pre-Stage-5 modules. Stage 10
+    # plan section 6.11 (Task 1): the distinct cumulative Stage 10 set joins the
+    # allowlist, 135 -> 137, and is subtracted separately, so the remainder stays 51.
     assert _TASK3_MODULE not in _ALLOWED_SOURCE_FILES
     assert not _source_path(repository_root, _TASK3_MODULE).exists()
-    assert len(_ALLOWED_SOURCE_FILES) == 135
-    assert len(_source_files(repository_root)) == 135
+    assert len(_ALLOWED_SOURCE_FILES) == 137
+    assert len(_source_files(repository_root)) == 137
     staged = set(STAGE9_SOURCE_FILES)
     for earlier in (
         STAGE5_SOURCE_FILES,
@@ -521,7 +527,11 @@ def test_stage_nine_modules_are_exactly_the_plan_paths(repository_root: Path) ->
         STAGE8_SOURCE_FILES,
     ):
         staged |= set(earlier)
-    assert len(_ALLOWED_SOURCE_FILES - staged) == 51
+    stage10 = set(STAGE10_SOURCE_FILES)
+    assert len(stage10) == 2
+    assert stage10 <= _ALLOWED_SOURCE_FILES
+    assert stage10.isdisjoint(staged)
+    assert len(_ALLOWED_SOURCE_FILES - staged - stage10) == 51
     assert _ARTIFACTS_PACKAGE_MODULES | {_AUDIT_PACKAGE_INIT} <= _ALLOWED_SOURCE_FILES
 
 
@@ -584,7 +594,9 @@ def test_os_is_confined_to_the_store_and_to_fstat_and_fsync(
     """Plan section 2.6 (import-root table), re-pinned here: the tree-wide
     importer set is exactly the store and its reads are exactly the two."""
     assert "os" in _ALLOWED_IMPORT_ROOTS
-    assert len(_ALLOWED_IMPORT_ROOTS) == 30
+    # Stage 10 plan section 6.11 (Task 1): 30 -> 33 with `time`, `secrets` and
+    # `signal`; the `os` importer and its two reads are unchanged.
+    assert len(_ALLOWED_IMPORT_ROOTS) == 33
     importers = [
         _label(repository_root, path)
         for path in _source_files(repository_root)

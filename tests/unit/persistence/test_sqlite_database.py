@@ -1806,7 +1806,7 @@ def test_a_non_dbapi_error_at_commit_releases_the_connection_before_it_escapes(
 def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert {"persistence/database.py", "persistence/diagnostics.py"} <= allowed
-    assert len(allowed) == 135  # Stage 9 Task 7 appended the three experiments modules
+    assert len(allowed) == 137  # Stage 10 Task 1 appended runtime and application ports
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "sqlalchemy" in roots
     assert "alembic" in roots  # Task 2 added it
@@ -1843,25 +1843,25 @@ def test_the_source_allowlist_and_import_roots_name_the_database_modules() -> No
             relative
         )
     assert "os" in roots  # Stage 9 Task 4 added it
-    assert len(roots) == 30
+    assert len(roots) == 33  # Stage 10 Task 1 added `time`, `secrets` and `signal`
     modules = _literal(_PACKAGE_LAYOUT, "PACKAGE_MODULES")
     anchor = modules.index("crypto_lab.persistence")
     assert modules[anchor + 1 : anchor + 3] == (
         "crypto_lab.persistence.database",
         "crypto_lab.persistence.diagnostics",
     )
-    assert len(modules) == 135  # Stage 9 Task 7
+    assert len(modules) == 137  # Stage 10 Task 1
 
 
 def test_the_two_cross_pins_moved_to_the_running_sizes() -> None:
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     reconciliation = _RECONCILIATION_TESTS.read_text(encoding="utf-8")
     for source in (preflight, reconciliation):
-        assert "len(allowed) == 135" in source  # Stage 9 Task 7
-        assert "len(modules) == 135" in source
+        assert "len(allowed) == 137" in source  # Stage 10 Task 1
+        assert "len(modules) == 137" in source
         assert "len(allowed) == 95" not in source
         assert "len(modules) == 95" not in source
-    assert "len(roots) == 30" in preflight
+    assert "len(roots) == 33" in preflight
     assert "len(roots) == 27" not in preflight
 
 

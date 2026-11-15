@@ -865,9 +865,11 @@ def test_the_stage_eight_source_files_are_exactly_the_fifteen_plan_paths(
     # and store modules of Stage 9 Task 4, the four persistence increments of
     # Stage 9 Task 5, the three port, finalizer and recovery modules of Stage 9
     # Task 6 and the three run-manifest, finalization and comparison modules of
-    # Stage 9 Task 7 (Stage 9 plan section 2.6, the Task-3-excluded branch).
-    assert len(_ALLOWED_SOURCE_FILES) == 135
-    assert len(_source_files(repository_root)) == 135
+    # Stage 9 Task 7 (Stage 9 plan section 2.6, the Task-3-excluded branch), plus
+    # the runtime and application-port modules of Stage 10 Task 1 (Stage 10 plan
+    # section 6.11), 135 -> 137.
+    assert len(_ALLOWED_SOURCE_FILES) == 137
+    assert len(_source_files(repository_root)) == 137
     assert set(_STAGE9_PERSISTENCE_FILES) <= _ALLOWED_SOURCE_FILES
     assert set(_STAGE9_PERSISTENCE_FILES).isdisjoint(STAGE8_SOURCE_FILES)
     on_disk = {
@@ -893,12 +895,18 @@ def test_each_stage_eight_import_root_is_confined_to_its_named_modules(
     assert len(_SQLALCHEMY_IMPORTERS) == 12
     assert len(_ALEMBIC_IMPORTERS) == 4
     assert _ALEMBIC_IMPORTERS < _SQLALCHEMY_IMPORTERS
-    # Every exemption pair of the Stage 5 guard is one of these importers' roots.
+    # Every exemption pair of the Stage 5 guard is one of these importers' roots,
+    # except the Windows process controller's ``subprocess`` pair and the two
+    # pairs of Stage 10 Task 1 (Stage 10 plan section 6.11): ``time`` and
+    # ``secrets`` in ``cli/runtime.py``.
     stage8_pairs = {
         (label, root) for root, labels in _ROOT_CONFINEMENT.items() for label in labels
     }
     assert stage8_pairs <= set(_INFRASTRUCTURE_EXEMPTIONS)
-    assert len(_INFRASTRUCTURE_EXEMPTIONS) == len(stage8_pairs) + 1
+    runtime_pairs = {("cli/runtime.py", "time"), ("cli/runtime.py", "secrets")}
+    assert runtime_pairs <= set(_INFRASTRUCTURE_EXEMPTIONS)
+    assert runtime_pairs.isdisjoint(stage8_pairs)
+    assert len(_INFRASTRUCTURE_EXEMPTIONS) == len(stage8_pairs) + 3
 
 
 def test_every_persistence_module_imports_exactly_its_listed_crypto_lab_modules(
@@ -1063,11 +1071,13 @@ def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
     # deferred names -> 18; Task 5: paths -> 129, exemption pairs 13 -> 17; Task 6:
     # paths -> 132, deferred names -> 15, subprocess importers 12 -> 13; Task 7:
     # paths -> 135, deferred names -> 13, registry and files -> 48, profiles -> 20;
-    # the rest is unchanged.
-    assert len(_ALLOWED_SOURCE_FILES) == 135
-    assert len(_ALLOWED_IMPORT_ROOTS) == 30
+    # the rest is unchanged. Stage 10 plan section 6.11, Task 1: paths 135 -> 137,
+    # import roots 30 -> 33 (`time`, `secrets`, `signal`), exemption pairs
+    # 17 -> 19 (`cli/runtime.py` with `time` and `secrets`).
+    assert len(_ALLOWED_SOURCE_FILES) == 137
+    assert len(_ALLOWED_IMPORT_ROOTS) == 33
     assert len(_DEFERRED_DEFINITIONS) == 13
-    assert len(_INFRASTRUCTURE_EXEMPTIONS) == 17
+    assert len(_INFRASTRUCTURE_EXEMPTIONS) == 19
     assert len(_EXPECTED_READER_IMPLEMENTATIONS) == 5
     assert len(_SUBPROCESS_IMPORTERS) == 13
     assert len(_EXPECTED_RUNTIME_REQUIREMENTS) == 4
