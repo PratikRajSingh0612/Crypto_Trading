@@ -1,0 +1,100 @@
+[build-system]
+requires = ["hatchling==1.31.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "crypto-lab-offline-data"
+version = "0.1.0"
+description = "Offline historical candle data for Crypto Trading Lab (Project 2, first slice)"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "crypto-trading-lab",
+]
+
+[dependency-groups]
+dev = [
+  "colorama==0.4.6",
+  "coverage==7.15.4",
+  "hatchling==1.31.0",
+  "iniconfig==2.3.0",
+  "librt==0.15.0",
+  "mypy==1.20.2",
+  "mypy-extensions==1.1.0",
+  "packaging==26.3",
+  "pathspec==1.1.1",
+  "pluggy==1.6.0",
+  "pygments==2.20.0",
+  "pytest==8.4.2",
+  "pytest-cov==6.3.0",
+  "ruff==0.16.2",
+  "trove-classifiers==2026.6.1.19",
+]
+
+[tool.uv]
+no-build-isolation = true
+python-downloads = "manual"
+python-preference = "only-managed"
+constraint-dependencies = [
+  "alembic==1.20.0",
+  "annotated-types==0.8.0",
+  "greenlet==3.5.6",
+  "mako==1.4.1",
+  "markupsafe==3.0.3",
+  "pydantic==2.13.4",
+  "pydantic-core==2.46.4",
+  "pyyaml==6.0.3",
+  "sqlalchemy==2.0.54",
+  "typing-extensions==4.16.0",
+  "typing-inspection==0.4.4",
+]
+
+[tool.uv.sources]
+crypto-trading-lab = { path = "../", editable = false }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/crypto_lab_offline_data"]
+dev-mode-dirs = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.format]
+line-ending = "lf"
+
+[tool.ruff.lint]
+select = ["B", "DTZ", "E", "F", "I", "PT", "RUF", "S", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101"]
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+addopts = [
+  "--strict-config",
+  "--strict-markers",
+  "--cov=crypto_lab_offline_data",
+  "--cov-branch",
+  "--cov-report=term-missing",
+  "--cov-fail-under=98.61",
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["crypto_lab_offline_data"]
+
+[tool.coverage.report]
+fail_under = 98.61
+precision = 2
+show_missing = true
+skip_covered = true
