@@ -1,0 +1,49 @@
+[project]
+name = "crypto-lab-vectorbt-adapter"
+version = "0.0.0"
+description = "Isolated VectorBT Community adapter environment for Crypto Trading Lab (Project 3 bootstrap)"
+requires-python = ">=3.12,<3.13"
+# Owner authorization 2026-11-15: vectorbt pinned exactly to 1.2.0, Community edition, no extras.
+dependencies = [
+  "vectorbt==1.2.0",
+]
+
+[dependency-groups]
+# Test and quality tooling for the focused checks, pinned to exactly the versions the
+# offline_data sub-project already locks (no new tool versions).
+dev = [
+  "colorama==0.4.6",
+  "coverage==7.15.4",
+  "iniconfig==2.3.0",
+  "librt==0.15.0",
+  "mypy==1.20.2",
+  "mypy-extensions==1.1.0",
+  "packaging==26.3",
+  "pathspec==1.1.1",
+  "pluggy==1.6.0",
+  "pygments==2.20.0",
+  "pytest==8.4.2",
+  "pytest-cov==6.3.0",
+  "ruff==0.16.2",
+]
+
+[tool.uv]
+# A virtual project at bootstrap: nothing of this sub-project is built or installed.
+package = false
+# The lock covers exactly this host's platform. Wheels-only is enforced by the launcher's
+# lock/sync --no-build and the controller's lock inspection; required-environments adds wheel
+# coverage for packages that publish no source distribution.
+environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
+required-environments = ["sys_platform == 'win32' and platform_machine == 'AMD64'"]
+# The next four are inert under scripts/invoke-vectorbt-uv.ps1 (it passes --no-config); the launcher's own
+# command-line flags (--no-build, --no-build-isolation, --managed-python, --no-python-downloads) are the controls.
+no-build-isolation = true
+no-build = true
+python-downloads = "manual"
+python-preference = "only-managed"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
