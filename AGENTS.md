@@ -24,6 +24,9 @@
 - Use `Decimal` for authoritative financial values and timezone-aware UTC timestamps when those types are introduced.
 - Reject unknown fields at future configuration, schema, protocol, and artifact boundaries.
 - Never install or import a real trading engine during Project 1.
+  Owner exception (2026-11-15, Project 3 only): the isolated `vectorbt_adapter/` sub-project may install and import
+  VectorBT Community 1.2.0 in its own `vectorbt_adapter/.venv` through its own launcher. Project 1's source,
+  environment, lock, tests, build and runtime stay engine-free, and the core's engine and dependency guards are unchanged.
 - Read `tools/gitnexus/outcome.json` before any GitNexus action. When it records `DISABLED_WITH_EVIDENCE`, do not install, configure, or invoke GitNexus; use the documented manual source, reference, and diff fallback.
 - When `tools/gitnexus/outcome.json` records `ENABLED`, use only the committed project-local wrappers and exact lock. Never use a PATH-discovered or user-profile launcher, and keep GitNexus optional, project-scoped, proven read-only, advisory, and outside product, build, test, runtime, and acceptance dependencies.
 - GitNexus absence or failure must never block application implementation, tests, builds, reviews, runtime operation, acceptance, or Stage 3 planning.
