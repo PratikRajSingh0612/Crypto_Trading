@@ -1,0 +1,64 @@
+ADOPT THIS STANDING DELIVERY MANDATE AND BEGIN
+
+The prompt package is at:
+C:\Users\59557\Documents\ClaudePromptPacks\crypto_lab_prompt_package
+
+Read 01_MISSION_AND_AUTHORITY.md and 02_SKILLS_AND_AGENTS.md first, then
+05_CURRENT_HANDOFF.md. Read the other package files only as relevant.
+This is a prompt package using my existing installed skills, not a request
+to generate or install another skill, plugin, hook or agent framework.
+
+I authorize you to own delivery of the full local seven-engine research
+and simulated-trading application described by the repository, through
+Projects 1-13, in dependency order. The package defines the scope and
+limits of that delegation. Do not truncate the mission to a fake demo or
+to Project 1, and do not start later-project features prematurely.
+
+Use the repository's actual current instructions, specifications, source,
+Git state and acceptance evidence. Do not treat historical hashes or
+status prose as proof that a current gate passed.
+
+This mandate replaces prior conversational instructions to stop after each
+routine task or after one within-scope correction pass. You may prepare,
+review, revise and implement in-scope detailed plans under delegated
+acceptance, commit coherent verified changes, publish accepted branches,
+and proceed to the next authorized milestone without asking me to say
+continue. Record delegated acceptance honestly; do not fabricate my
+approval of an unseen design or bypass a mandatory tool/skill approval.
+
+Keep all permanent safety boundaries and explicit exceptional permissions.
+GitNexus remains DISABLED_WITH_EVIDENCE. Do not use any GitNexus skill.
+Do not deploy to Vercel/cloud, add real-money trading or credentials,
+disable endpoint security, bypass permissions, or install tooling merely
+because an available skill suggests it.
+
+Finish the pending Stage 8 interrupted-writer ownership correction first,
+unless actual evidence shows it already finished. Then close Stage 8,
+complete Project 1 Stages 9 and 10, and proceed through the remaining
+projects using the roadmap in 03_PRODUCT_ROADMAP.md.
+
+Work autonomously on routine implementation, tests, within-scope review
+findings and accurate documentation. Use real integrations for acceptance
+of engine projects; mocks remain test doubles, never completion evidence
+for an engine that has not executed.
+
+Use at most two auxiliary workers and one writer per worktree; run heavy
+verification serially. Load relevant installed skill instructions, not
+all skills. Keep progress resumable in the existing ignored delivery
+records. Do not overwrite AGENTS.md or initialize a replacement project.
+
+Full verifier execution stays on the established human-foreground route.
+Prepare one exact command when genuinely ready, validate its evidence
+when I return the result, and continue the authorized sequence. Do not
+launch it in a reaped background command, clear consumed markers, weaken
+gates or repeat failed suites until green.
+
+New downloads, material architecture conflicts and other genuine external
+permissions remain explicit gates as defined in the package. Batch them;
+do not ask me questions that committed documents already answer.
+
+Begin now: reconcile current state and active ownership, identify the next
+unaccepted item, give a short execution plan, and perform the first
+unblocked work. Do not respond with only another giant plan or a request
+for permission to begin. Keep going within the active session while work
+is authorized and unblocked; never claim to continue after it ends.

@@ -1,0 +1,119 @@
+S9-T8 OWNER BOUNDARY REPORT (read-only inspection of the live Stage 9 root Crypto_Lab_Dev_Controller at dce89b47, its journal, state, checkpoint, policy, the accepted plan at gate sha256 4335f8fb… and the saved worker reports; nothing was launched, run, cleared or edited).
+
+1. Current Workstream A state
+
+Item: Active task
+Journal fact: S9-T8 (plan Task 8: composition over the supervisor and SQLite, owner
+variants, post-run token scans)
+────────────────────────────────────────
+Item: S9-T8 state
+Journal fact: BLOCKED by the advisor, call state-fae5471f47b0, 2026-11-09T18:40:20Z;
+supervisor stopped 18:40:21Z
+────────────────────────────────────────
+Item: Attempts
+Journal fact: 01 (15:52Z to 17:18Z, then REQUEST_CHANGES 17:27Z), 02 (17:27Z to 18:37Z,
+then BLOCKED)
+────────────────────────────────────────
+Item: Product branch / HEAD
+Journal fact: project-1-stage-9-implementation at 97f57d6e42fffe1312d2aeb399feb6427e77db51
+(the S9-T7 commit, published to origin 15:49:57Z; remote head identical); main unchanged
+ at 079395be
+────────────────────────────────────────
+Item: Preserved working changes
+Journal fact: 3 modified: tests/integration/artifacts/test_finalization_crash_child.py,
+tests/persistence_support/artsupport/supervised.py (+1510 /
+then BLOCKED)
+────────────────────────────────────────
+Item: Product branch / HEAD
+Journal fact: project-1-stage-9-implementation at 97f57d6e42fffe1312d2aeb399feb6427e77db51
+(the S9-T7 commit, published ead identical); main unchanged
+ at 079395be
+────────────────────────────────────────
+Item: Preserved working chang
+Journal fact: 3 modified: tests/integration/artifacts/test_finalization_crash_child.py,
+tests/persistence_support/artifacts.py, tests/persistence_support/supervised.py (+1510 /
+ -25); 2 untracked:
+tests/integration/persistence/test_stage9_supervised_finalization.py,
+test_stage9_token_absence.py; no core source touched
+─────────────────────────────
+Item: Last PASSED verification / review
+Journal fact: verify-3f21fe50adbd PASSED 15:33:15Z and review-5b9f2add APPROVE 15:47:08Z;
+subject: the S9-T7 candidate over ab3b6de4, committed as 97f57d6e. No verifier has run
+on S9-T8                                                                             ─────────────────────────────
+Item: Worker-side result of attempt 02
+Journal fact: two-module focused run: 60 passed, 4 failed; crash-child module 7 passed;
+ruff and mypy profiles exit 0
+────────────────────────────────────────
+Item: Processes
+Journal fact: no relay, supervisor or verifier running; no STOP or PAUSE file
+
+Stale labels, not facts: the state file lists S9-T8 under closed_tasks although it isBLOCKED, not accepted; S9-T3  never appears in journal orstate because its precondition was never recorded. One orphan git rev-parse from a   controller pytest run of 2026live; it is unrelated and wasleft alone.
+
+Original BLOCKED reason (console log line 45, verbatim): "Owner clarification is required for the conflicting audit requirements: approve a reviewed extension defining accurate supervision audit actions and their schema implications, or explicitly amend Task 8 tpermit the LogRecord projectiisting action would misstatethe recorded fact. Preserve all five working files and the four ordinary failing regressions. After this contract resolution, Task 8 step 3 still requires separately scoped owning-task correctionommit; the existingprovenance-scoped validation ruling remains applicable. No full verification or acceptance is justified yet."
+
+2. The audit-contract conflict
+
+What the accepted plan requires (plan file docs/superpowers/plans/2026-08-10-project-1-atifact-finalization-recovery-on-plan.md):
+- Task 8 file map, lines 2721-2725: the test support "projects every SupervisionTraceEntry into an AuditEvent through the Stage 9 sink, the test-support stand-in for the Stage 10 projection of O-13". Section 1.5 item 13, lines 288-291, says the same.
+- Section 3.2, lines 1112-1114: AuditAction is "a closed set of 25 actions"; Task 9's pin, line 2799: "AuditAction has 25 members"; section 2.6, line 701, enforces closed sets by exact equality.
+- Task 8, lines 2729-2731: interfaces produced "None (test support only)", schema changes "None", guard or dependency transitions "None (no source file; no new importer)". Step  3, lines 2741-2744: a sourcunder its owning task's fix:prefix before Task 8's commit.                                                        - Reading 14, lines 602-613, sion (spec 30.3 bullets 4and 5) to Stage 10. The specification itself (section 11.3 line 586, section 30.3 lines 2218-2219) lists required audit events but enumerates no action values and names no extension authority; the closed 25 is a plan decision.
+
+What the implementation does: tests/persistence_support/artifacts.py:1881 (project_tracewrites one LogRecord per tracn log sink (event codeSUPERVISION.<kind>, correlation id = invocation id, redacted details), never an AuditEvent; its declared reading at lines 1701-1705 states that no supervision action   exists in the closed vocabulaon would have to fabricate one. The enum (src/crypto_lab/audit/models.py:61-86, 25 members, none for launch, PID, exit or cleanup), the schema schemas/audit/audit-event-v1.schema.json, and three guards      (tests/unit/audit/test_audit_tests/unit/test_schema_registry.py:1330) all pin 25.                                    
+What the tests expect: no test asserts the projection at all. The four failing regressions are unrelated production defects:
+
+Failing test: test_every_crash_point_through_production_registrar[before_prepared-0-EVIDENCE]         Cause: src/crypto_lab/artifactines staged core candidates
+whenever the invocation's cleanup is complete (RV-10), against the plan's CP-1 EVIDENCE
+cell (line 1652: revalidate independently, resume from phase 2)                         Owning task: Task 6
+────────────────────────────────────────
+Failing test: test_owner_variants_end_to_end[EXPERIMENT], [DATASET], [STRATEGY]         Cause: finalize_evidence refuAL_LEAKAGE because the *_INPUT
+kinds (src/crypto_lab/experiments/finalization.py:347-349) have no canonical-contract   entry, so the hash-equal byte5) are refused
+Owning task: Task 7 with Task 4's validation, under the provenance-scoped ruling
+
+Why all three cannot hold as written: an AuditEvent projection needs either a 26th action (which breaks the enum, the schema, three guards and Task 9's pin, all outside Task 8's writable set and its "no sourborrowed action (a false factin the append-only, authoritative audit table). The implementation's LogRecord path avoids both, but contradicts the literal stand-in sentence.                             
+Existing rulings: the RESULT LEASE RULING (2026-11-08, checkpoint lines 558-586) concerns lease expiry and takeover; the PROVENANCE-SCOPED CANONICAL EVIDENCE VALIDATION ruling (2026-11-09, lines 588-660) concerns the token-shape scan and mentions audit only as a  no-raw-token sink. Neither de, so this issue is not resolved by existing authorization. The provenance ruling does govern the correction path for failures 2 to 4, which the advisor confirmed.
+
+Recommended disposition (one): an owner clarification recorded in the checkpoint, plan bytes and gate hash unchanged, amending Task 8's stand-in sentence so that the test-support projection goes through the production log sink as LogRecord lines (plan reading 15 already calls the log record an audit contract), never as an AuditEvent; borrowing an action is refused; the production projection, the supervision AuditAction members and the schema minor bump are re-recorded as the Stage 10 O-13 obligation. Nothing in production changes, no assertion is deleted, and the guarantees stay intact: schema closure (25 members, ait immutability (no fabricatedrows), provenance (audit history equals durable history in every facet), security (redaction fixed point on every line; the post-run token-absence scan already covers thelogs root).
+
+3. The exact turn limit
+
+Fact: Key and file
+Value: max_total_turns in Crypto_Lab_Dev_Controller/config/controller.policy.json:78
+────────────────────────────────────────
+Fact: What it counts
+Value: mission-wide advisor calls: journal.add_turn once per advisor reply              (advisor.py:696) and once fornding check (handoff.py:311);
+persisted across relay restarts                                                         ─────────────────────────────
+Fact: Enforcement
+Value: relay.py:375 before every loop iteration (RelayStopped "turn ceiling reached; raise
+max_total_turns in the reviewed policy") and advisor.py:468 before any call
+(BudgetExhausted)                                                                       ─────────────────────────────
+Fact: Not covered
+Value: worker turns, task attempts, process runtime; the per-child timeout              max_runtime_s_per_child 3600 nes 79 and 114) is a separate
+safety timeout and stays
+────────────────────────────────────────                                                Fact: Configured / used / rem
+Value: 200 / 178 / 22; not yet reached
+────────────────────────────────────────
+Fact: Eligible for DISABLED                                                             Value: no: policy.py:630 lista positive integer; theDISABLED
+literal is confined to the monetary, retry, per-task-turn and total-runtime keys (policy
+ lines 69-73)
+────────────────────────────────────────
+Fact: Authority
+Value: introduced at 200 by controller commit c533972 (2026-10-31) and retained unchanged
+by the policy edits of 2026-11-04, 2026-11-06 and 2026-11-07; the 2026-11-02            authorization disabled only mhe 2026-11-03 one only
+max_total_runtime_s; the policy header says raising a limit is "a deliberate human edit"
+Consumption so far: accepted tasks used between 16 and 22 advisor turns each; S9-T8 has used 9 calls over two attempts. Remaining Stage 9 work after the ruling is the S9-T8 corrections and acceptance, Task 9, and stage closure, roughly 45 to 60 calls. The 22 left are insufficient. Smallest change: raise max_total_turns from 200 to 260 as a reviewed human policy edit, committed on the live root; no counter reset, no change to  any timeout.
+
+4. Proposed owner ruling (ready to approve)                                             
+OWNER RULING, S9-T8 SUPERVISION TRACE PROJECTION AND TURN CEILING
+1. Task 8's stand-in clause (plan lines 2721-2725 and 288-291) is clarified, plan bytes    and gate hash unchanged: t SupervisionTraceEntry iswritten through the production LogSink / JSON Lines writer as LogRecord lines (event code SUPERVISION.<kind>, correlation id = invocation id, redacted details), never as    an AuditEvent; borrowing aused; AuditAction stays at 25;the production projection, the supervision actions and the audit-event schema minor bump are the Stage 10 O-13 obligation.                                               2. The four failing regressiorected before Task 8'simplementation-hash commit under their owning tasks' fix: prefixes: the RV-10           predicate in artifacts/recVIDENCE) and the *_INPUTcanonical-contract qualification in experiments/finalization.py with artifacts/validation.py (Task 7 and Task 4, case 4.6), within the 2026-11-09 provenance ruling's qualifications. No assertion is deleted; the five working files are preserved.
+3. max_total_turns is raised from 200 to 260 by the operator's reviewed policy edit unde   this ruling; no counter is timeout is unchanged.
+
+Minimum affected files: controller config/controller.policy.json (one integer) and      config/mission_checkpoint.md the live root; productsrc/crypto_lab/artifacts/recovery.py, src/crypto_lab/experiments/finalization.py (and artifacts/validation.py if its qualification list is the right site), their focused testunder tests/unit, and the fivenum, schema or migrationchange.
+
+Focused tests to prove it: the four currently failing tests GREEN with the Task 8 RED list; one focused proof that recovery revalidates staged core candidates and resumes from phase 2 in the CP-1 EVIDENCE cell; one that *_INPUT kinds accept hash-equal canonical bytes and still refuse non-canonical token-shaped bytes; test_action_set_is_exactly_twenty_five unchanged; the token-absence scan over the logs  root.
+                                                                                        Gates that remain: focused RE independent review, both fullverifiers under the host lock, advisor ACCEPT_TASK, controller commit and publication, merged-main verification before any main push, every standing safety boundary.
+
+Next action after authorization: record the ruling in the live checkpoint, apply the    one-integer policy edit, commactly one supervisor (the pilot reruns), and let the advisor dispatch S9-T8 attempt 03 with the corrective instructions.No STOP or PAUSE exists to cl
+
+5. Follow-ups kept separate (recorded, not started)                                     - Controller: the supervisor  / COMPLETE as error; statelabels lag the journal (P2-T3 ACCEPTED after publication, slice task BLOCKED, S9-T8 in  closed_tasks); the advisor'arrower bounds than thedispatch and was refused once; competition-scan re-sample, pilot framing, reviewer JSON parsing, A's host-lock adoption.
+- Project 2 minors from review-442d0800: the README exit-2 wording, and the entry-point scanner's looser admitted call shapes. Project 2 slice 1 stays accepted and closed; the mis-classification is not a product failure and triggers no re-verification.          - The Project 3 VectorBT read by a separate read-only worker and will be reported on its own.
+                                                                                        OWNER_DECISION_REQUIRED: (1) larification above (LogRecordprojection through the production log sink, no new or borrowed AuditAction, supervision audit actions re-recorded as the Stage 10 O-13 obligation, with the Task 6 and Task 7/4 fix: corrections before Task ising max_total_turns from 200to 260 as a human policy edit with no counter reset.

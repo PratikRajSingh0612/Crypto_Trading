@@ -1,0 +1,17 @@
+{
+  "checked_in": "Chat container; not user Windows host",
+  "checks": [
+    "Disposable-repository collection: content/status preserved, exact task headings extracted",
+    "Existing output and in-worktree output refused",
+    "All JSON documents parsed",
+    "Three rule templates checked for valid declared frontmatter and bounded length"
+  ],
+  "not_done": [
+    "Windows product tests",
+    "Antigravity client loading",
+    "Sandbox enforcement",
+    "Local migration",
+    "Git publication",
+    "Recovery of original Deep Research ZIP"
+  ]
+}

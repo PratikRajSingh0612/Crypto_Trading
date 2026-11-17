@@ -1,0 +1,10 @@
+Integrate only the identified accepted source commits using the standing Git authority.
+Use an isolated integration worktree; preserve actual parents and product changes.
+Check current local/remote main and account for any S10 branch already ahead.
+Review conflicts, verify the actual combined subject and consumed installed package,
+and exercise the real applicable migration/repository behavior on disposable databases.
+Run heavy gates serially. Prepare required tracked documentation before its final gate.
+Keep private acceptance evidence separate; do not alter verified source afterward.
+Promote by expected-ancestor, non-force operations and required main-checkout verification.
+Confirm the actual remote SHA. On interruption reconcile, never duplicate or overwrite.
+No retired controller/model calls, fabricated advisor tokens or partial-tree acceptance.

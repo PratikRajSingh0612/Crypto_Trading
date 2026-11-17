@@ -1,0 +1,23 @@
+Take over Crypto Trading Lab using this attached/local handoff package.
+
+Read START_HERE.md, SOURCE_LIMITATIONS.md and prompts/MASTER_MISSION.txt.
+Follow the master mission with Antigravity/Google models only. The older Claude
+and Codex documents in sources/ are historical evidence, never launch instructions.
+
+Begin read-only: inspect the actual existing product repository/worktrees, the
+accepted local plans, source/tests and former controller journals. Resolve current
+HEAD, dirty/untracked files, active processes, local integration and remote refs.
+Do not install, run a heavy verifier, edit source, reset history or start another
+writer before this reconciliation and safe retirement of legacy dispatch.
+
+Reuse accepted work and the existing VectorBT bootstrap. Do not recreate completed
+projects. Identify the actual next task, likely Stage 10 continuation or a prerequisite
+correction, and one independent secondary task only if genuinely ready.
+
+Install the small persistent rule templates deliberately after checking inherited
+workspace rules. Adapt obsolete provider/controller process clauses in one recorded
+amendment; preserve behavioral contracts and acceptance evidence.
+
+Then proceed autonomously under the programme mandate. Report actual actions and
+results, not a promise of future execution. If a required local source is missing,
+name it precisely without fabricating its content or restarting research unnecessarily.

@@ -1,0 +1,22 @@
+RESUME THE EXISTING CRYPTO LAB DELIVERY MISSION
+
+Read the package at:
+C:\Users\59557\Documents\ClaudePromptPacks\crypto_lab_prompt_package
+
+Read 01_MISSION_AND_AUTHORITY.md, 02_SKILLS_AND_AGENTS.md and the current
+working STATE/BACKLOG/DECISIONS records identified there. Then reconcile
+actual Git, worktree ownership, pending processes, markers and evidence.
+05_CURRENT_HANDOFF.md is historical context, not permission to reset to
+its old commit or repeat completed work.
+
+Continue the earliest unaccepted dependency-ready item under the standing
+mandate. Do not ask for routine permission to continue, rewrite accepted
+plans, repeat passing verification or regenerate completed features.
+Honor real human/acquisition/verifier gates, current tool permissions and
+permanent product boundaries. GitNexus remains disabled.
+
+If a human verifier was pending, read the exact new evidence first and
+validate it; a returned exit code alone is not completion. Never relaunch
+a consumed marker automatically.
+
+Give a short state/next-action recap, then do the next unblocked work.

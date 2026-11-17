@@ -1,0 +1,86 @@
+TASK6_COMPLETE
+
+Commit and scope
+
+1. Task 6 base commit: edc71027d4e38cccc8fafde18b0f8cd2876dd390 (Task 5).
+2. Task 6 implementation commit: 0f7346b81b30b0f8eedac9ebf55ffb410115c5ac.
+3. Commit parent: edc71027d4e38cccc8fafde18b0f8cd2876dd390, exactly one paren merge base unchanged at 67c684c9….
+1. Task 6 base commit: edc71027d4e38cccc8fafde18b0f8cd2876dd390 (Task 5).
+2. Task 6 implementation commit: 0f7346b81b30b0f8eedac9ebf55ffb410115c5ac.
+3. Commit parent: edc71027d4e38cccc8fafde18b0f8cd2876dd390, exactly one paren merge base unchanged at 67c684c9….
+4. Commit message: subject feat: add exit semantics and command outcome reconciliation (verbatim from the plan), a body naming plan sections 3.7, 3.11, 5.4, 9.1–9.3 and the §2.6 guard transitions, and the Co-Authored-By trailer.
+5. Changed paths (exactly eight): modified src/crypto_lab/adapters/__init__.py, src/crypto_lab/adapters/commands.py, tests/safety/test_stage3_boundaries.py,
+   tests/unit/test_package_layout.py; added src/crypto_lab/adapters/exit_code/reconciliation.py, tests/unit/adapters/test_exit_semantics.py,tests/unit/adapters/test_command_reconciliation.py. 4956 insertions, 8 deletions.
+6. Contract derived from the plan: the 27-item derivation is recorded in the ignored ledger (.superpowers/sdd/stage6/task6-ledger.md, section 3) before the first edit, with the reconciliation matrix (section 4) and fifteen declared readings (section 5).
+
+What was produced
+
+7. Public surface: models SemanticExitReading, CandidateObservation, SemanticReconciliation, CommandResult; exception ReconciliationRuleViolation; helpers semantic_exit_reading, reconcile_describe, reconcile_validate, reconcile_run. No new enum, no new exported constant.
+8. Field order: SemanticExitReading: command_kind, native_exit_value, processutput_required, diagnostic_code, verdict, run_target_state,agreeing_validation_outcome, agreeing_semantic_statuses, declared_failure_code. CandidateObservation: relative_path, observed_size_bytes, observed_sha256, contains_attempt_token.
+   SemanticReconciliation: command_kind, verdict, run_target_state, semantic_iagnostics, sanitized_manifest, sanitized_validation_result, negotiation,descriptor. CommandResult: invocation, parsed_output, parsed_output_source_hash, protocol_integrity, accepted_events, diagnostics, stderr, cancelled, timed_out.
+9. CommandResult contract: a terminal invocation is required; the parsed-output branch must match the command kind; a present output requires its source hash; cancelled and timed_out are true exactly for the matching terminal state; a PROTOCOL_FAILED invocation requires VIOLATED integrity while EXITED beside VIOLATED stays representable for the precedence check; events are empty for DESCRIBE, contiguous from sequence 1 and name the invocation and its run; diagnostics are unique. It carries no verdict and creates no success.
+10. Parsed-output union: BootstrapDescriptorEnvelope for DESCRIBE (the plan's declared reading of the spec's descriptor member), AdapterValidationResult for VALIDATE,
+    AdapterResultManifest for RUN, or MISSING; foreign branches are rejected
+11. Process-exit mapping: Stage 5's process_exit_category_for is consumed, not redefined. The reading is total over CommandKind × the 32-bit span: 0, 10, 20, 30, 40, 50, 60, 70 map
+    exactly once; every other in-span value (negative or positive) is the "ote; bool and non-int raise TypeError; out-of-span raises ValueError;output_required is true exactly for DESCRIBE 0 and VALIDATE/RUN 0, 20, 30.
+
+Reconciliation evidence
+
+12. DESCRIBE: contamination before everything; every nonzero exit with and without output (exit 30 without output is ADAPTER.UNAVAILABLE); exit 0 absent or header-less output; identity
+    before schema for name, version, hash and absent fields; recorded failurerries descriptor and negotiation; no run target ever.
+13. VALIDATE: every recognized exit and the unrecognized row against every ValidationOutcome (36 cells) plus the absent-output rows; identity, stale-attempt, wrong token hash and mis-identified-and-malformed cases report identity; exit 40 after VALID records the output as evidence.
+14. RUN: every exit against every SemanticStatus (63 cells) plus the absent-menance fields both directions for negotiated versions; FINAL_RESULT path, hashand status; leakage with and without a manifest; declaration equality; observation absence, size and hash; warning superset; approximations against the slot; exit-0 FAILED as a retriable truthful failure; exit 70 both rows; late NOT_APPLICABLE and UNAVAILABLE citing the explaining adapter diagnostic with an empty causal list.
+15. Process versus semantic separation: four distinct layers; SUCCESS_ENGINE_n target by both models; RESULT_FINALIZATION_ELIGIBLE proposes no run targetand carries the sanitized manifest.
+16. Protocol-integrity precedence: the caller's protocol failure is the primary before every other check on every exit, including over a leaking candidate and an absent manifest; it
+    must carry one of the six parser rejection codes (review hardening).
+17. Missing output: required exits yield the command's invalid code with no presence detail; non-required exits keep the exit's code with output_present: false or manifest_present:
+    false.
+18. Malformed output: header-less bytes yield the command's generic code with byte length and source hash; a mis-identified and malformed document reports identity first; no untyped dictionary enters.
+19. Identity and stale output: attempt 1's validation result handed to attempt 2 reports identity on invocation, request and run; a foreign-invocation manifest reports identity; details carry field names, never values.
+
+Hashing, tokens, determinism
+
+20. Hash semantics: result_hash classified A, a canonical semantic self-hash over the validated model minus itself, hashed directly outside the profile envelope; plan and code agree.
+    Task 6 recomputes no hash and compares only the FINAL_RESULT source hash ource hash.
+21. Raw-token exclusion: every reconciliation, diagnostic and describe or validate CommandResult is asserted token-free in canonical bytes and repr; the manifest branch of CommandResult is the documented trust-class-W exception with repr=False.
+22. No false success: a 36-row adversarial table covering every prompt row (nbranch, wrong invocation, run and token, protocol failure, favorable output onfailure, timeout, cancellation and unknown exits, stale output, favorable output after protocol failure) never reaches DESCRIBED, VALIDATED_READY or RESULT_FINALIZATION_ELIGIBLE.
+23. Immutability: all four models are frozen strict CanonicalModels; frozen assignment and unknown fields are rejected.
+24. Determinism and purity: identical inputs under a moved now_utc mint identical diagnostic identities; the modules import only __future__, dataclasses, datetime, typing, pydantic and crypto_lab; subprocess, socket, environment, filesystem, clock and random are monkeypatched to raise during full reconciliations.
+25. Diagnostics: fifteen Stage 6 codes are emitted (plus the passed-through parser primary); the census is pinned; exactly one diagnostic per reconciliation; messages are literals;
+    details are pure functions of the inputs.
+
+Test and gate evidence
+
+26. Focused RED: A (guards alone name both paths, import probe ModuleNotFoundError), B (both modules fail collection with ImportError), C1 (walk names exactly CommandResult), C2 (37 == 38), D and E (review hardening: KeyError not raised; foreign protocol failure did not raise).
+27. Focused GREEN: the two Task 6 modules 421 passed; with the guard files 497, then 499 after hardening and 500 with the labelled preventive tests.
+28. Cumulative: plan Step 4 (tests/unit/adapters tests/safety) 1864 passed, 1s/unit tests/safety tests/architecture) 7354 passed, 2 approved skips.
+29. Complete verifier (final tree, alone): 7468 passed, 2 skipped (exactly the two approved skips), total branch coverage 98.17% against the 97.69% floor, wheel and sdist built, schema distribution clean, whitespace clean, exit 0.
+30. Ruff format: 191 files already formatted.
+31. Ruff lint: all checks passed.
+32. Strict mypy: success over 180 source files.
+33. Schema state: registry exactly 27, schema-generate-check clean, nothing written; Task 6 owns no schema.
+34. Existing schemas: byte-identical (schema check and distribution both clean).
+35. Guard transitions: source allowlist 80 to 82; deferred definitions 38 to 37 releasing exactly CommandResult (literal set, count, docstring); PACKAGE_MODULES +2; seven-name mutation list unchanged (CommandResult was not in it); registry 27, HashingProfile 12, REQUEST_OPERATIONS 16, import roots 22 untouched.
+
+Handoffs, review, integrity
+
+36. Task 4 handoffs: ledger O(n) acceptance carried to Task 7 (Task 6 performidentity byte-only samples preserved (no sample drawn).
+37. Task 5 handoffs: parser recursion and decoded-object handoff verified closed from committed tests; the CommandResult and reconciliation deferral matches the merged Task 6 section; schema-version pins carried to Task 9.
+38. Independent review: one fresh read-only reviewer, APPROVED_WITH_NON_BLOCKING_NOTES; 22 of 24 dimensions PASS, 2 NOTE; every plan-level and task-local declared reading confirmed with file and line evidence. No blocking finding, so no second reviewer.
+39. Findings and dispositions: six non-blocking notes. Two ledger wording corrections (declaration-order field names; the numbered precedence order with the recorded path code at check 4). One private rename of the observation bound. Two hardened test-first: constant-keyed exit messages with no silent fallback, and the parser-rejection code set on the protocol-failure primary (the reviewer's category pin would have excluded the parser's path-located artifact code, so the code set was used instead). The sixth was the then-pending
+    verifier, now run twice.
+40. Commit integrity: one parent, exact subject, exactly the eight paths, no pyproject, lock, schema, docs, script, experiments or Task 7 path.
+41. Final Git status: clean worktree, empty index, git diff --check clean.
+42. Offline lock-check after the commit: resolved 30 packages, exit 0.
+
+Confirmations
+
+43. Task 7 was not started (no experiments/semantic_outcome.py, no request orit).
+44. Project Stage 7 was not started.
+45. No network access occurred; every command ran through the offline launcher profiles.
+46. GitNexus was not invoked.
+47. No remote Git operation occurred.
+48. No real adapter, trading engine, exchange, market data, backtest, databaswallet, tax, UI, LLM, Docker, cloud or server behavior was added.
+49. No process was launched, no artifact was finalized, no RunManifest was created, and no Stage 5 lifecycle record was mutated; the reconcilers are pure over their arguments and return proposals only.
+
+Session ends here; Task 7 is not begun in this session.

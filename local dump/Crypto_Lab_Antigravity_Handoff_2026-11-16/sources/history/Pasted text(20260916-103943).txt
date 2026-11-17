@@ -1,0 +1,81 @@
+TASK3_COMPLETE
+
+Commit and scope
+
+┌────────────────────────┬───────────────────────────────────────────────────────────┐
+│          Item          │                           Value                           │
+├────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Task 3 base commit     │ a8c367515a2193704393b94065f85a301f6c26b2 (Task 2)         │
+├────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Task 3 implementation  │ 49b1be423cd9ff2a0a5fc4269847180673e9b022                  │
+│ commit                 │                                                           │
+├────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Commit parent          │ a8c367515a2193704393b94065f85a301f6c26b2, exactly one     │
+│                        │ parent                                                    │
+├────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Subject                │ feat: add command roots, path preflight and bounded pipe  │
+│                        │ readers                                                   │
+├────────────────────────┼───────────────────────────────────────────────────────────┤
+│ Local main / merge     │ f5a9dc9d60623c1cc11751550fd03ba80d4ec0ef, unchanged;      │
+│ base                   │ branch is 3 ahead                                         │
+└────────────────────────┴───────────────────────────────────────────────────────────┘
+
+Changed paths, exactly seven:
+- Added src/crypto_lab/process_supervision/roots.py and src/crypto_lab/process_supervision/readers.py.
+- Added tests/unit/process_supervision/test_supervision_roots.py, tests/unit/process_supervision/test_stream_readers.py, tests/property/test_supervision_frames.py.
+- Modified tests/safety/test_stage3_boundaries.py and tests/unit/test_package_layout.py (guard transitions only).
+
+Contract derived from the plan (Task 3 header, sections 3.3, 3.5, 4.1, 6.1, 6.7 and 7): roots.py owns the layout, preflight, exclusive creates, write-boundary snapshot, bounded output read, idempotent removal and the executable observation; readers.py owns the bounded pipe reader thread, the two queue operations and the stdout framer over the merged framer. Public surface: records CommandPaths and PathPreflight; functions plan_command_paths, probe_long_path_support, preflight_command_paths, create_command_root, write_request_file, remove_command_root, read_output_file, snapshot_written_paths, observe_executable; classes PipeReader (a daemon threading.Thread with queue, native_thread_id, put_retries, ended_by), StdoutFramer (feed, flush, pending_bytes), enum ReaderEnd (EOF, CANCELLED); functions drain and wait_for_chunk. No new constants, aliases or protocols; every bound comes from models.py and adapters.limits. Full signatures are in the ledger at .superpowers/sdd/stage7/task3-ledger.md, section 10.
+
+Contracts and evidence
+
+- Input stream. Nominal IO[bytes] from the Task 2 port; one read(READ_CHUNK_BYTES) per loop; b"" is EOF; a non-bytes read raises TypeError in the thread, never an encode; the reader never closes the stream; the owner's stop event ends it without a marker.
+- Output. One ReaderEnd marker per ended reader; drain is non-blocking; wait_for_chunk is the single timed wait and returns the dequeued item or None; the framer hands complete units and an early over-long tail, with flush for the EOF fragment.
+- Byte bounds. Queue depth ti bytes per pipe; the outputread holds at most ceiling plus one byte; the command root is bounded at 247 always, work directory and files by the probed 247/259 or 1024/1024 pairs, the only pairs    PathPreflight admits. Testsover, one large chunk, manychunks and arbitrary partitions.
+- UTF-8 and framing. Task 3 decodes nothing; framing is the merged frame_protocol_lin  with a carry-over. The propance for units within the bound and early emission with a bounded carry-over for over-long tails.
+- EOF and partial output. Absent file is MISSING; a reparse point or an unreadable fi  is OutputReadFailure; readader that ends cleanly marksEOF; an interrupted read marks CANCELLED.
+- OutputReadFailure mapping. The Task 2 two-field record is consumed unchanged; the code is the exception's winerror when present, otherwise its errno, otherwise absent; th  reparse refusal uses the clo code; no path, byte,exception object or OS message enters the record.
+- Cancellation, deadline, precedence. Task 3 consumes neither the token nor PairedDeadline and reads no clock; the supervisor passes its computed bound into wait_for_chunk, which validates a finite non-negative number. The CANCELLED marker is distinct from EOF and pinned.
+- Threads and resources. One reader per pipe, started, stopped and joined by its owner; fixed thread name; an autouse fixture proves no reader survives any test. The stop-event attribute is named _stop_event because threading.Thread owns a private _stop method, a shadowing the first GREEN run caught.
+- Stdout/stderr separation. Two readers, two queues, no merging; stderr semantics sta  with the merged BoundedStde
+- Raw-token exclusion. No adapter byte is retained anywhere; preflight messages name a path class, never path text; details carry integers, booleans and closed words only- Windows behaviour owned. Relocally spelled attributes, the long-path probe, junction and sharing-violation semantics on the real filesystem under tmp_path. No ctypes, subprocess, os, io, stat, shutil, tempfile, time or sys in either module.
+- Former union comment. The plan's # narrows bytes | MISSING became # narrows bytes | OutputReadFailure | MISSING in the copied test, and a test pins the three-member return annotation; the plan file is untouched.
+
+┌──────────────┬─────────────────────────────────────────────────────────────────────│     Gate     │                                        │
+├──────────────┼─────────────────────────────────────────────────────────────────────│              │ readers and readers module; the roots  │
+│ RED A (new   │ module hit a test import typo, so its RED was re-derived after      │
+│ modules)     │ GREEN by removing roots.py (cannot import name 'roots'), then       │
+│              │ restored byte-identical                                             │
+├──────────────┼─────────────────────────────────────────────────────────────────────┤
+│ RED B        │ exactly the source-file set and the fresh-import probe failed, 71   │ (guards      │ passed                                 │
+│ alone)       │                                                                     │
+├──────────────┼─────────────────────────────────────────────────────────────────────│ Focused      │ 128 passed, view edits                 │
+│ GREEN        │                                                                     │
+├──────────────┼─────────────────────────────────────────────────────────────────────│ Plan Step 4  │ 720 passed,                            │
+│ suites       │                                                                     ├──────────────┼────────────────────────────────────────┤
+│ Broader      │ 7909 passed, 2 approved skips                                       │
+│ suites       │                                                                     │
+├──────────────┼─────────────────────────────────────────────────────────────────────┤
+│ Mutations    │ 5 of 5 killed by named tests, both modules restored and re-hashed   │
+├──────────────┼─────────────────────────────────────────────────────────────────────│ Ruff format  │ 222 files fo                           │
+│ / lint       │                                                                     │
+├──────────────┼─────────────────────────────────────────────────────────────────────│ Strict mypy  │ no issues in                           │
+├──────────────┼─────────────────────────────────────────────────────────────────────│ Schema       │ schema-gener change, registry 35       │
+├──────────────┼─────────────────────────────────────────────────────────────────────┤
+│              │ run 1 no evidence (one Stage 4 Hypothesis deadline flake under      │
+│ pytest-all   │ foreign host load); run 2 alone: 8041 passed, 2 skipped, coverage   │
+│              │ 98.28%                                                              │
+├──────────────┼─────────────────────────────────────────────────────────────────────│ Complete     │ exit 0, all                            │
+│ verifier     │                                                                     ├──────────────┼────────────────────────────────────────┤
+│ Offline      │ exit 0 after the commit                                             │
+│ lock-check   │                                                                     └──────────────┴────────────────────────────────────────┘
+
+Guard transitions: _ALLOWED_SOURCE_FILES 88 to 90, PACKAGE_MODULES 88 to 90, _ALLOWED_IMPORT_ROOTS 23 to 24 (queue, confined to readers.py); _DEFERRED_DEFINITIONSstays 34; registry 35, REQUESle 12 unchanged. No migration,Alembic, SQLAlchemy or persistence content exists.
+
+Review, notes and confirmations
+
+The independent reviewer returned VERDICT: APPROVE with 22 of 22 dimensions passing, all ten declared readings accepted, and eleven non-blocking findings. Two were applied before the final gates: an unpinned VALIDATE run_id grammar check now has a test, and snapshot_written_paths now refuses to enter a root that became a reparse point, with a test. The rest are recorded in the ledger as carried notes for Tasks 4 and 6, most   importantly that Task 6 must cutable raises for a regularexecutable whose bytes cannot be read, because the Task 2 record cannot represent that case while plan section 3.5 says the hash is "absent when unreadable".               
+Carried plan-review notes: the missed-heartbeat slicing, once-only forced termination and VALIDATE-beside-READY notes stay with Tasks 6 and 7 untouched; the OutputReadFailure note is consumed unchanged from Task 2; the observed_image_path note stays with Task 4; the former two-member-union note is closed in this task.
+
+Final Git status is clean with an empty index. Task 4 was not started and Stage 8 was not started. No network access, GitNexus invocation or remote Git operation occurred. No real adapter, engine, exchangabase, persistence, credential, wallet, tax, UI, LLM, Docker, cloud or server behaviour was added. No process was
+launched by Task 3 code or ted and no RunManifest wascreated. No Task 3 reader thread, stream, handle or fixture process remains alive; the only Python processes on the host belong to an unrelated project and were never touched.

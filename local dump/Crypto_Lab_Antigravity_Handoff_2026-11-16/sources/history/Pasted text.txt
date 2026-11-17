@@ -1,0 +1,76 @@
+BLOCKED
+
+The one-file correction is complete, gate-clean and proven leak-free, but it cannot satisfy the acceptance criterion of five consecutive clean covered runs under the ruling's constraints, because of a host property the measurements isolated. No commit was made.
+
+1. Exact blocker. With the readiness-and-identity fix in place, every job-less kill now meets a live interpreter child (that is the point of the fix). On this host a python process that has lived more than a fraction of a second is, in a substantial share of kills, fully torn down only 4.0 to 5.6 s after a successful TerminateProcess (exit code readable at once, process object signaled late), independent of the trampoline, the job and the pipes; fresh children die instantly. The production bound POST_TERMINATION_WAIT_SECONDS is 5.0 s, so _force correctly reports still_alive:0 and the pre-existing exact assertions report.failures == () and launched.wait(5.0) == 1067 fail at one to three sites in every covered run. The ruling forbids the only remedies: a larger production bound, weaker assertions, an arbitrary sleep, or a skip.
+
+┌───────────────────────┬──────────────────────────────────────────┬──────────────────────┐
+│  Covered run of the   │               Test outcome               │ Task-owned survivors │
+│   corrected module    │                                          │      / suspended     │
+├───────────────────────┼──────────────────────────────────────────┼──────────────────────┤
+│ rep-1                 │ 75 passed, 3 failed (host-latency        │ 0 / 0                │
+│                       │ assertions)                              │                      │
+├───────────────────────┼──────────────────────────────────────────┼──────────────────────┤
+│ diagnostic runs 2 to  │ 1 to 3 host-latency failures each        │ 0 / 0                │
+│ 5                     │                                          │                      │
+├───────────────────────┼──────────────────────────────────────────┼──────────────────────┤
+│ child-age diagnostic  │ fresh kills 6 of 6 instant; 3 s-old      │ 0 / 0                │
+│                       │ kills 3 of 6 slow (4.0, 4.1, 5.1 s)      │                      │
+└───────────────────────┴──────────────────────────────────────────┴──────────────────────┘
+
+Endpoint agents present: Cyberhaven, Microsoft Defender for Endpoint, Nexthink, Intune.
+
+2. Branch and HEAD. project-1-stage-7-implementation, HEAD c1b17e481e9e1c192d4cae0a70764bf4d643515a (Task 8).
+
+3. main and merge base. Both f5a9dc9d60623c1cc11751550fd03ba80d4ec0ef; 9 commits ahead.
+
+4. Git status. Eight modified tracked files, one untracked file, index empty, git diff --check clean.
+
+5. Changed paths (nothing staged). The eight frozen Task 9 paths, byte-identical to the snapshot (aggregate digest bb2b32c2… re-verified after every run), plus the one correction file tests/unit/process_supervision/test_windows_process.py (working-tree blob 49264abc…, 374 insertions, 74 deletions, diagnostic removed).
+
+6. Completed evidence (ledger §15, .superpowers/sdd/stage7/): start state and plan identity verified; snapshot frozen; eighteen-item derivation recorded before editing; the correction implements readiness waits on the committed ready channel, pid-plus-creation-identity ownership while the launcher lives, the shared try/finally fixture generator, identity-bound cleanup through the controller's own terminate_tree, removal of the pid-only helper, and five regression tests; ruff check, ruitespace all clean; hygiene probes after every one of six covered runs show zero task-owned survivors, zero suspended processes and zero pytest roots, versus one and five orphans after the two earlier verifier runs.      
+7. Requested ruling. Either (A) allow the job-less Task 4 tests to assert the controller's   logic rather than the host's spe ABSENT within the module bound,and any TREE_VERIFIED_DEAD failure carries only the bounded-wait reason still_alive:0 (plan §8.3's designed report), stated as a ruled adjustment; or (B) approve a separate production correction raising POST_TERMINATION_WAIT_SECONDS above the observed 5.6 s; or (C) direct the runs to a host without the endpoint agents' exit-hook latency.
+                                                                                             8. Why necessary. The correctionthe assumption "a fresh pythonchild is signaled within five seconds of TerminateProcess" is now exercised at about fourteen sites per run; before, those kills almost never met a live child. The assumption is false on this host at a rate that makes fatistically unreachable.Endpoint, Nexthink, and Intune. Now I'll run the final gates on the corrected file and ledger record in parallel while re-verifying the Task 9 snapshot. · summarized
+
+  Ran 2 shell commands, wrote 1 memory
+
+BLOCKED
+
+The one-file correction is complete, gate-clean and proven leak-free, but it cannot satisfy the acceptance criterion of five consecutive clean covered runs under the ruling's constraints, because of a host property the measurements isolated. No commit was made.
+
+1. Exact blocker. With the readie, every job-less kill now meets a live interpreter child (that is the point of the fix). On this host a python process that has
+lived more than a fraction of a hare of kills, fully torn downonly 4.0 to 5.6 s after a successful TerminateProcess (exit code readable at once, process object signaled late), independent of the trampoline, the job and the pipes; fresh children die instantly. The production bound POST_TERMINATION_WAIT_SECONDS is 5.0 s, so _force correctly reports still_alive:0 and the pre-existing exact assertions report.failures == () and launched.wait(5.0) == 1067 fail at one to three sites in every covered run. The ruling forbids
+the only remedies: a larger prodns, an arbitrary sleep, or a skip.
+
+┌───────────────────────┬──────────────────────────────────────────┬──────────────────────┐
+│  Covered run of the   │             │ Task-owned survivors │
+│   corrected module    │                                          │      / suspended     │
+├───────────────────────┼──────────────────────────────────────────┼──────────────────────┤
+│ rep-1                 │ 75 pas      │ 0 / 0                │
+│                       │ assertions)                              │                      │
+├───────────────────────┼──────────────────────────────────────────┼──────────────────────┤
+│ diagnostic runs 2 to  │ 1 to 3 host-latency failures each        │ 0 / 0                │
+│ 5                     │                                          │                      │
+├───────────────────────┼──────────────────────────────────────────┼──────────────────────┤
+│ child-age diagnostic  │ fresh       │ 0 / 0                │
+│                       │ kills 3 of 6 slow (4.0, 4.1, 5.1 s)      │                      │
+└───────────────────────┴──────────────────────────────────────────┴──────────────────────┘
+Endpoint agents present: Cyberhandpoint, Nexthink, Intune.
+
+2. Branch and HEAD. project-1-stage-7-implementation, HEAD c1b17e481e9e1c192d4cae0a70764bf4d643515a (Task 8).                                        
+3. main and merge base. Both f5a9dc9d60623c1cc11751550fd03ba80d4ec0ef; 9 commits ahead.
+
+4. Git status. Eight modified tracked files, one untracked file, index empty, git diff --check clean.
+
+5. Changed paths (nothing staged). The eight frozen Task 9 paths, byte-identical to the snapshot (aggregate digest bb2b32c2… re-verified after every run), plus the one correction file tests/unit/process_supervision/test_windows_process.py (working-tree blob 49264abc…, 374 insertions, 74 deletions, diagnostic removed).
+
+6. Completed evidence (ledger §15, .superpowers/sdd/stage7/): start state and plan identity verified; snapshot frozen; eighteen-item derivation recorded before editing; the correction implements readiness waits on the committed ready channel, pid-plus-creation-identity ownewhile the launcher lives, the shrator, identity-bound cleanupthrough the controller's own terminate_tree, removal of the pid-only helper, and five regression tests; ruff check, ruff format, strict mypy and whitespace all clean; hygiene probes after every one of six covered runs show zero task-owned survivors, zero suspended processand zero pytest roots, versus ontwo earlier verifier runs.
+
+7. Requested ruling. Either (A) allow the job-less Task 4 tests to assert the controller's logic rather than the host's speed: every owned identity ends ABSENT within the module bound, and any TREE_VERIFIED_DEAD failure carries only the bounded-wait reason still_alive:0 (plan §8.3's designed report), stated as a ruled adjustment; or (B) approve a separate production correction raising POST_TERMINATION_WAIT_SECONDS above the observed 5.6 s; or (C) direct the runs to a host without the endpoint agents' exit-hook latency.
+
+8. Why necessary. The correction removes the orphan race, so the assumption "a fresh pythochild is signaled within five se now exercised at about fourteensites per run; before, those kills almost never met a live child. The assumption is false on this host at a rate that makes five consecutive clean runs statistically unreachable.     
+9. Why narrower alternatives fail. Killing before the latency window is a race with no positive signal; launching the base interpreter directly halves the exposure but keeps it and departs from the plan's sys.executable launch contract; reordering kills is production code; any timing accommodation is an arbitrary sleep.
+
+10. Resume instruction. With ruling A: adjust the named assertions in the one correction file exactly as ruled, rerun the gates, then Sections 8 through 18 as written. With ruling B: a separate reviewed production commit first, then the same. With ruling C: rerun Sections 8 through 18 unchanged on the desie eight Task 9 paths stayuntouched and the correction commit precedes the Task 9 commit.
+
+Confirmations: no network, no GitNexus, no remote Git, no Stage 8 work, no production change, no schema or dependency change, no unowned process touched, and no task-owned child, descendant, reader, stream, command root, process handle or Job Object handle remains alive.

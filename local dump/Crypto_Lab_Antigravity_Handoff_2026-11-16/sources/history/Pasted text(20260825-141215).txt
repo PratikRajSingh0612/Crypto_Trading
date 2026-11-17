@@ -1,0 +1,56 @@
+STAGE4_SCHEMA_PARITY_CLOSURE_CONTINUATION_REQUIRED
+
+One expressible mismatch remains open by deliberate decision, so I cannot report COMPLETE. Everything else is closed.
+
+Why not complete: UtcDateTime publishes [0-9]{4}-[0-9]{2}-[0-9]{2}, accepting 2026-02-30, 2026-13-01, 2026-04-31, and non-leap 2025-02-29 — all of which parse_utc rejects. That is exactly expressible, so filing it as inexpressible would have been false. I left it open because $defs/UtcDateTime sits in three already-released Stage 3 schemas (dataset-descriptor-v1, dataset-partition-v1, diagnostic-v1), the one-line fix in domain/time.py is outside the authorized source set, and a Stage-4-only fix would fork one type into two published grammars. Fixing it also pushes past the seven-source-file scope, which Phase 5 requires me to report before expanding. Pinned executable as test_the_utc_calendar_validity_gap_is_a_frozen_stage_three_residual; recorded as escalation 10 alongside the still-open ProcessConfig deferral.
+
+┌──────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                  │                                                                                                                                                                 │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 1–2. Base /      │ 1a8d08d → ae24043f2405a81f55005af096697ad7182da3a8, parent unamended                                                                                            │
+│ commit           │                                                                                                                                                                 │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 3. Source paths  │ domain/{comparison_levels,capability_requirements,descriptors}.py, capabilities/{models,comparison}.py, strategy/{expressions,models}.py                        │
+│ (7)              │                                                                                                                                                                 │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 4. Test paths    │ test_domain_{capability_contracts,descriptors}.py, test_capability_{models,comparison}.py, test_strategy_{models,expressions}.py                                │
+│ (6)              │                                                                                                                                                                 │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 5–6. Clauses     │ baseline 46/30/16 → converged 40 (A 22, B 5, C 11, E 1, F 2); count changed by consolidation + 1 addition, recorded not forced                                  │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 7. Corrected     │ 12 groups: obs biconditional, 4 outcome cardinalities, reason enum+vocab+scope, CIR enum+3 scopes, 6 CER branches, totality + per-category cap, 2 level enums,  │
+│                  │ SPOT, LONG, const:false, const:"1", fraction pattern, extension implication, 3 parameter clauses                                                                │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 8. Residuals     │ OBS-C1, CD-C1, CI-C1/C2, SPEC-C1/C2, PARAM-C1/C2, VER-C1..C3, EXPR-C1, + Review A's two on CompatibilityResult.approximations — each guarded by test            │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 11–15. Directed  │ ParameterDefinition derived from literal_value_branches() (not copied); market_type const:"SPOT"; direction const:"LONG"; leverage const:"1" (string, not       │
+│ items            │ "1.0", not numeric); all cross-field branches enforced, incl. the cross-record ELIGIBLE reach into left/right                                                   │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 16–18. Sweeps    │ validation ≡ serialization on all 9; registry-rendered rejects all 42; check_schema passes on all 9                                                             │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 19. Positive     │ 0 over-rejections across 134 (author) + 140 (Rev A) + 426 (Rev B)                                                                                               │
+│ corpus           │                                                                                                                                                                 │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 21–24.           │ 11 Stage 3 byte-identical (vs disk and main); hash 14f59d87…, 2583-byte spec, all 9 diagnostics value_error with identical messages                             │
+│ Preservation     │                                                                                                                                                                 │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 26–28. Tests     │ 2858 passed, 1 skipped, 97.67 % branch (from 2382/1/97.63)                                                                                                      │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 29–31. Gates     │ ruff format ✓, lint ✓, strict mypy ✓ (105 files), offline build ✓                                                                                               │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 32. Reviews      │ A: no Critical, 11/14 PASS + 3 PARTIAL. B: all 12 PASS. All Important resolved                                                                                  │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 33. Mutations    │ 31 killed, 0 survivals, 4 proved no-ops by measured corpus                                                                                                      │
+├──────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 34–36. Commit    │ 13 files, +2904/−32; index empty; 4 retained tracked + 9 untracked schemas                                                                                      │
+│ scope            │                                                                                                                                                                 │
+└──────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Three things reviewers caught that I had wrong. Review A found CompatibilityResult.approximations rejects unsorted input while ComparisonInput's normalizes — my own asymmetry argument, misapplied to the wrong sibling; both its residuals are now pinned. It also showed my sweep's VER-2 row was vacuous (a pattern-invalid ID did the rejecting) and my expressibility criterion needed "and small", now fixed in source. My own mutation battery exposed a test that guarded one fixed category out of fourteen. Review B found the evidence patch stale and an untested guard I had excused with # pragma: no cover — I withdrew the pragma for a real monkeypatched test.
+
+On the advisor's final catch: nobody had validated the staged blob itself — a synthetic artifact never on disk, so never seen by pytest, ruff, or mypy. I extracted the committed tree and ran it: 1228 passed on the correction modules, and the full suite gave 2829 passed against the parent's 2439 with an identical 29-failure set (four files needing .git/.venv/tools/, absent from a detached archive). +390 tests, zero new failures, and the pre-Task-8 split is self-consistent (11 registry entries, all == 11 assertions, 11 schema files).
+
+Confirmed: Task 8 not resumed · Task 9 not started · Stage 5 not started · no network · no dependency or lock change · no generated schema committed or regenerated · no Stage 3 byte
+changed · no GitNexus · no engine/adapter/strategy/comparison execution · no st, order simulation, portfolio accounting, persistence, wallet, tax/TDS, LLM,UI, or Docker/cloud behaviour · main unmoved.
+
+Stopping after the correction commit, as instructed. Full record in parity-closure-evidence/ledger-section.md.

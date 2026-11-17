@@ -1,0 +1,8 @@
+Review this exact candidate in a separate Antigravity context using the current
+accepted behavior, owner amendments, actual diff and identified test evidence.
+Do not edit files or invoke retired providers. Identify concrete correctness, safety,
+compatibility and acceptance gaps, separating them from optional style comments.
+For a re-review, check closure of prior findings and the affected new behavior; do not
+reopen unrelated accepted scopes without specific evidence. Do not accept fabricated
+or mismatched verifier evidence. Return verdict, blocking findings with exact sources,
+nonblocking follow-ups and the subject identity covered. Review is not test execution.

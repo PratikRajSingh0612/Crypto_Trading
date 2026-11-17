@@ -1,0 +1,133 @@
+PS C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-5-implementation> powershell -NoProfile -ExecutionPolicy Bypass -File `
+>>   .\scripts\verify.ps1
+
+==> Check lockfile consistency
+Resolved 30 packages in 2ms
+
+==> Sync locked environment
+Checked 30 packages in 37ms
+
+==> Check formatting
+115 files already formatted
+
+==> Run lint checks
+All checks passed!
+
+==> Run strict type checks
+Success: no issues found in 105 source files
+
+==> Check generated schemas
+
+==> Run test suite
+================================================================================== test session starts ===================================================================================
+platform win32 -- Python 3.12.13, pytest-8.4.2, pluggy-1.6.0
+rootdir: C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-5-implementation
+configfile: pyproject.toml
+testpaths: tests
+collected 3236 items
+
+tests\architecture\test_domain_import_boundary.py .......................                                                                                                           [  0%]
+tests\architecture\test_package_import_boundaries.py ..........................                                                                                                     [  1%]
+tests\integration\test_schema_distribution.py ......................                                                                                                                [  2%]
+tests\property\test_artifact_ownership.py .........                                                                                                                                 [  2%]
+tests\property\test_canonical_primitives.py ....                                                                                                                                    [  2%]
+tests\property\test_compatibility_resolution.py ......                                                                                                                              [  2%]
+tests\property\test_dataset_hashing.py ...                                                                                                                                          [  2%]
+tests\property\test_expression_evaluation.py .........                                                                                                                              [  3%]
+tests\property\test_strategy_hashing.py ..................                                                                                                                          [  3%]
+tests\safety\test_forbidden_runtime_paths.py .........................................                                                                                              [  4%]
+tests\safety\test_gitnexus_development_tooling.py .............                                                                                                                     [  5%]
+tests\safety\test_project_dependencies.py ........................................                                                                                                  [  6%]
+tests\safety\test_stage3_boundaries.py .....................................................................................................                                        [  9%]
+tests\safety\test_stage4_boundaries.py ..........................                                                                                                                   [ 10%]
+tests\safety\test_stage4_yaml_runtime.py .....                                                                                                                                      [ 10%]
+tests\safety\test_uv_launcher.py ................................................................s............................................                                      [ 14%]
+tests\unit\adapters\test_descriptors.py ...........                                                                                                                                 [ 14%]
+tests\unit\adapters\test_versioning.py ....................                                                                                                                         [ 15%]
+tests\unit\artifacts\test_ownership.py .............                                                                                                                                [ 15%]
+tests\unit\capabilities\test_capability_comparison.py ............................................................................................................................. [ 19%]
+......................................................................................................................................................                              [ 23%]
+tests\unit\capabilities\test_capability_models.py ................................................................................................................................. [ 27%]
+............................................                                                                                                                                        [ 29%]
+tests\unit\capabilities\test_capability_policy.py ..................                                                                                                                [ 29%]
+tests\unit\capabilities\test_capability_resolver.py ..........................................................                                                                      [ 31%]
+tests\unit\capabilities\test_capability_vocabulary.py ..................................................................                                                            [ 33%]
+tests\unit\configuration\test_loader.py .........................                                                                                                                   [ 34%]
+tests\unit\configuration\test_models.py ......................................................................................................                                      [ 37%]
+tests\unit\configuration\test_snapshot.py .............                                                                                                                             [ 37%]
+tests\unit\datasets\test_dataset_metadata_hashing.py .........                                                                                                                      [ 38%]
+tests\unit\datasets\test_dataset_models.py ........................                                                                                                                 [ 38%]
+tests\unit\domain\test_canonical_json.py ..............                                                                                                                             [ 39%]
+tests\unit\domain\test_diagnostics.py ..................................                                                                                                            [ 40%]
+tests\unit\domain\test_domain_capability_contracts.py .............................................................................................................                 [ 43%]
+tests\unit\domain\test_domain_descriptors.py ...................................................................................................................................... [ 47%]
+.....................                                                                                                                                                               [ 48%]
+tests\unit\domain\test_domain_results.py ......                                                                                                                                     [ 48%]
+tests\unit\domain\test_financial.py ................................                                                                                                                [ 49%]
+tests\unit\domain\test_hashing.py ........                                                                                                                                          [ 50%]
+tests\unit\domain\test_identifiers.py ..............................                                                                                                                [ 50%]
+tests\unit\domain\test_records.py ........................                                                                                                                          [ 51%]
+tests\unit\domain\test_time.py ..............................................................................                                                                       [ 54%]
+tests\unit\strategy\test_strategy_evaluation.py ................................................................................................................................... [ 58%]
+............................................                                                                                                                                        [ 59%]
+tests\unit\strategy\test_strategy_expressions.py .................................................................................................................................. [ 63%]
+.....................................................................................................................................................                               [ 68%]
+tests\unit\strategy\test_strategy_feature_graph.py ............................................................................                                                     [ 70%]
+tests\unit\strategy\test_strategy_loader.py ............................................................................................                                            [ 73%]
+tests\unit\strategy\test_strategy_models.py ....................................................................................................................................... [ 77%]
+................................................................................................................................................................................... [ 83%]
+...                                                                                                                                                                                 [ 83%]
+tests\unit\strategy\test_strategy_validation.py ................................................................................................................................... [ 87%]
+.......................                                                                                                                                                             [ 87%]
+tests\unit\strategy\test_strategy_versioning.py ......................................................................................................................              [ 91%]
+tests\unit\strategy\test_strategy_yaml_bounds.py ...............................................                                                                                    [ 93%]
+tests\unit\strategy\test_strategy_yaml_source.py .................................................................................................................................. [ 97%]
+................                                                                                                                                                                    [ 97%]
+tests\unit\test_cli.py .......                                                                                                                                                      [ 97%]
+tests\unit\test_package_layout.py ...                                                                                                                                               [ 97%]
+tests\unit\test_schema_registry.py ......................................................................                                                                           [100%]
+
+===================================================================================== tests coverage =====================================================================================
+____________________________________________________________________ coverage: platform win32, python 3.12.13-final-0 ____________________________________________________________________
+
+Name                                       Stmts   Miss Branch BrPart  Cover   Missing
+--------------------------------------------------------------------------------------
+src\crypto_lab\configuration\loader.py       107     10     36      6    87%   73-74, 108->110, 114, 118, 134-137, 176, 181
+src\crypto_lab\configuration\models.py       300     12     66     12    93%   244, 246, 259, 262, 278, 281, 285, 289, 293, 306, 311, 460
+src\crypto_lab\datasets\hashing.py            36      1     22      1    97%   20
+src\crypto_lab\datasets\models.py            205      9     64     11    93%   134, 136, 143, 147, 196, 363, 375, 396, 414, 416->420, 418->420
+src\crypto_lab\domain\canonical_json.py       57      2     28      2    95%   32, 45
+src\crypto_lab\domain\diagnostics.py         135     10     44     10    89%   143, 147, 151, 155, 159, 170, 176, 179, 252, 260
+src\crypto_lab\domain\financial.py            71      3     36      4    93%   36, 38->42, 79, 85
+src\crypto_lab\domain\identifiers.py          68      3     10      3    92%   22, 37, 41
+src\crypto_lab\domain\records.py              74      1     12      1    98%   63
+src\crypto_lab\schema_registry.py             36      1      4      1    95%   158
+src\crypto_lab\strategy\evaluation.py        290      1    130      1    99%   433
+src\crypto_lab\strategy\feature_graph.py     213      2     86      2    99%   247, 493
+--------------------------------------------------------------------------------------
+TOTAL                                       3701     55   1110     54    98%
+
+39 files skipped due to complete coverage.
+Required test coverage of 90% reached. Total coverage: 97.69%
+====================================================================== 3235 passed, 1 skipped in 447.05s (0:07:27) =======================================================================
+
+==> Build package
+Building source distribution...
+Building wheel from source distribution...
+Successfully built dist\crypto_trading_lab-0.1.0.tar.gz
+Successfully built dist\crypto_trading_lab-0.1.0-py3-none-any.whl
+
+==> Check schema distribution
+
+==> Check Git whitespace
+PS C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-5-implementation>
+PS C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-5-implementation> $baselineExit = $LASTEXITCODE
+PS C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-5-implementation> Write-Host "BASELINE_VERIFY_EXIT=$baselineExit"
+BASELINE_VERIFY_EXIT=0
+PS C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-5-implementation>
+PS C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-5-implementation> if ($baselineExit -ne 0) {
+>>     throw "Stage 5 implementation baseline verifier failed with exit $baselineExit"
+>> }
+PS C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-5-implementation>
+PS C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-5-implementation> git status --short --untracked-files=all
+PS C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-5-implementation>

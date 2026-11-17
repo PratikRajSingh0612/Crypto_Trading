@@ -1,0 +1,63 @@
+{
+  "package": "Crypto Lab Autonomous Delivery Prompt Package",
+  "version": "1.0",
+  "prepared_date": "2026-10-31",
+  "files": [
+    {
+      "path": "00_READ_ME_FIRST.md",
+      "bytes": 4700,
+      "sha256": "eb85c66cc8f2f01ba253547ff4ddffc008f74d1da63de4d4a3b920e289de09be"
+    },
+    {
+      "path": "01_MISSION_AND_AUTHORITY.md",
+      "bytes": 7594,
+      "sha256": "dd525a61e08c41b0cca5a26a2ea74b37f37e15d6e9028a75ec82c48a74c173d3"
+    },
+    {
+      "path": "02_SKILLS_AND_AGENTS.md",
+      "bytes": 7870,
+      "sha256": "e40eb1cfd27cbd5ecea53af10ad3be78f12aae20744b625fc4db5db419fd44d1"
+    },
+    {
+      "path": "03_PRODUCT_ROADMAP.md",
+      "bytes": 13910,
+      "sha256": "26600a6820cb1957305021f6c334214675f3cc7e9512862d1bb02a8b2bb8e5a1"
+    },
+    {
+      "path": "04_DELIVERY_AND_VERIFICATION.md",
+      "bytes": 10215,
+      "sha256": "5a338e4c36903b3af1b6124be80923e78bff5b2250f3846014c7d4bef6eda368"
+    },
+    {
+      "path": "05_CURRENT_HANDOFF.md",
+      "bytes": 6444,
+      "sha256": "76bf1af343ce0061039683473de0133c462acdfe763cba8628bb65fe756b44c9"
+    },
+    {
+      "path": "06_TASK_TEMPLATES.md",
+      "bytes": 3811,
+      "sha256": "b928e02dd2737840920e536c88b8a03a4a159618a3592c16cc937a3142a4cb82"
+    },
+    {
+      "path": "07_RESUME_AND_DECISIONS.md",
+      "bytes": 3718,
+      "sha256": "4bcd74429a30406955d84cc5425d95d2619f1d2ff749cc4b0d3f5b0e3f2ec072"
+    },
+    {
+      "path": "08_SOURCES_AND_LIMITS.md",
+      "bytes": 3568,
+      "sha256": "3e9cc135b41fa2eb2afc1cb5428c925782f1dfa098ebc0f34bba665006e16fab"
+    },
+    {
+      "path": "RESUME_CLAUDE.txt",
+      "bytes": 1072,
+      "sha256": "3f1892a1d9ab97d3df7501370511363c9cc9226e87404eb4fd0c7115ba8f5a3f"
+    },
+    {
+      "path": "START_CLAUDE.txt",
+      "bytes": 3527,
+      "sha256": "3308d8be87a949777e9212ab0ce9f5964939b86b8ef23648e82ab23baa541a15"
+    }
+  ],
+  "note": "Hashes cover each content file; this manifest does not hash itself."
+}

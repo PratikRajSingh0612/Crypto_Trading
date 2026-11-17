@@ -1,0 +1,153 @@
+{
+  "repository": "https://github.com/PratikRajSingh0612/Crypto_Trading",
+  "sources": [
+    {
+      "id": "SOURCE-SPEC",
+      "path": "docs/superpowers/specs/2026-08-10-engine-neutral-core-design.md",
+      "role": "approved product architecture",
+      "retrieval": "selected clauses inspected in conversation; read full actual local file"
+    },
+    {
+      "id": "SOURCE-ROADMAP",
+      "path": "docs/superpowers/plans/2026-08-10-project-1-master-roadmap.md",
+      "role": "P1 stages/dependencies",
+      "retrieval": "source referenced and prior sections inspected; read actual local file"
+    },
+    {
+      "id": "SOURCE-AGENTS",
+      "path": "AGENTS.md",
+      "role": "existing workspace/product rules; controller-only clauses need explicit migration amendment",
+      "retrieval": "content present in earlier conversation; local effective version must be read"
+    },
+    {
+      "id": "SOURCE-GITNEXUS",
+      "path": "docs/decisions/0001-gitnexus-development-tooling.md",
+      "role": "tooling governance",
+      "retrieval": "local original needed"
+    },
+    {
+      "id": "SOURCE-GITNEXUS-OUTCOME",
+      "path": "tools/gitnexus/outcome.json",
+      "role": "actual governance outcome",
+      "retrieval": "local original needed"
+    },
+    {
+      "id": "SOURCE-VERIFY",
+      "path": "scripts/verify.ps1",
+      "role": "authoritative core execution gate",
+      "retrieval": "local current script required"
+    },
+    {
+      "id": "SOURCE-LAUNCHER",
+      "path": "scripts/invoke-uv.ps1",
+      "role": "managed product tooling route",
+      "retrieval": "local current script required"
+    },
+    {
+      "id": "SOURCE-P2-README",
+      "path": "offline_data/README.md",
+      "role": "P2 accepted slices and limitations",
+      "retrieval": "branch-specific content inspected in conversation"
+    },
+    {
+      "id": "SOURCE-P3",
+      "ref": "1abd49e5b67fe4856ec5d974d90414c5dbfe901c",
+      "role": "recorded VectorBT bootstrap not adapter acceptance",
+      "url": "https://github.com/PratikRajSingh0612/Crypto_Trading/commit/1abd49e5b67fe4856ec5d974d90414c5dbfe901c",
+      "retrieval": "commit message inspected 2026-11-16"
+    },
+    {
+      "id": "SOURCE-P1-S1",
+      "path": "docs/superpowers/plans/2026-08-10-project-1-foundation-implementation-plan.md",
+      "role": "P1 Stage 1 exact tasks and gates",
+      "retrieval": "path confirmed from repository listing or prior source; full local plan needed",
+      "reference_commit": "ba4412a06e19ce1d8fb1da5693821e718daa220e"
+    },
+    {
+      "id": "SOURCE-P1-S2",
+      "path": "docs/superpowers/plans/2026-08-10-project-1-gitnexus-development-tooling-implementation-plan.md",
+      "role": "P1 Stage 2 exact tasks and gates",
+      "retrieval": "path confirmed from repository listing or prior source; full local plan needed",
+      "reference_commit": "ba4412a06e19ce1d8fb1da5693821e718daa220e"
+    },
+    {
+      "id": "SOURCE-P1-S3",
+      "path": "docs/superpowers/plans/2026-08-10-project-1-canonical-domain-configuration-hashing-schemas-implementation-plan.md",
+      "role": "P1 Stage 3 exact tasks and gates",
+      "retrieval": "path confirmed from repository listing or prior source; full local plan needed",
+      "reference_commit": "ba4412a06e19ce1d8fb1da5693821e718daa220e"
+    },
+    {
+      "id": "SOURCE-P1-S4",
+      "path": "docs/superpowers/plans/2026-08-10-project-1-portable-strategy-capabilities-comparison-implementation-plan.md",
+      "role": "P1 Stage 4 exact tasks and gates",
+      "retrieval": "path confirmed from repository listing or prior source; full local plan needed",
+      "reference_commit": "ba4412a06e19ce1d8fb1da5693821e718daa220e"
+    },
+    {
+      "id": "SOURCE-P1-S5",
+      "path": "docs/superpowers/plans/2026-08-10-project-1-experiment-run-invocation-retry-aggregation-implementation-plan.md",
+      "role": "P1 Stage 5 exact tasks and gates",
+      "retrieval": "path confirmed from repository listing or prior source; full local plan needed",
+      "reference_commit": "ba4412a06e19ce1d8fb1da5693821e718daa220e"
+    },
+    {
+      "id": "SOURCE-P1-S6",
+      "path": "docs/superpowers/plans/2026-08-10-project-1-adapter-protocol-fake-adapter-contract-harness-implementation-plan.md",
+      "role": "P1 Stage 6 exact tasks and gates",
+      "retrieval": "path confirmed from repository listing or prior source; full local plan needed",
+      "reference_commit": "ba4412a06e19ce1d8fb1da5693821e718daa220e"
+    },
+    {
+      "id": "SOURCE-P1-S9",
+      "path": "docs/superpowers/plans/2026-08-10-project-1-artifact-finalization-recovery-provenance-audit-implementation-plan.md",
+      "role": "P1 Stage 9 exact tasks and gates",
+      "retrieval": "path confirmed from repository listing or prior source; full local plan needed",
+      "reference_commit": "ba4412a06e19ce1d8fb1da5693821e718daa220e"
+    },
+    {
+      "id": "SOURCE-P1-S10",
+      "path": "docs/superpowers/plans/2026-08-10-project-1-cli-composition-end-to-end-acceptance-implementation-plan.md",
+      "role": "P1 Stage 10 exact tasks and gates",
+      "retrieval": "path confirmed from repository listing or prior source; full local plan needed",
+      "reference_commit": "ba4412a06e19ce1d8fb1da5693821e718daa220e"
+    },
+    {
+      "id": "SOURCE-P1-S7",
+      "discovery": "Find the accepted process-supervision stage plan in docs/superpowers/plans; do not guess filename",
+      "role": "exact Stage 7 tasks",
+      "retrieval": "not fully bundled"
+    },
+    {
+      "id": "SOURCE-P1-S8",
+      "discovery": "Find the accepted SQLite persistence stage plan in docs/superpowers/plans",
+      "role": "exact Stage 8 tasks and amended race evidence",
+      "retrieval": "not fully bundled"
+    },
+    {
+      "id": "SOURCE-P2-PLAN1",
+      "path": "docs/superpowers/plans/2026-11-09-project-2-offline-data-first-slice-implementation-plan.md",
+      "role": "P2 first slice exact task definitions and limitations",
+      "retrieval": "selected clauses inspected in conversation"
+    },
+    {
+      "id": "SOURCE-P2-BINANCE",
+      "path": "docs/superpowers/plans/2026-11-10-project-2-binance-kline-reader-plan.md",
+      "role": "P2 Binance reader accepted plan",
+      "retrieval": "selected clauses inspected in conversation"
+    },
+    {
+      "id": "SOURCE-AGY-RULES",
+      "url": "https://antigravity.google/docs/rules/",
+      "role": "rule file discovery and trigger syntax",
+      "retrieval": "web inspected 2026-11-16"
+    },
+    {
+      "id": "SOURCE-AGY-WORKFLOWS",
+      "url": "https://antigravity.google/docs/ide/workflows/",
+      "role": "workflow deprecation; avoid relying on old workflow support",
+      "retrieval": "web inspected 2026-11-16"
+    }
+  ],
+  "note": "No missing source file is represented as a downloaded original."
+}

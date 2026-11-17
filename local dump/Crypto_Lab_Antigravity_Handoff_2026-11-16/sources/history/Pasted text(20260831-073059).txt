@@ -1,0 +1,77 @@
+Restructure done; review 1 (structural single-source) is running. No fifth semantic review was run against the old structure, per your instruction.
+
+The six-owner block
+
+§5.10 is now the single normative retry block with non-overlapping owners:
+
+┌───────┬──────────────────────────────────────────────────────────┬───────────────────────┐
+│ Owner │                         Subject                          │         Rows          │
+├───────┼──────────────────────────────────────────────────────────┼───────────────────────┤
+│ D1-A  │ identity, outcomes, immutability, replay, code partition │ RD-1, 2, 3, 3a, 7     │
+├───────┼──────────────────────────────────────────────────────────┼───────────────────────┤
+│ D1-B  │ six-gate inputs, authoritative atomic evaluation         │ RD-4, 4a              │
+├───────┼──────────────────────────────────────────────────────────┼───────────────────────┤
+│ D1-C  │ the ordered first-match cases — owns the order only      │ RD-10…15              │
+├───────┼──────────────────────────────────────────────────────────┼───────────────────────┤
+│ D1-D  │ complete denied_gates, denial_reason precedence          │ RD-16…19 (new)        │
+├───────┼──────────────────────────────────────────────────────────┼───────────────────────┤
+│ D1-E  │ reservation, retry_not_before_utc, successor creation    │ RD-20…24 (new)        │
+├───────┼──────────────────────────────────────────────────────────┼───────────────────────┤
+│ D1-F  │ aggregation, cancellation, attempt supersession          │ RD-5, 5a, 6, 8, 9, 25 │
+└───────┴──────────────────────────────────────────────────────────┴───────────────────────┘
+
+One design call I made and want on the record: I kept the RD-n identifiers rather than renaming to D1-A1-style. They're cited 276 times; a mass rename is precisely the high-churn desync that caused four passes of failures. The owners carry the single-source property, and each row sits under exactly one — which is what the audit checks.
+
+What was eliminated rather than patched
+
+- §5.9.2a (the whole denial_reason precedence) → migrated to D1-D as RD-16…19; the section is now a labelled non-normative pointer. Its 16 citations redirected to RD-17/D1-D.
+- §5.11.2's seven-row disposition table → migrated into D1-F as RD-25; the section states only the signature and parameter-presence rules.
+- §5.11.2's member gloss → deleted outright. It was the source of pass 4's "only aggregation-blocking" contradiction, and the directive says glosses that re-derive table rules go.
+- New rows for facts that previously had no home: the reservation contract, who computes retry_not_before_utc (task 9), restart-reads-never-recomputes, successor creation, and the three one-successor mechanisms — all previously scattered through §5.10.1–§5.10.5 as prose.
+
+Structural audit before review, as required
+                                                                                                                                                                                     ┌──────────────────────────┬─────────────────────────┐
+│         Property         │         Result          │                                                                                                                               ├──────────────────────────┼─────────────────────────┤
+│ distinct RD identifiers  │ 28                      │
+├──────────────────────────┼─────────────────────────┤
+│ defined exactly once     │ 28 / 28 — no duplicates │
+├──────────────────────────┼─────────────────────────┤                                                                                                                               │ cited but undefined      │ none                    │
+├──────────────────────────┼─────────────────────────┤
+│ total pointers resolving │ 276                     │                                                                                                                               ├──────────────────────────┼─────────────────────────┤
+│ fences                   │ 96 = 48 balanced pairs  │
+├──────────────────────────┼─────────────────────────┤                                                                                                                               │ git diff --check         │ clean                   │
+└──────────────────────────┴─────────────────────────┘
+                                                                                                                                                                                     Residual: one lowest-numbered occurrence, which is Appendix H's deliberate sterything else at zero.
+                                                                                                                                                                                     Plan: 5,706 lines · 346,674 bytes · SHA-256 e1118f78…01e7. HEAD unchanged at . Nothing committed, merged, or implemented. D2–D5 held, 66 findingsPENDING_REVALIDATION_AFTER_D1.
+                                                                                                                                                                                     Review 2 (semantic) will only run once review 1 returns zero Critical and Impte.
+
+✻ Waiting for 1 dynamic workflow to finish                                                                                                                                             
+● Dynamic workflow "Review 1: structural single-source audit of the restructured D1 block - one definition per identifier, pointers resolve, no duplicate authority outside the block" completed · 1h 4m 24s
+                                                                                                                                                                                       Review 1: FAIL — 16 Critical, 28 Important, and 16 verifier agents hit API ern partially-verified data.
+
+The cause is mine and it's specific: I moved content and did not sweep the references to where it used to be. My structural audit checked identifier uniqueness and dangling citations — it did not check whether each pointer's described content matches its target, or whether counts survived the move. Those are exactly the two things that broke.
+
+  Ran 3 shell commands
+
+Review 1 failed: 16 Critical, 28 Important from 63 raised. I've fixed the six visible findings but I'm reporting now rather than grinding, because the failure has a specific cause you should see.
+                                                                                                                                                                                     What went wrong, precisely
+
+The restructure moved content into the six owners. I did not sweep the references to where that content used to live. Every visible Critical is that one thing:                      
+- The block's own roster still named 18 identifiers after the owners defined 28.
+- A trailing "Eighteen rows, counted from the two tables above" survived — the block is no longer two tables, and the two tables actually above it hold 9 rows, none of them among the 18 named.
+- §14.5 restated the same stale 18 and pointed it at §5.10.
+- §14.4 item 22 duplicated RD-18's canonicalization split and disagreed with it on gate 1's level-1 standing (RD-18: not spec-fixed; item 22: implied spec-fixed).
+- The test matrix pointed at "§5.11.2's seven-row disposition table" — a section that now explicitly disclaims holding it.
+- §5.11.2 attributed the aggregation-blocking set to RD-9, which states only the narrower DENIED → NONE fact.                                                                        
+My structural audit was too narrow, and that's the real lesson                                                                                                                       
+I declared the audit passed on three checks: identifier uniqueness, no duplicate definitions, no dangling citations. All three genuinely passed and still do — 28 defined, 28 unique, zero dangling. But I never checked the two properties that actually broke:
+
+1. Does each pointer's described content match its target? "§5.11.2's seven-row table" resolves to a section, so a dangling-reference check passes it — while the described content has moved.                                                                                                                                                                            2. Did counts survive the move? A count is correct or stale relative to a tabed.
+
+I've added both as mechanical checks and they now pass. That gap is why a restructure whose entire purpose was eliminating duplicate authority shipped a fresh batch of it.          
+Two caveats on the numbers
+                                                                                                                                                                                     16 of 105 verifier agents failed with API errors, so 16C/28I rests on partialigures could be lower. And I've only fixed the six findings visible in thetruncated output; the remaining ~38 blocking findings are unread and unfixed.
+                                                                                                                                                                                     Plan: 5,699 lines · 346,098 bytes · SHA-256 8ef2ac4d…6fdc. Fences 96 = 48 paiEAD unchanged at 7a96176a. Nothing committed, merged or implemented. D2–D5held, 66 findings PENDING_REVALIDATION_AFTER_D1.
+                                                                                                                                                                                     What I'd do next, and where I'd want your call
+The structural gate is the right gate — it caught this class cleanly, which the four semantic passes never did. The mechanical next step is: read the remaining ~38 findings, fix them, re-run review 1 with the two added checks, and only then proceed to reviews 2 and 3.                                                                                                 
+But I want to flag the pattern honestly: this is the fifth consecutive round where my own edits generated the majority of the next round's findings. Reviews are catching my defects faster than I'm retiring them. If you want me to continue the loop I will — b hand off a precise state record instead, this is a clean point to do it, withthe restructure landed and the audit gap now closed.

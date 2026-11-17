@@ -1,0 +1,80 @@
+GOOGLE ANTIGRAVITY - CRYPTO TRADING LAB FULL TAKEOVER
+
+Continue the existing product from its actual current state. Do not rebuild it.
+You are the sole future development system: use Antigravity and Google models
+available through its supported routes. Do not call Claude Code, Codex, OpenAI
+or Anthropic APIs, or either former model relay.
+
+Read this package's START_HERE.md and SOURCE_LIMITATIONS.md. Then inspect the
+actual local repository, authoritative architecture, accepted task plans and
+preserved evidence. The package is a handoff, not a fabricated live-state oracle.
+
+MISSION
+Deliver all thirteen approved projects: engine-neutral core; historical data;
+VectorBT, Freqtrade, NautilusTrader, Jesse, OctoBot, Hummingbot and LEAN adapters;
+risk/hypothetical wallet; Indian tax/TDS analysis; local dashboard; optional local
+LLM evidence explanation. Preserve the initial long-only Spot USDT, simulated-
+research scope. No real-money execution is implied by local-development freedom.
+
+TAKEOVER FIRST
+Quiesce and retire the old controller roots without deleting their code/evidence
+or disrupting a running authoritative verifier. Inspect actual ownership, Git
+state and private checkpoints. Preserve uncommitted and untracked product work.
+Do not restart old supervisors or execute archived provider instructions.
+
+Reconcile the local integration reportedly at 6678c15 against actual local and
+remote refs. Preserve S10-T1 ba4412a and any later task. The public snapshot
+may be stale. VectorBT 1.2.0 bootstrap at 1abd49e5 is recorded; do not confuse it
+with adapter acceptance or reinstall blindly.
+
+OPERATE DIRECTLY
+Replace obsolete controller-only procedure with one concise recorded
+Antigravity operating amendment. Keep deterministic product execution/verification,
+source identity, independent review, actual permission enforcement and Git integrity.
+Do not build another orchestrator or reproduce the old 1700-test controller.
+
+Choose tasks yourself from dependency-ready work and preserve a small shared
+programme index. Exact accepted task names come from repository plans, not invented
+headings. Future project slices are planned just in time with one consolidated
+requirements/ownership review. Do not seek routine owner approval for task selection,
+file-map correction, coherent commit grouping or ordinary within-scope fixes.
+
+CONCURRENCY
+At most two implementation writers, separate worktrees/environments/path ownership.
+One heavy verifier or process-sensitive suite on this Windows host at a time.
+No local LLM/engine benchmark/controller suite/review swarm beside that run.
+Shared contracts and migrations have one writer. Do not change a verified subject
+or execution surface while its run is active.
+
+DELIVERY
+Use focused regression-first development, applicable lint/type/schema/migration
+checks, one independent review, required full acceptance and exact-subject commits.
+Fix findings with targeted evidence before repeating full gates. Preserve every
+failed/interrupted result. No rerun-until-green, skip/timeout/floor weakening or
+completion from a model's assertion. Record real coverage/skip attribution limits.
+
+Commit and push accepted work automatically through explicit approved-remote
+non-force operations. Integrate accepted branches using actual parent/tree identities
+and fresh combined-subject evidence; verify the installed core used by consumers.
+Main promotion needs the required main-checkout gate and observed remote confirmation.
+Do not publish private logs, downloaded data, weights, environments or secrets.
+
+PRODUCT TRUTH
+RESULT is not EVIDENCE; logs are not audit; a file is not registration; an import is
+not an engine backtest; temporary SQLite is not persistent integration; NDJSON is
+not Parquet; a clean Git merge is not compatibility; a model summary is not proof.
+Project 1's B1 normalized records, B2 audit vocabulary and B3 conditional durable
+ordering/idempotency must receive their actual dispositions before full completion.
+
+RESUME
+Before a context/session boundary, save task, subject, changes, commands/results,
+findings, locks/process state and exact next action. On resume inspect real state
+before replaying side effects. Keep history; do not reset counters/evidence to make
+an unfinished task look new. Do not promise background execution beyond the client.
+
+FIRST OUTPUT AND ACTION
+Return a brief reconciled local state, unresolved source/acceptance discrepancies,
+retirement outcome, first dependency-ready task and intended files/checks. Then
+implement through existing permitted routes. A genuine OS/security/licence/material
+scope blocker is one consolidated escalation; keep independent ready work moving.
+Do not produce another generic READY report instead of an actual useful next action.

@@ -1,0 +1,96 @@
+
+BLOCKED_WRONG_WORKTREE_EXECUTION_ROOT
+
+Stopped at your instruction. No file in either worktree was created, modified, or deleted.
+
+Why blocked
+
+My execution root is …/project-1-stage-4-implementation. The Stage 5 plan and every .superpowers/sdd artifact live in …/project-1-stage-5-plan. Your reasoning is confirmed by the code: d1_structural_audit.py:179 calls subprocess.run(["git", "diff", "--check"]) with no cwd, so check [15] audits whatever the process working directory happens to be. My one audit run only worked because I cd'd first — and the shell reported Shell cwd was reset to …stage-4-implementation immediately after. Every later invocation was one forgotten cd from a silent false pass.
+
+Phase 1 rehydration — evidence
+
+Target worktree …/project-1-stage-5-plan, all values re-derived from disk:
+
+┌──────────────────────────────────────────────────────┬─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                        Check                         │                                             Result                                              │
+├──────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ branch --show-current                                │ project-1-stage-5-plan ✓                                                                        │
+├──────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ rev-parse HEAD / main / merge-base HEAD main         │ all 7a96176ae418491fc9740984c45b56cca6b3ac41 ✓                                                  │
+├──────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ status --short --untracked-files=all                 │ one line: the Stage 5 plan, untracked ✓                                                         │
+├──────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ diff --name-status / --stat / --cached --name-status │ empty; index empty ✓                                                                            │
+├──────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ diff --check                                         │ clean, rc=0 ✓                                                                                   │
+├──────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Plan lines / bytes                                   │ 5,697 / 346,070 ✓                                                  │
+├──────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────┤
+│ Plan SHA-256                                         │ bdf02c0645ca35f55de62fc7badeec21db4a8138114adf2acf2a7b668d6ebec8 — begins bdf02c06, ends bec8 ✓ │
+├──────────────────────────────────────────────────────┼─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Production source / test / schema changes            │ none ✓                                                                                          │
+├──────────────────────────────────────────────────────┼────────────────────────────────────────────────────────────────────┤
+│ Stage 6 path                                         │ none ✓                                                                                          │
+└──────────────────────────────────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Artifact paths derived, not guessed: .superpowers/sdd/ holds review1-complete-register.md (123,860 B, 63 findings), d1_structural_audit.py (10,170 B), continuation-2026-08-29.md (latest record), pending-revalidation-after-d1.md, decision-{0,1,2,3,4,5,7}-*.md, in-plan-d1-closure-matrix{,-round2}.md, plus parts/p02…p07.md.
+
+Three premise corrections
+
+1. "256 resolving pointers" → 255. The audit's own parse reports citations: 255 RD-identifier occurrences. 28 of those are the definition rows themselves.
+2. The audit does not currently pass. It prints FAIL — 3 structural findings, all three [4b advisory] (plan lines 2008, 2727, 5624). The [4b] check is labelled advisory in its own comment yet appended via bad() into fails, which drives exit 1 — contradicting Phase 5's advisory-only rule. A hard/advisory channel split must land before the n-gram check, which has the same property. Related: --mutate scores kills on len(f) > len(base) across all findings, so post-split it would score an advisory-only mutation as KILLED while the hard gate
+   stays blind. Kill detection must compare hard-channel counts.
+3. Phase 2 is entirely undone. All 63 findings read classification: _to be assigned_. Severities: 15 Critical, 36 Important, 12 Minor, across auditors ownership (21), pointers (24), duplicate (18). Existing mutations: 7/7 killed.
+
+Read-only reconciliation — provisional, 63/63 triaged
+
+These are provisional dispositions from signature tests and targeted section reads, not the Phase 2 deliverable (which requires the full text of each finding plus all eight separate fields). 16 already-fixed / 25 open / 22 unassessed:
+
+Already fixed (signature absent from current plan) — R1-01, R1-02, R1-03, R1-05, R1-09, R1-20, R1-22, R1-23, R1-24, R1-25, R1-26, R1-34, R1-46, R1-48, R1-58, and R1-54 partially. Evidence: eighteen rows, twelve invariants, two tables above, seven-row, rows RD-1 through RD-15, and presence table all return zero hits; §14.5:5688 now reads | normative retry-decision contract rows | 28 | … D1-A 5, D1-B 2, D1-C 6, D1-D 4, D1-E 5, D1-F 6 |, matching the parsed manifest exactly; §2234 uses the range form RD-1 … RD-25 plus RD-3a, RD-4a and RD-5a; relative order of survives only at 2344 (RD-18).
+
+Confirmed open (defect present, exact locations) — 25 findings in 9 groups:
+
+┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┬─────────────────────┬──────────┐
+│                                                                       Group                                                                       │      Evidence       │ Findings │
+├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼──────────┤
+│ Gate 6 has no D1 owner — RD-17:2343 enumerates level-2 order for gates 4, 1ave one reason each"; gate 6 appears in   │                     │          │
+│ neither list. §5.9.4:2188–2194 holds the sole definition of gate 6's within-gate scan order. Phase 3B's migration branch is live, not             │ R1-29               │          │
+│ hypothetical.                                                                                                                                     │                     │          │
+├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼──────────┤
+│ D1-E cited nowhere — RD-20…RD-24 and RD-6 each occur exactly once, at their own definition rows. §5.10.1/.2/.3/.4/.5 and Task 9 restate them      │ R1-04, R1-17,       │          │
+│ uncited, while D1-E:2350–2351 asserts those sections "state no rule of their own".                                                                │ R1-28, R1-31, R1-50 │          │
+├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼──────────┤
+│ D1-C exceeds its owner boundary — Outcome cell 2323 states RD-20's reservation triple; 2324 states RD-16's completeness rule plus RD-17           │ R1-07, R1-30, R1-49 │          │
+│ precedence. Header 2309 claims "the order, and nothing else".                                                                                     │                     │          │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼──────────┤
+│ Appendix H re-defines D1-D — 5401–5403 pastes level 1 4, 1, 2, 3, 5, 6 and the within-gate set gates 4, 1 and 5, in the same sentence as "defined │ R1-08, R1-32, R1-51 │          │
+│  there and nowhere else".                                                                                                                         │                     │          │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼──────────┤
+│ Gate-1 arithmetic in 4 places — attempts_accounted_for + 1 at 2356 (owner RD-21), 2429 (§5.10.1), 4252 (Task 10), 4676 (§9.3 matrix).             │ R1-14, R1-53        │          │
+├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼──────────┤
+│ Owner order not canonical — subsections run A(2249), B(2263), F(2274), C(2307), D(2335), E(2347).                                                 │ R1-18, R1-42, R1-61 │          │
+├───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼──────────┤
+│ D1-F split across two ID tables — 2280–2284 and 2301–2305, with RD-25's disposition table 2290–2298 between them.                                 │ R1-45               │          │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼──────────┤
+│ D1-F prose restates RD-25 — 2286–2288 re-derives first-match-wins and order-normativity that RD-25:2284 already states.                           │ R1-21, R1-39, R1-62 │          │
+├──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┼─────────────────────┼──────────┤
+│ D1-E holds RD-15 authority — two normative paragraphs at 2361–2374 about a D1-C row. Plus §14.4 items 17/17a/23/24/25 and residual §14.5 retry    │ R1-57, R1-41,       │          │
+│ counts.                                                                                                                                           │ R1-59, R1-60        │          │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┴─────────────────────┴──────────┘
+
+Unassessed (needs the full per-finding read the directive mandates) — R1-06, 1-15, R1-16, R1-19, R1-27, R1-33, R1-35, R1-36, R1-37, R1-38, R1-40, R1-43,R1-44, R1-47, R1-52, R1-55, R1-56, R1-63.
+
+Not done
+
+Phases 2 (formal reconciliation), 3, 4, 5, 6, 7, 8 — all untouched. No Reviewbids it while structural findings remain, and 25 are confirmed open.
+
+To resume
+
+Restart from C:\Users\59557\Documents\Projects\Crypto_Trading-worktrees\project-1-stage-5-plan, confirm Get-Location and git rev-parse --show-toplevel both equal that path, then resume
+Phase 1. Worth doing early next session: add cwd= to the audit's git diff --craces even with the root correct.
+
+Confirmations
+
+Nothing committed · nothing merged · nothing edited in either worktree · plan SHA-256 byte-identical to session start · d1_structural_audit.py and review1-complete-register.md mtimes unchanged (14:09:42 / 14:05:37) · Stage 5 implementation not started · D2–D5 untouched, 66 findings remain PENDING_REVALIDATION_AFTER_D1 · Stage 6 not started · no network access · GitNexus not invoked · main still 7a96176 · stage-4 worktree clean.
+
+I wrote two memory files outside both repositories (~/.claude/projects/…/memoroot rule and the audit channel defect, so the next session starts with them.Say the word if you'd rather I remove those.

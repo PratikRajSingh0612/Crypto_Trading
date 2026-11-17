@@ -1,0 +1,8 @@
+Resume the Antigravity-only Crypto Trading Lab mission from the latest saved checkpoint.
+Read the checkpoint and its exact source/test/review references, then verify the actual
+local branch, HEAD, index, dirty/untracked files and live owned processes before acting.
+Do not resurrect Claude/Codex or run a former controller.
+Reconcile any completed-but-unrecorded commit, verifier or push; do not duplicate it.
+Finish the checkpoint's next useful task. If it is already accepted, dispatch the next
+eligible task under the existing programme authority. Preserve unresolved findings,
+private evidence and product scope. No new broad planning or controller campaign.

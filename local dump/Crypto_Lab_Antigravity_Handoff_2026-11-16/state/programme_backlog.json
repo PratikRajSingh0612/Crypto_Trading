@@ -1,0 +1,368 @@
+{
+  "version": 1,
+  "as_of": "2026-11-16",
+  "snapshot_not_live": true,
+  "source_limitations": "../SOURCE_LIMITATIONS.md",
+  "tasks": [
+    {
+      "id": "P1",
+      "title": "Engine-neutral core",
+      "reported_status": "Stages 1-9 published; Stage 10 Task 1 published; completion still pending",
+      "definition_of_done": "Core-only offline CLI acceptance with fake adapters",
+      "requires": "P1-S10 plus owning-stage B1/B2/B3 corrections",
+      "plan_status": "EXISTING_PLANS_MUST_BE_READ",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P2",
+      "title": "Historical data ingestion and normalization",
+      "reported_status": "Accepted slices and contract tests published on development branches; combined local merge reported, publication unconfirmed",
+      "definition_of_done": "Registered reproducible datasets with explicit quality and provenance",
+      "requires": "Core dataset contracts; production output and finalization integration",
+      "plan_status": "EXISTING_PLANS_MUST_BE_READ",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P3",
+      "title": "VectorBT Community adapter",
+      "reported_status": "Pinned 1.2.0 environment/bootstrap commit published; adapter acceptance unconfirmed",
+      "definition_of_done": "One actual supported backtest with checked trades and finalized results",
+      "requires": "Pinned executable protocol and approved isolated environment; dataset semantics",
+      "plan_status": "EXISTING_PLANS_MUST_BE_READ",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P4",
+      "title": "Freqtrade adapter",
+      "reported_status": "No accepted implementation established",
+      "definition_of_done": "Real credential-free historical execution within declared capabilities",
+      "requires": "Common adapter acceptance and version-specific local feasibility",
+      "plan_status": "UNPLANNED",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P5",
+      "title": "NautilusTrader adapter",
+      "reported_status": "No accepted implementation established",
+      "definition_of_done": "Checked event-driven backtest and canonical provenance",
+      "requires": "Same shared contracts; event-order and precision mapping",
+      "plan_status": "UNPLANNED",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P6",
+      "title": "Jesse adapter",
+      "reported_status": "No accepted implementation established",
+      "definition_of_done": "Actual supported simulation, not a fake adapter",
+      "requires": "Version/runtime/strategy compatibility",
+      "plan_status": "UNPLANNED",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P7",
+      "title": "OctoBot adapter",
+      "reported_status": "No accepted implementation established",
+      "definition_of_done": "Actual historical execution without live-account dependency",
+      "requires": "Minimal local historical path and plugin/service exclusions",
+      "plan_status": "UNPLANNED",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P8",
+      "title": "Hummingbot adapter",
+      "reported_status": "No accepted implementation established",
+      "definition_of_done": "Evidence-backed integration or a precisely reported unresolved capability gap",
+      "requires": "Prove historical/simulated feasibility without live exchange",
+      "plan_status": "UNPLANNED",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P9",
+      "title": "QuantConnect LEAN adapter",
+      "reported_status": "No accepted implementation established",
+      "definition_of_done": "Verified local adapter plus separate Indian-equities compatibility study",
+      "requires": "Local runtime/data/license/platform feasibility",
+      "plan_status": "UNPLANNED",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P10",
+      "title": "Risk controls and hypothetical wallet",
+      "reported_status": "Unplanned implementation",
+      "definition_of_done": "Conservation, idempotency, risk refusals and restart-safe simulated accounting",
+      "requires": "Stable order/fill/fee/result semantics and core services",
+      "plan_status": "UNPLANNED",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P11",
+      "title": "Indian tax-adjusted performance and TDS",
+      "reported_status": "Unplanned implementation",
+      "definition_of_done": "Traceable calculations with independently checked examples",
+      "requires": "Finalized records; sourced effective-dated policy",
+      "plan_status": "UNPLANNED",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P12",
+      "title": "Local dashboard",
+      "reported_status": "Unplanned implementation",
+      "definition_of_done": "Usable accessible local workflows backed by real application state",
+      "requires": "Stable application/service interfaces for delivered features",
+      "plan_status": "UNPLANNED",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P13",
+      "title": "Local LLM evidence analysis",
+      "reported_status": "Unplanned implementation",
+      "definition_of_done": "Local optional grounded explanations without write/execution authority",
+      "requires": "Reliable immutable evidence and deterministic workflows",
+      "plan_status": "UNPLANNED",
+      "implementation_authorized_by_package_alone": false,
+      "next_step": "Reconcile actual source, accepted plan and local journal before dispatch"
+    },
+    {
+      "id": "P1-S1",
+      "parent": "P1",
+      "status": "PUBLISHED_HISTORICAL",
+      "plan_source": "SOURCE-P1-S1",
+      "exact_task_inventory": "EXTRACT_FROM_LOCAL_PLAN; not fabricated from stage name"
+    },
+    {
+      "id": "P1-S2",
+      "parent": "P1",
+      "status": "PUBLISHED_HISTORICAL",
+      "plan_source": "SOURCE-P1-S2",
+      "exact_task_inventory": "EXTRACT_FROM_LOCAL_PLAN; not fabricated from stage name"
+    },
+    {
+      "id": "P1-S3",
+      "parent": "P1",
+      "status": "PUBLISHED_HISTORICAL",
+      "plan_source": "SOURCE-P1-S3",
+      "exact_task_inventory": "EXTRACT_FROM_LOCAL_PLAN; not fabricated from stage name"
+    },
+    {
+      "id": "P1-S4",
+      "parent": "P1",
+      "status": "PUBLISHED_HISTORICAL",
+      "plan_source": "SOURCE-P1-S4",
+      "exact_task_inventory": "EXTRACT_FROM_LOCAL_PLAN; not fabricated from stage name"
+    },
+    {
+      "id": "P1-S5",
+      "parent": "P1",
+      "status": "PUBLISHED_HISTORICAL",
+      "plan_source": "SOURCE-P1-S5",
+      "exact_task_inventory": "EXTRACT_FROM_LOCAL_PLAN; not fabricated from stage name"
+    },
+    {
+      "id": "P1-S6",
+      "parent": "P1",
+      "status": "PUBLISHED_HISTORICAL",
+      "plan_source": "SOURCE-P1-S6",
+      "exact_task_inventory": "EXTRACT_FROM_LOCAL_PLAN; not fabricated from stage name"
+    },
+    {
+      "id": "P1-S7",
+      "parent": "P1",
+      "status": "PUBLISHED_HISTORICAL",
+      "plan_source": "SOURCE-P1-S7",
+      "exact_task_inventory": "EXTRACT_FROM_LOCAL_PLAN; not fabricated from stage name"
+    },
+    {
+      "id": "P1-S8",
+      "parent": "P1",
+      "status": "PUBLISHED_HISTORICAL",
+      "plan_source": "SOURCE-P1-S8",
+      "exact_task_inventory": "EXTRACT_FROM_LOCAL_PLAN; not fabricated from stage name"
+    },
+    {
+      "id": "P1-S9",
+      "parent": "P1",
+      "status": "PUBLISHED_HISTORICAL",
+      "plan_source": "SOURCE-P1-S9",
+      "exact_task_inventory": "EXTRACT_FROM_LOCAL_PLAN; not fabricated from stage name"
+    },
+    {
+      "id": "P1-S10",
+      "parent": "P1",
+      "status": "IN_PROGRESS_PARTIAL_PUBLICATION",
+      "plan_source": "SOURCE-P1-S10",
+      "exact_task_inventory": "EXTRACT_FROM_LOCAL_PLAN; not fabricated from stage name"
+    },
+    {
+      "id": "P1-S9-T1",
+      "parent": "P1-S9",
+      "title": "Artifact contracts",
+      "status": "PUBLISHED",
+      "abbreviated_commit": "1b63214a",
+      "remaining_obligation": null
+    },
+    {
+      "id": "P1-S9-T2",
+      "parent": "P1-S9",
+      "title": "Audit/logging contracts",
+      "status": "PUBLISHED",
+      "abbreviated_commit": "1ccae301",
+      "remaining_obligation": null
+    },
+    {
+      "id": "P1-S9-T3",
+      "parent": "P1-S9",
+      "title": "Normalized result records",
+      "status": "EXCLUDED_CONDITIONALLY_NOT_COMPLETE",
+      "abbreviated_commit": null,
+      "remaining_obligation": "P1-S10-B1"
+    },
+    {
+      "id": "P1-S9-T4",
+      "parent": "P1-S9",
+      "title": "Paths and validation",
+      "status": "PUBLISHED",
+      "abbreviated_commit": "d4c65d4c",
+      "remaining_obligation": null
+    },
+    {
+      "id": "P1-S9-T5",
+      "parent": "P1-S9",
+      "title": "Persistence/migration",
+      "status": "PUBLISHED",
+      "abbreviated_commit": "b8b71ab1",
+      "remaining_obligation": null
+    },
+    {
+      "id": "P1-S9-T6",
+      "parent": "P1-S9",
+      "title": "Finalizer/recovery",
+      "status": "PUBLISHED",
+      "abbreviated_commit": "ab3b6de4",
+      "remaining_obligation": null
+    },
+    {
+      "id": "P1-S9-T7",
+      "parent": "P1-S9",
+      "title": "Application/evidence integration",
+      "status": "PUBLISHED",
+      "abbreviated_commit": "97f57d6e",
+      "remaining_obligation": null
+    },
+    {
+      "id": "P1-S9-T8",
+      "parent": "P1-S9",
+      "title": "Supervised SQLite artifact flow",
+      "status": "PUBLISHED",
+      "abbreviated_commit": "d3a0793b",
+      "remaining_obligation": null
+    },
+    {
+      "id": "P1-S9-T9",
+      "parent": "P1-S9",
+      "title": "Boundaries/documentation/status",
+      "status": "PUBLISHED",
+      "abbreviated_commit": "874fb51b",
+      "remaining_obligation": null
+    },
+    {
+      "id": "P1-S10-T1",
+      "parent": "P1-S10",
+      "status": "PUBLISHED",
+      "commit": "ba4412a06e19ce1d8fb1da5693821e718daa220e",
+      "task_title": "Read exact accepted plan; do not substitute this summary"
+    },
+    {
+      "id": "P1-S10-T2",
+      "parent": "P1-S10",
+      "status": "NEXT_REPORTED_CURRENT_LOCAL_STATE_UNKNOWN",
+      "task_title": "Read exact accepted plan and local journal"
+    },
+    {
+      "id": "P1-S10-T3-T8",
+      "parent": "P1-S10",
+      "status": "PLANNED_NOT_ESTABLISHED_COMPLETE",
+      "note": "Range placeholder for discovery, not a runnable combined task; expand exact individual tasks from the local section 8."
+    },
+    {
+      "id": "P1-S10-B1",
+      "status": "BLOCKED_OR_OWNER_STAGE_CORRECTION_REQUIRED",
+      "title": "Normalized canonical records and schemas",
+      "source": "Stage 10 section 1.2"
+    },
+    {
+      "id": "P1-S10-B2",
+      "status": "BLOCKED_OR_OWNER_STAGE_CORRECTION_REQUIRED",
+      "title": "Application authoritative audit vocabulary/constraints",
+      "source": "Stage 10 section 1.2"
+    },
+    {
+      "id": "P1-S10-B3",
+      "status": "CONDITIONAL_REINSPECT",
+      "title": "Durable scheduling and creation idempotency",
+      "source": "Stage 10 section 1.2"
+    },
+    {
+      "id": "P2-SLICE1",
+      "status": "ACCEPTED_PUBLISHED_NOT_WHOLE_P2",
+      "commit": "3a47d4c9ecdcd6967a670246144ea7ee6c999ed4"
+    },
+    {
+      "id": "P2B-T1",
+      "status": "ACCEPTED_PUBLISHED",
+      "commit": "4d70f673a004b47883388fa45a0d93c8daa9167a"
+    },
+    {
+      "id": "P2R2-T1",
+      "status": "ACCEPTED_PUBLISHED_TEMPORARY_DB_ONLY",
+      "commit": "970c1fb57005036e4e162190edeecdebf7935ceb"
+    },
+    {
+      "id": "P2C-T1",
+      "status": "ACCEPTED_PUBLISHED",
+      "commit": "19d4db1e77ae8053a9f3b7feecac78b9cb81f887"
+    },
+    {
+      "id": "P2CI-T1",
+      "status": "ACCEPTED_PUBLISHED_IDENTITY_CHECK_NOT_COMBINED_ACCEPTANCE",
+      "commit": "662ae4dfcc13486a444b69db43ffbe43a3594174"
+    },
+    {
+      "id": "P2-INTEGRATION",
+      "status": "LOCALLY_REPORTED_FINAL_GATE_PENDING_RECONCILIATION",
+      "abbreviated_local_merge": "6678c15"
+    },
+    {
+      "id": "P2-PARQUET",
+      "status": "PENDING_BOUNDARY",
+      "note": "No substitution of interim NDJSON for compliant production partitions."
+    },
+    {
+      "id": "P2-REAL-SOURCE",
+      "status": "AUTHORIZED_BOUNDED_TEST_OUTCOME_UNKNOWN",
+      "note": "Do not download again until prior local evidence is inspected."
+    },
+    {
+      "id": "P3-BOOTSTRAP",
+      "status": "BOOTSTRAP_COMMIT_PUBLISHED_NOT_ADAPTER_ACCEPTANCE",
+      "commit": "1abd49e5b67fe4856ec5d974d90414c5dbfe901c",
+      "version": "vectorbt==1.2.0"
+    },
+    {
+      "id": "P3-FIRST-ENGINE",
+      "status": "IMPLEMENTATION_ACCEPTANCE_UNKNOWN",
+      "next_step": "Read accepted P3 plan and inspect actual local code/tests before selecting the next slice."
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+TASK7_COMPLETE
+
+Commit identity
+
+┌─────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│              Item               │                                                           Value                                                            │
+├─────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 1. Task 7 base commit           │ 0f7346b81b30b0f8eedac9ebf55ffb410115c5ac                                                                                   │
+├─────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 2. Task 7 implementation commit │ 998db8d338f52d97fc6d9099c2fbae2d103c2095                                                                                   │
+├─────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
+
+Commit identity                                                                                                                                                                         
+┌─────────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│              Item               │                                                           Value                                                            │
+├─────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤                        │ 1. Task 7 base commit           │ 0f7346b81b30b0f8eedac9ebf55ffb410115c5ac                                                      │
+├─────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 2. Task 7 implementation commit │ 998db8d338f52d97fc6d9099c2fbae2d103c2095                                                                                   │
+├─────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 3. Commit parent                │ 0f7346b81b30b0f8eedac9ebf55ffb410115c5ac (exactly one parent)                                                              │
+├─────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 4. Commit subject               │ feat: add the command semantic outcome operation                                                                           │
+├─────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 45. Integrity                   │ 7 files, 3386 insertions, 9 deletions; 7 ahead of main; merge base 67c684c9… unchanged; no amend, squash, rebase or remote │                        ├─────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 46. Final Git status            │ clean worktree, empty index                                                                                                │
+├─────────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤                        │ 47. Offline lock-check          │ Resolved 30 packages, exit 0                                                                  │
+└─────────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+5. Exact changed paths (A = added, M = modified)
+
+- A src/crypto_lab/experiments/semantic_outcome.py
+- M src/crypto_lab/experiments/requests.py                                                                                                                                              - M src/crypto_lab/experiments/__init__.py
+- A tests/unit/experiments/test_semantic_outcome.py                                                                                                                                     - M tests/unit/experiments/test_experiment_service.py
+- M tests/safety/test_stage3_boundaries.py
+- M tests/unit/test_package_layout.py
+
+6. Task 6 path-count reconciliation. Git shows exactly eight paths for 0f7346b with one parent: adapters/__init__.py, adapters/commands.py, adapters/exit_codes.py,                     adapters/reconciliation.py, tests/safety/test_stage3_boundaries.py, tests/uniciliation.py, tests/unit/adapters/test_exit_semantics.py,tests/unit/test_package_layout.py. "Exactly eight" is correct; the report's seven-entry list was a prose omission. The report text is not persisted in the worktree, so the omitted entry cannot be named from disk. No Task 7 path, dependency, lockfile, schema, doc or script path is present. Task 6 was not modified.                                                        
+7. Contract derived from the plan. Plan §3.12, §9.2 to §9.3, §10, §13, §2.6 and the Task 7 section. All 29 items are recorded in the ignored ledger .superpowers/sdd/stage6/task7-ledger.md section 5. The plan assigns the transition_run live-invocation boundary to Task 7 (§1.5 item 3), owns no schema, releases no deferred name, and adds one source path and one operation.
+
+8. Public surface. SemanticOutcomeRequest (in requests.py), SemanticOutcome and apply_command_semantic_outcome (in semantic_outcome.py), MAX_CANDIDATE_OBSERVATIONS (request bound constant), SOURCE_COMPONENT = "experiments.semantic_outcome". Every other definition is private.
+
+9. Field order. schema_version, invocation_id, expected_invocation_revision, run_id, expected_run_revision, parsed_output, protocol_summary, candidate_observations, negotiated_versions, protocol_failure. Outcome: invocation, run, reconciliation, superseded_by.
+
+10. REQUEST_OPERATIONS. 16 to 17; the new entry is last, one-to-one; _OPERATION_NAMES and _FIELD_ORDERS extended; both == 17 pins set.
+
+11. Authoritative read set (one transaction, in order): invocation get, run get, experiment get, slot latest_attempt, list_for_run for VALIDATE and RUN, then the run CAS and the invocation CAS. Pinned per step with RecordingUnitOfWork.
+
+12. Live RUN-invocation evidence. Step 6 refuses a second open VALIDATE or RUN invocation, a non-current attempt and a non-RUNNING experiment before any write; a terminal sibling does
+not block. transition_run and every Stage 5 predicate are untouched (asserted
+
+13. Identity. DESCRIBE kind, unlinked run, non-EXITED invocation and wrong-kind parse outcome are CORE.INVARIANT_VIOLATION at step 1; foreign or stale output is refused by the consumed
+reconciler identity checks and lands the run FAILED.
+
+14. Stage 5 reuse. run_replacement, assert_run_transition(owner=GENERIC), run_rule_failure, assert_write_once_enrichment; no transition_run, enrich_invocation or model_copy call.
+
+15. DESCRIBE. Rejected at step 1; no run is created; nothing written.
+
+16. VALIDATE. VALID to READY with the slot's observation; NOT_APPLICABLE, UNAVAILABLE (with the slot's observation) and FAILED each with the reconciler's primary as the run primary and
+the invocation enriched with exactly that identity.
+
+17. RUN. NOT_APPLICABLE (late), UNAVAILABLE, FAILED by declaration and FAILED each driven end to end; protocol failure, FINAL_RESULT hash mismatch, leakingcandidate and stale manifest all end FAILED.
+
+18. Finalization eligibility. No run write, no invocation write, run stays RUNNING at the same revision, step 6 reads performed on every issue, sanitized manifest carried; a run failed by the core is reported as superseded.
+
+19 and 20. Layer separation. The exit is never read directly (semantic_exit_re target comes only from SemanticReconciliation.run_target_state; the requestand its parse outcome are proven unmutated.
+
+21 to 22. Replay and divergence. Identical re-issue returns the stored pair wtities under an advanced clock, one clock read, no write, for all eight writing verdicts; pre-write revisions are a stable conflict; divergent re-issues (READY under a failing verdict, run at target with the identity missing from the invocation) are
+CORE.INVARIANT_VIOLATION with no write.
+
+23 to 25. CAS, atomicity, restart. Run CAS then invocation CAS in one transaction; permanent loss returns the repository conflict after exactly two transactions; a lost invocation swap rolls back the run write; lose-once-then-proceed and a commit-time conflict both reload once and apply exactly once; a rebuilt unit of work over the same store sees every committed effect and replays.
+
+26. Event consistency. The bounded summary is consumed through the reconciler, never re-parsed; a VALIDATE summary carrying declarations is an invariant violation.
+
+27. Event-ledger measurement. Task 7 performs no ledger operation; from_eventlly (8000 events in 1.85 s), the summary read is constant; Task 4 preserved,carried to Task 8 and Stage 7.
+                                                                                                                                                                                       28 to 31. Precedence, tokens, no false success, diagnostics. A protocol_failurun primary even beside a favourable manifest; the raw token is present only in the request's manifest and absent from every record, reconciliation and diagnostic; reachable targets are exactly READY, NOT_APPLICABLE, UNAVAILABLE, FAILED; only CORE.INVARIANT_VIOLATION and PERSISTENCE.CONCURRENCY_CONFLICT are minted, token-free, without pydantic wording.                                                                        
+32 to 38. Evidence. RED A/B: ImportError for the missing symbol; RED C1: the allowlist names the missing path; RED C2: ModuleNotFoundError in the import probe. GREEN: module 127 then 130 passed; guards 149 passed; Step 4 1145 passed; broader 7484 passed; pytest-all alone 7595 passed, coverage 98.19%. Complete verifier alone: exit 0, 7598 passed, 2 approved skips, coverage 98.22%, formatter 193 files clean, lint clean, strict mypy clean ove
+
+39 to 41. Schemas and guards. Registry 27, no schema file, generation and distribution checks clean, every schema byte-identical. _ALLOWED_SOURCE_FILES 82 to 83, PACKAGE_MODULES plus one, REQUEST_OPERATIONS 16 to 17; deferred definitions 37, HashingProfile 12, import roots 22 and the seven-name mutation list unchanged.
+
+42. Carried notes. All fourteen dispositioned in the ledger section 7; the eight spec tensions raised by the inventory agents are recorded as declared readings or existing deferrals (ledger section 8), none a repository conflict.
+
+43 to 44. Review. One fresh reviewer: APPROVED_WITH_NON_BLOCKING_NOTES, 28 PAnding, every plan Step 1 clause mapped to a test. Four notes fixed (dropped the new registry-count pin that Task 9 would trip, tightened the adapters import equality, drove the positive control through the real create_invocation, pinned the observation bound), one
+re-verified, the rest recorded as out of scope.
+
+48 to 54. Confirmations. Task 8 not started; Project Stage 7 not started; no network access; GitNexus not invoked; no remote Git operation; no real adapter, engine, exchange, market data, backtest, database, persistence, credential, wallet, tax, UI, LLM, Docker, cloud or server behaviour; no process launched, no artifact finalized, no RunManifest created, no Stage 5 lifecycle record mutated outside the plan-owned run transition and invocation enrichment.

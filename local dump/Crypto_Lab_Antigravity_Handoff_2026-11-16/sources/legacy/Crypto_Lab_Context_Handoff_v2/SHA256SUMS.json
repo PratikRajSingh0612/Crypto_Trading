@@ -1,0 +1,29 @@
+{
+  "purpose": "integrity only; not a signature or new authority",
+  "files": {
+    "00_READ_FIRST.md": {
+      "sha256": "8734b5407947172b3343f3cdd93702e8c8522dedd20ca70ee303cb5aeb27ae76",
+      "bytes": 4577
+    },
+    "01_CURRENT_STATE.md": {
+      "sha256": "bc6ba47b350b9453329e259d4fcd14e95b3d7bdd517d9b0741244c483456d01b",
+      "bytes": 7126
+    },
+    "02_DECISIONS_AND_PITFALLS.md": {
+      "sha256": "a1909099d05cef730a7a322281595ef70e7a699ea58a95a621d4a5b72a0c8174",
+      "bytes": 11400
+    },
+    "03_SOURCE_MAP.md": {
+      "sha256": "874d719cdc758b1434dc83e1f7ecc376416ca5b883c9c363abea9f3885125d7f",
+      "bytes": 6501
+    },
+    "04_CHECKPOINT_TEMPLATE.md": {
+      "sha256": "d1c49bb5c3941c686b313bafd626038c26c5382010d28fbd4682f9524cfc4beb",
+      "bytes": 1446
+    },
+    "BOOTSTRAP_CONTEXT.txt": {
+      "sha256": "0904def852e656913173519a7501012e629c1d50f4ef036ce76e8fb7bf044f67",
+      "bytes": 4126
+    }
+  }
+}

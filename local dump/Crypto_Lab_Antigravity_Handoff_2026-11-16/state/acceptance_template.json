@@ -1,0 +1,20 @@
+{
+  "schema": "handoff-acceptance-v1",
+  "is_template": true,
+  "task_id": null,
+  "required_behavior": [],
+  "subject_commit_or_manifest": null,
+  "environment_identity": null,
+  "checks": [],
+  "skip_attribution": null,
+  "coverage_measurement": null,
+  "review_verdict": null,
+  "blocking_findings": [],
+  "nonblocking_followups": [],
+  "actual_native_exit": null,
+  "required_stages_complete": false,
+  "integration_parents": [],
+  "publication_ref": null,
+  "observed_remote_sha": null,
+  "completion_claim": "NOT_ACCEPTED"
+}

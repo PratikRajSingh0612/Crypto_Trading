@@ -1,0 +1,103 @@
+STAGE4_UTC_SCHEMA_CORRECTION_COMPLETE
+
+Two dispositions are readings I chose, stated here rather than buried in the checklist so you can overrule them:
+
+1. "Every Stage 4 timestamp field uses the calendar-valid view" holds under a published-schema reading, not a literal one. Bar.timestamp_utc (strategy/evaluation.py:123) stays on the legacy alias. It has no $id, no registry entry, is absent from all 113–114 $defs across twenty adapters in both modes, and is outside the authorized owner set. Registering it now fails the suite (M21).
+2. schema-generate-check exits 1, naming seven stale files. That is mandated by your authorization, not tolerated. Both reviewers independently attributed it: zero files are stale solely because of this correction.
+
+---
+
+1. Base commit — ae24043f2405a81f55005af096697ad7182da3a8, intact and unamended.
+
+2. Correction commit — 22c4c5810798a8bc3d306b7c9b0e80d8c6ef16fc, parent ae24043. 8 files, 979 insertions, 61 deletions.
+
+3. Source paths — src/crypto_lab/domain/time.py, domain/descriptors.py, strategy/models.py, strategy/versioning.py.
+
+4. Test paths — tests/unit/domain/test_time.py, tests/unit/domain/test_domain_descriptors.py, tests/unit/strategy/test_strategy_models.py, tests/unit/strategy/test_strategy_versioning.py.
+
+5. Stage 4 timestamp-use table — derived from a live render of all twenty adapters plus a live model-graph walk, not the stale on-disk files. 15 annotation sites; 5 migrated:
+
+┌────────────────────────────────────────────────┬────────────────────┬─────────────────────────────┬──────────────────────────────────────────┬───────────────┐
+│                     Field                      │       Source       │         Owning test         │           Top-level schema(s)            │     Kind      │
+├────────────────────────────────────────────────┼────────────────────┼─────────────────────────────┼──────────────────────────────────────────┼───────────────┤
+│ RuntimeAvailabilityObservation.observed_at_utc │ descriptors.py:403 │ test_domain_descriptors.py  │ runtime-availability-observation-v1      │ direct        │
+├────────────────────────────────────────────────┼────────────────────┼─────────────────────────────┼──────────────────────────────────────────┼───────────────┤
+│ RuntimeAvailabilityObservation.expires_at_utc  │ descriptors.py:404 │ test_domain_descriptors.py  │ runtime-availability-observation-v1      │ direct        │
+├────────────────────────────────────────────────┼────────────────────┼─────────────────────────────┼──────────────────────────────────────────┼───────────────┤
+│ AuthoringMetadata.created_at_utc               │ models.py:574      │ test_strategy_models.py     │ strategy-spec-v1 and strategy-version-v1 │ nested, twice │
+├────────────────────────────────────────────────┼────────────────────┼─────────────────────────────┼──────────────────────────────────────────┼───────────────┤
+│ StrategySourceProvenance.observed_at_utc       │ versioning.py:138  │ test_strategy_versioning.py │ strategy-version-v1                      │ nested        │
+├────────────────────────────────────────────────┼────────────────────┼─────────────────────────────┼──────────────────────────────────────────┼───────────────┤
+│ StrategyVersion.created_at_utc                 │ versioning.py:158  │ test_strategy_versioning.py │ strategy-version-v1                      │ direct        │
+└────────────────────────────────────────────────┴────────────────────┴─────────────────────────────┴──────────────────────────────────────────┴───────────────┘
+
+Nine Stage 3 sites left alone (TimeInterval ×2, DatasetPartition ×2, DatasetDescriptor ×4 incl. the UtcDateTime | MISSING union, Diagnostic ×1), plus DuplicateInterval's two inherited positions. Bar excluded as above. $ref positions per mode: 11 Stage 3 + 6 Stage 4 = 17. No Stage 4 schema reaches UtcDateTime through a frozen Stage 3 model, so BLOCKED_UTC_SCHEMA_VIEW_PLACEMENT did not fire.
+
+6. Definition
+_CALENDAR_VALID_UTC_SCHEMA: dict[str, Any] = {
+    "allOf": [
+        dict(_UTC_SCHEMA),
+        {"type": "string", "pattern": _CALENDAR_DATE_PREFIX_PATTERN},         {"type": "string", "pattern": _CLOCK_TIME_PREFIX_PATTERN},
+    ]
+}
+                                                                                                                                                                                          type CalendarValidUtcDateTime = Annotated[
+    UtcDateTime,
+    WithJsonSchema(_CALENDAR_VALID_UTC_SCHEMA, mode="validation"),
+    WithJsonSchema(_CALENDAR_VALID_UTC_SCHEMA, mode="serialization"),
+]
+dict(_UTC_SCHEMA) copies the frozen projection so no consumer can reach the object the three Stage 3 schemas render from. Pydantic hoists the named alias to one shared $defs/CalendarValidUtcDateTime with a $ref per field.
+
+7. UtcDateTime preservation — time.py is 90 insertions, 1 deletion; the sole deletion is from typing import Annotated → Annotated, Any. Reviewer B's difflib opcode diff against the HEAD blob: exactly one non-insert opcode. It loaded HEAD's time.py as a second module and found _UTC_PATTERN, _UTC_SCHEMA_PATTERN, _UTC_SCHEMA, both render modes, format_utc, require_utc and the full accept/reject corpus identical.
+
+8. Patterns
+_CALENDAR_DATE_PREFIX_PATTERN = (
+    r"^(?:"                                                                                                                                                                                   r"(?:[0-9]{3}[1-9]|[0-9]{2}[1-9][0-9]|[0-9][1-9][0-9]{2}|[1-9][0-9]{3})-"
+    r"(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|"
+    r"(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))|"
+    r"(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|"                                                                                                                                          r"(?:0[48]|[2468][048]|[13579][26])00)-02-29"
+    r")T"
+)   # sha256 004c977fc2c7b3f31ae9e507170d0f68237354553a6eabce50244634da7abfeb
+
+_CLOCK_TIME_PREFIX_PATTERN = (
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}"
+    r"T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+    r"(?:\.[0-9]{6})?Z"
+)   # sha256 4c4b9ad8954b66956b25d24de361cd32d4f5ef0965a75df1f33f230af72fc567
+Only [0-9], (?:…), |, {n}, ^, \.. No \s, no \d, no bare ., no format checker, no custom dialect. Exact end-of-string is inherited from the legacy branch's (?![\s\S]) through the conjunction — $ would be inexact under Python-backed validators and (?![\s\S]) would have reintroduced the \s you forbade — and that inheritance is pinned by test for \n, \r, \r\n, space, tab.                                                                                                                                                                              
+9/10. Validation and serialization — byte-identical dicts for all twenty schemas; zero mode disagreements; every rule carried in both.
+
+11. Exhaustive — calendar 4,620,000 (10000×14×33), 142.0 s, 0 disagreements / 0 over / 0 under, 124,864-candidate real-validator sub-sweep with 0 mismatches. Clock 1,000,000, 42.3 s,    same zeros. Reviewer A independently reran both, ran the full 1,000,000 throu modes, and closed the calendar sweep arithmetically: its accepted count3,652,059 equals date.max.toordinal().
+
+12. Leap-year evidence — Reviewer A, stronger than my ten year-classes: every year 0001–9999, Feb-29 accepted iff leap, 0 disagreements across 9,999 years. 1700/1800/1900/2100/2200/2300/0100 rejected; 0400/1600/2000/2400/9600 accepted.
+
+13. Migration — 5 fields; all six Stage 4 $ref positions resolve to the view; UtcDateTime absent from every Stage 4 $defs.
+
+14. Fixed point — 20 schemas, 253 $defs, 96 negative + 54 positive cases: EXACTLY_EXPRESSIBLE_STAGE4_DEFECT = 0, over-rejections 0, loose Stage 4 grammars 0.                            
+15. Frozen Stage 3 residuals — 3 (diagnostic-v1, dataset-partition-v1, dataset-descriptor-v1), plus the ProcessConfig.validate_heartbeat_ratio deferral and all other ae24043 Stage 3-only residuals, carried forward.                                                                                                                                                       
+16. Eleven Stage 3 hashes — IDENTICAL three ways (disk, main:, HEAD:), drift 0: ff51637b, 9eb04d6d, aa455aad, 36ab6838, 00e21d01, 153fae2f, 5b1455c5, 9a9051a0, 2b58e1c2, 8fadb5ea, 7ebcc646.
+
+17/18/19. Dumps, canonical bytes, hashes — preserved by construction: Reviewer B established WithJsonSchema defines __get_pydantic_json_schema__ and not __get_pydantic_core_schema__, so the annotations cannot reach the core schema. Confirmed empirically by re-deriving content_hash == 14f59d879338f36a91f639e932567dba35cc17b835cfb16d7a4362c05b23c29e — the 6th golden pin  in the unmodified test_strategy_loader.py.
+
+20. Diagnostics — 108 error-signature comparisons (type+loc+msg), 0 drifts; every rejection the pre-existing parse_utc value_error at the same loc. No new runtime validator: exactly one function-before, one parse_utc, one format_utc.
+
+21. Focused tests — test_time.py 78; plus per-owner rejection/over-rejection/structural tests, the per-branch isolation tests, the bounded 4,620-case matrix, the 300-case clock          component sweep, the retargeted legacy residual pin, the Stage 3 byte-identitcement guards.
+                                                                                                                                                                                          22/23/24. Run 2: 3063 passed, 1 skipped, 0 failed, branch coverage 97.67 %, zl 205 added here. Single skip = inherited Windows symlink privilege skip.
+
+Run 1 reported 1 failed, 3062 passed, 1 skipped — test_strategy_hashing.py::test_two_specifications_differing_in_one_material_field_hash_differently, a file this correction does not touch. I lost the traceback to my own tail -4, so the "no falsifying example recorded" point is inference. What carries the argument: _rotate over a two-element tuple cannot produce a collision, so that assertion cannot fail on that field; the test renders no schema; WithJsonSchema cannot reach the core schema; measured ~50–55 ms/example against a 200 ms deadline, with the repo's own recorded 280.39 ms breach on this exact family; passes on replay 3× including under deliberate 4-way contention. Not suppressed — that file is outside scope, and the repo records that suppressing these two properties was tried and reverted as
+
+25/26. Ruff format exit 0 (114 files); Ruff lint exit 0; strict mypy exit 0 (105 files).                                                                                           
+27. Build — offline build exit 0, sdist + wheel. Run on the working tree (20-entry registry), not the committed tree; the sdist includes /src and /tests, so the artifact reflects working tree.
+
+28. Reviews — Review A 10/10 PASS, zero over-rejections across 5.6 M+ candidates, ECMA-262 parity measured in node v25.9 under flags {none, u, v} over 61,270 candidates. Review B 13/13 PASS. Two of B's findings corrected my numbers (11+6 not 12+5; missing DuplicateInterval rows). A's best finding — an unenforced docstring rule already violated by Bar — is adopted. Declined with reasons: schema-generate-write (forbidden), the domain export (out of scope), a top-level type on the definition (you approved that exact shape; behaviourally exact;is a legal sole keyword).
+
+29. Mutations — 21 applied, 21 killed, 0 survived, 0 restore failures. All required classes caught: Stage 3 drift (M12), missing Stage 4 migration (M11), mode asymmetry (M9/M10), 24/60/60 (M16–M18), fraction-dot (M19), and the new guard (M21). M19 is the lg \. is invisible through the composed schema because branch 0 still requiresit, so under a conjunction-only suite it would have been a proven no-op — it died to exactly one test, test_the_clock_branch_pattern_is_exact_in_isolation, which exists for that reason.
+
+30. Commit scope — the 8 paths in items 3–4. --diff-filter=ADRC empty. Absentafety/, test_schema_registry.py, all nine generated schemas, all eleven Stage 3 schemas, README, docs, roadmap, plan, pyproject.toml, uv.lock, scripts/, .superpowers/.
+
+31. Retained Task 8 dirty paths — schema_registry.py (33fb650d…), test_stage3est_schema_registry.py (5cd40a34…) all at pin; test_domain_descriptors.pyremaining diff = the lone −2/+5 count flip. Nine schemas untracked at their Phase 1 digests. I do not claim the retained patch is byte-identical to the Phase 1 snapshot — it cannot be, since HEAD now contains the correction and the hunk's line numbers shift.
+
+32. Index — empty. git diff --check exit 0. Offline lock-check exit 0.
+
+33. Confirmations — Task 8 not resumed; Task 9 not started; roadmap Stage 5 not started; no network; no dependency or lock change; no generated schema committed or regenerated; no Stage 3 schema change; no GitNexus; no engine/adapter/strategy/extension/comparison execution; no exchange connectivity; no real backtest; no order/fill simulation; no portfolio accounting; no persistence; no wallet; no tax/TDS; no LLM; no UI; no Docker/cloud/server; main unmoved at 6f01538, nothing merged.
+
+The staged tree was executed, not simulated (Reviewer B's one named gap): 857against the exact index content, with all four files restored byte-exactly from copies taken immediately before the swap — deliberately not from the Phase 1 snapshots, which predate the correction and would have silently reverted my own tests.

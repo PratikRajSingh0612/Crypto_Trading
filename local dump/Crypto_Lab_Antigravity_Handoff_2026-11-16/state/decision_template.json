@@ -1,0 +1,16 @@
+{
+  "schema": "handoff-decision-v1",
+  "is_template": true,
+  "decision_id": null,
+  "source_conflict": [],
+  "classification": null,
+  "authority": "OWNER-DELEGATED TECHNICAL DECISION or actual owner message reference",
+  "choice": null,
+  "behavior_changed": null,
+  "preserved_invariants": [],
+  "affected_paths": [],
+  "focused_tests": [],
+  "independent_review_needed": null,
+  "superseded_procedural_clause": null,
+  "remaining_blocker": null
+}
