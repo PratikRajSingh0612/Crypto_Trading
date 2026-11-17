@@ -37,6 +37,15 @@ Declared readings:
 - The implementation hash lives in test constants and once in the roadmap; the
   README and the guide refer readers to the roadmap's checkpoint and carry no
   Stage 7 or Stage 8 hash (plan section 2.6; the user's Task 8 clarification).
+- Stage 10 plan section 6.3 (Task 2): ``crypto_lab.experiments.application_ports``
+  is admitted only in the two extended query modules (``database.py`` and
+  ``reconciliation_source.py``) and beside ``experiments.ports`` in the family set
+  and the ``experiments`` denial exception. The persistence direction gains one
+  exact carve-out, the specification's CLI -> Persistence composition: the named
+  non-persistence importers are exactly ``cli/startup.py``, equal to the actual
+  importers; every other package stays denied, and planted modules (an
+  ``experiments/probe.py`` among them) fail the same direction checker as the
+  real tree.
 """
 
 from __future__ import annotations
@@ -227,6 +236,8 @@ _PERSISTENCE_IMPORTS: Final[dict[str, frozenset[str]]] = {
             "domain.lifecycle",
             "domain.ports",
             "domain.results",
+            # Stage 10 plan section 6.3 (Task 2): the detached inventory read.
+            "experiments.application_ports",
             "persistence.diagnostics",
         }
     ),
@@ -316,6 +327,8 @@ _PERSISTENCE_IMPORTS: Final[dict[str, frozenset[str]]] = {
             "domain.lifecycle",
             "domain.ports",
             "domain.results",
+            # Stage 10 plan section 6.3 (Task 2): the application query port.
+            "experiments.application_ports",
             "persistence.codecs",
             "persistence.database",
             "persistence.diagnostics",
@@ -435,6 +448,8 @@ _PERSISTENCE_FAMILIES: Final[frozenset[str]] = frozenset(
         "datasets.models",
         "datasets.ports",
         "domain",
+        # Stage 10 plan section 6.3 (Task 2): the second application port family.
+        "experiments.application_ports",
         "experiments.ports",
         "persistence",
         "process_supervision.models",
@@ -442,6 +457,21 @@ _PERSISTENCE_FAMILIES: Final[frozenset[str]] = frozenset(
         "strategy.versioning",
     }
 )
+#: Stage 10 plan section 6.3 (Task 2): the two persistence modules that import the
+#: application query port -- the detached inventory read and its implementation.
+_APPLICATION_PORT_IMPORTERS: Final[frozenset[str]] = frozenset(
+    {"persistence/database.py", "persistence/reconciliation_source.py"}
+)
+#: The application port families persistence may import (Stage 10: 1 -> 2).
+_PERMITTED_APPLICATION_PORT_FAMILIES: Final[frozenset[str]] = frozenset(
+    {"experiments.ports", "experiments.application_ports"}
+)
+#: Stage 10 plan section 6.3 (Task 2): the specification's CLI -> Persistence
+#: composition direction. Exactly the named concrete CLI importers outside the
+#: persistence package -- equal to the actual importers, so no unused name is
+#: pre-authorized; every other package, the application services, the scheduler and
+#: the application ports among them, stays denied.
+_CLI_PERSISTENCE_IMPORTERS: Final[frozenset[str]] = frozenset({"cli/startup.py"})
 #: The two registry ports: exactly their imports, and the packages they may not
 #: reach (plan section 2.6, "Architecture closure").
 _PORT_IMPORTS: Final[dict[str, frozenset[str]]] = {
@@ -810,6 +840,40 @@ def _values_call_violations(tree: ast.AST, label: str) -> list[str]:
     return violations
 
 
+def _imports_persistence(imports: Iterable[str]) -> bool:
+    return any(
+        name == "persistence" or name.startswith("persistence.") for name in imports
+    )
+
+
+def _persistence_direction_violations(
+    imports_by_label: dict[str, frozenset[str]],
+) -> list[str]:
+    """The persistence dependency direction with the Stage 10 CLI carve-out (Stage 10
+    plan section 6.3): outside the persistence package only a named CLI importer may
+    import persistence, and a named importer that no longer does is a violation too,
+    so the named set always equals the actual importers."""
+    violations: list[str] = []
+    for label in sorted(imports_by_label):
+        if label in _PERSISTENCE_MODULES:
+            continue
+        imports = _imports_persistence(imports_by_label[label])
+        if imports and label not in _CLI_PERSISTENCE_IMPORTERS:
+            violations.append(f"{label}: imports persistence outside the CLI carve-out")
+        if not imports and label in _CLI_PERSISTENCE_IMPORTERS:
+            violations.append(f"{label}: named persistence importer imports none")
+    return violations
+
+
+def _imports_by_label(repository_root: Path) -> dict[str, frozenset[str]]:
+    return {
+        _label(repository_root, path): _crypto_lab_imports(
+            _parse(path), _label(repository_root, path)
+        )
+        for path in _source_files(repository_root)
+    }
+
+
 def _port_direction_violations(
     tree: ast.AST, label: str, prohibited: Iterable[str]
 ) -> list[str]:
@@ -865,9 +929,12 @@ def test_the_stage_eight_source_files_are_exactly_the_fifteen_plan_paths(
     # and store modules of Stage 9 Task 4, the four persistence increments of
     # Stage 9 Task 5, the three port, finalizer and recovery modules of Stage 9
     # Task 6 and the three run-manifest, finalization and comparison modules of
-    # Stage 9 Task 7 (Stage 9 plan section 2.6, the Task-3-excluded branch).
-    assert len(_ALLOWED_SOURCE_FILES) == 135
-    assert len(_source_files(repository_root)) == 135
+    # Stage 9 Task 7 (Stage 9 plan section 2.6, the Task-3-excluded branch), plus
+    # the runtime and application-port modules of Stage 10 Task 1 (Stage 10 plan
+    # section 6.11), 135 -> 137, and the startup module of Stage 10 Task 2,
+    # 137 -> 138.
+    assert len(_ALLOWED_SOURCE_FILES) == 138
+    assert len(_source_files(repository_root)) == 138
     assert set(_STAGE9_PERSISTENCE_FILES) <= _ALLOWED_SOURCE_FILES
     assert set(_STAGE9_PERSISTENCE_FILES).isdisjoint(STAGE8_SOURCE_FILES)
     on_disk = {
@@ -893,12 +960,18 @@ def test_each_stage_eight_import_root_is_confined_to_its_named_modules(
     assert len(_SQLALCHEMY_IMPORTERS) == 12
     assert len(_ALEMBIC_IMPORTERS) == 4
     assert _ALEMBIC_IMPORTERS < _SQLALCHEMY_IMPORTERS
-    # Every exemption pair of the Stage 5 guard is one of these importers' roots.
+    # Every exemption pair of the Stage 5 guard is one of these importers' roots,
+    # except the Windows process controller's ``subprocess`` pair and the two
+    # pairs of Stage 10 Task 1 (Stage 10 plan section 6.11): ``time`` and
+    # ``secrets`` in ``cli/runtime.py``.
     stage8_pairs = {
         (label, root) for root, labels in _ROOT_CONFINEMENT.items() for label in labels
     }
     assert stage8_pairs <= set(_INFRASTRUCTURE_EXEMPTIONS)
-    assert len(_INFRASTRUCTURE_EXEMPTIONS) == len(stage8_pairs) + 1
+    runtime_pairs = {("cli/runtime.py", "time"), ("cli/runtime.py", "secrets")}
+    assert runtime_pairs <= set(_INFRASTRUCTURE_EXEMPTIONS)
+    assert runtime_pairs.isdisjoint(stage8_pairs)
+    assert len(_INFRASTRUCTURE_EXEMPTIONS) == len(stage8_pairs) + 3
 
 
 def test_every_persistence_module_imports_exactly_its_listed_crypto_lab_modules(
@@ -916,11 +989,21 @@ def test_every_persistence_module_imports_exactly_its_listed_crypto_lab_modules(
     everything = frozenset().union(*_PERSISTENCE_IMPORTS.values())
     assert "experiments.supervision_lifecycle" not in everything
     assert "process_supervision.ports" not in everything
+    # Stage 10 plan section 6.3 (Task 2): the application ports join the one
+    # admitted `experiments` family, 1 -> 2, and nothing else is released.
+    assert len(_PERMITTED_APPLICATION_PORT_FAMILIES) == 2
+    assert _PERMITTED_APPLICATION_PORT_FAMILIES <= _PERSISTENCE_FAMILIES
     assert not any(
         name.startswith(("experiments.", "capabilities", "cli", "schema_registry"))
-        and name != "experiments.ports"
+        and name not in _PERMITTED_APPLICATION_PORT_FAMILIES
         for name in everything
     )
+    application_port_importers = {
+        label
+        for label, allowed in _PERSISTENCE_IMPORTS.items()
+        if "experiments.application_ports" in allowed
+    }
+    assert application_port_importers == _APPLICATION_PORT_IMPORTERS
 
 
 def test_the_two_registry_ports_import_only_domain_and_their_own_package(
@@ -938,15 +1021,63 @@ def test_the_two_registry_ports_import_only_domain_and_their_own_package(
             assert name.startswith(("domain.", f"{own_package}.")), (label, name)
     assert violations == []
     # The dependency direction: persistence imports the ports; nothing outside
-    # persistence imports persistence.
-    for path in _source_files(repository_root):
-        label = _label(repository_root, path)
-        if label in _PERSISTENCE_MODULES:
-            continue
-        imports = _crypto_lab_imports(_parse(path), label)
-        assert not any(
-            name == "persistence" or name.startswith("persistence.") for name in imports
-        ), label
+    # persistence imports persistence except the named CLI composition importers
+    # (Stage 10 plan section 6.3, Task 2: 0 -> 1), which equal the actual ones.
+    imports_by_label = _imports_by_label(repository_root)
+    assert _persistence_direction_violations(imports_by_label) == []
+    actual = {
+        label
+        for label, imports in imports_by_label.items()
+        if label not in _PERSISTENCE_MODULES and _imports_persistence(imports)
+    }
+    assert actual == _CLI_PERSISTENCE_IMPORTERS
+    assert len(_CLI_PERSISTENCE_IMPORTERS) == 1
+    assert all(label.startswith("cli/") for label in _CLI_PERSISTENCE_IMPORTERS)
+
+
+def test_the_persistence_direction_admits_only_the_named_cli_importer(
+    repository_root: Path,
+) -> None:
+    """Planted modules run through the same direction checker as the real tree: a
+    persistence import from ``experiments/probe.py`` (absolute or relative), from
+    the application services, the scheduler or the application ports, and from an
+    unnamed CLI module all fail; the named importer losing its import fails too."""
+    real = _imports_by_label(repository_root)
+    source = repository_root / "src/crypto_lab"
+    planted_imports = (
+        ("experiments/probe.py", "from crypto_lab.persistence.database import X\n"),
+        ("experiments/probe.py", "from ..persistence import database\n"),
+        ("experiments/probe.py", "import crypto_lab.persistence\n"),
+        ("experiments/application.py", "from crypto_lab.persistence import schema\n"),
+        ("experiments/scheduler.py", "import crypto_lab.persistence.database\n"),
+        ("experiments/application_ports.py", "from crypto_lab import persistence\n"),
+        ("cli/probe.py", "from crypto_lab.persistence.database import X\n"),
+        ("cli/main.py", "from crypto_lab.persistence import migration_runner\n"),
+        ("audit/probe.py", "from crypto_lab.persistence.audit_sink import X\n"),
+    )
+    for label, planted_source in planted_imports:
+        planted = dict(real)
+        planted[label] = _crypto_lab_imports(ast.parse(planted_source), label)
+        violations = _persistence_direction_violations(planted)
+        assert violations == [
+            f"{label}: imports persistence outside the CLI carve-out"
+        ], (label, planted_source)
+    assert not (source / "experiments/probe.py").exists()
+    assert not (source / "cli/probe.py").exists()
+    lost = dict(real)
+    lost["cli/startup.py"] = _crypto_lab_imports(
+        ast.parse("from crypto_lab.domain.results import Result\n"), "cli/startup.py"
+    )
+    assert _persistence_direction_violations(lost) == [
+        "cli/startup.py: named persistence importer imports none"
+    ]
+    # A planted module importing no persistence name stays admitted.
+    admitted = dict(real)
+    admitted["experiments/probe.py"] = _crypto_lab_imports(
+        ast.parse("from crypto_lab.experiments.ports import UnitOfWork\n"),
+        "experiments/probe.py",
+    )
+    assert _persistence_direction_violations(admitted) == []
 
 
 def test_persistence_modules_import_no_forbidden_root(repository_root: Path) -> None:
@@ -1063,11 +1194,14 @@ def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
     # deferred names -> 18; Task 5: paths -> 129, exemption pairs 13 -> 17; Task 6:
     # paths -> 132, deferred names -> 15, subprocess importers 12 -> 13; Task 7:
     # paths -> 135, deferred names -> 13, registry and files -> 48, profiles -> 20;
-    # the rest is unchanged.
-    assert len(_ALLOWED_SOURCE_FILES) == 135
-    assert len(_ALLOWED_IMPORT_ROOTS) == 30
+    # the rest is unchanged. Stage 10 plan section 6.11, Task 1: paths 135 -> 137,
+    # import roots 30 -> 33 (`time`, `secrets`, `signal`), exemption pairs
+    # 17 -> 19 (`cli/runtime.py` with `time` and `secrets`); Task 2: paths
+    # 137 -> 138 (`cli/startup.py`), roots and pairs unchanged at 33 and 19.
+    assert len(_ALLOWED_SOURCE_FILES) == 138
+    assert len(_ALLOWED_IMPORT_ROOTS) == 33
     assert len(_DEFERRED_DEFINITIONS) == 13
-    assert len(_INFRASTRUCTURE_EXEMPTIONS) == 17
+    assert len(_INFRASTRUCTURE_EXEMPTIONS) == 19
     assert len(_EXPECTED_READER_IMPLEMENTATIONS) == 5
     assert len(_SUBPROCESS_IMPORTERS) == 13
     assert len(_EXPECTED_RUNTIME_REQUIREMENTS) == 4
@@ -1179,6 +1313,11 @@ def test_the_guide_records_the_stage_eight_focused_checks_and_evidence(
         ("import crypto_lab.cli\n", "unlisted"),
         ("from crypto_lab import schema_registry\n", "unlisted"),
         ("from crypto_lab.experiments.supervision_lifecycle import X\n", "unlisted"),
+        # Stage 10 plan section 6.3 (Task 2): the application services, the
+        # scheduler and the CLI stay outside every family.
+        ("from crypto_lab.experiments.application import X\n", "unlisted"),
+        ("from crypto_lab.experiments.scheduler import X\n", "unlisted"),
+        ("from crypto_lab.cli.startup import X\n", "unlisted"),
     ],
 )
 def test_the_import_allowlist_rejects_an_extra_or_forbidden_module(

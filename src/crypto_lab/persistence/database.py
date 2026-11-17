@@ -64,11 +64,26 @@ session -- unmapped ``FINALIZING`` candidates, references whose stored manifest
 does not describe them, success states without a run manifest and open journal
 entries -- as fields defaulting to zero after the eight Stage 8 fields, so every
 eight-argument construction of the report stays valid.
+
+Stage 10 plan Task 2 (Matrix B rows B07 and B11, plan section 4.2) adds the
+detached startup projections the CLI startup coordinator reads after it owns
+dispatch, each a ``Result`` so a refused read is never a clean or empty answer:
+
+- ``read_consistency`` is ``consistency_report`` with a refused checkout or
+  statement mapped to the classified ``Failure`` (the twelve counts are unchanged).
+- ``verify_revision`` runs a caller's revision policy over a fresh verified
+  connection, as ``open`` does at step 6, with the same refusal mapping.
+- ``read_work_inventory`` reads the populations of one ``DurableWorkInventory``
+  (the application query contract) inside one read-only session -- one WAL
+  snapshot, so the populations agree with one another -- copies every row into a
+  plain ``dict`` so nothing refers to the connection, releases the session, and
+  only then hands the rows to the caller's assembler, which decodes them and
+  validates the population outside any transaction.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,12 +96,14 @@ from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from sqlalchemy.pool import ConnectionPoolEntry, QueuePool
+from sqlalchemy.sql import Executable
 
 from crypto_lab.configuration.models import DatabaseConfig
 from crypto_lab.domain.diagnostics import DiagnosticDetailValue, ErrorCode
 from crypto_lab.domain.lifecycle import ExperimentState
 from crypto_lab.domain.ports import Clock
 from crypto_lab.domain.results import Failure, Result, Success
+from crypto_lab.experiments.application_ports import DurableWorkInventory
 from crypto_lab.persistence.diagnostics import (
     CONCURRENCY_CONFLICT,
     INVARIANT_VIOLATION,
@@ -101,6 +118,8 @@ __all__ = [
     "POOL_SIZE",
     "POOL_TIMEOUT_SECONDS",
     "ConsistencyReport",
+    "DetachedRows",
+    "InventoryAssembler",
     "RevisionPolicy",
     "SqliteDatabase",
     "database_path",
@@ -168,6 +187,13 @@ _WRITE_FAILED_PRIMARY_CODES: Final[frozenset[int]] = frozenset(
 )
 
 type RevisionPolicy = Callable[[Connection], Result[None]]
+#: Stage 10 plan Task 2 (B11): one population's rows, copied out of the session.
+type DetachedRows = tuple[dict[str, object], ...]
+#: Decodes and validates the detached populations, outside any transaction.
+type InventoryAssembler = Callable[
+    [Mapping[str, DetachedRows]], Result[DurableWorkInventory]
+]
+_WORK_INVENTORY: Final = "work_inventory"
 
 
 # --------------------------------------------------------------------------
@@ -701,6 +727,76 @@ class SqliteDatabase:
                 ),
                 journal_open=_scalar_int(connection, _JOURNAL_OPEN_SQL),
             )
+
+    # -- Stage 10 plan Task 2: the detached startup projections -------------------
+
+    def read_consistency(self) -> Result[ConsistencyReport]:
+        """``consistency_report`` as a ``Result`` (B07): every query still runs;
+        a refused checkout or statement is the classified ``Failure``, never a
+        clean count."""
+        try:
+            report = self.consistency_report()
+        except (DBAPIError, PoolTimeoutError) as error:
+            return self._read_refusal(error, operation="consistency_report")
+        return Success[InstanceOf[ConsistencyReport]](outcome="SUCCESS", value=report)
+
+    def verify_revision(self, revision_policy: RevisionPolicy) -> Result[None]:
+        """Run ``revision_policy`` over a fresh verified connection, as ``open``'s
+        step 6 does; its own ``Failure`` is returned unchanged and a refused read
+        is the classified ``Failure``. The policy issues reads only."""
+        try:
+            refusal = self._apply_revision_policy(revision_policy)
+        except (DBAPIError, PoolTimeoutError) as error:
+            return self._read_refusal(error, operation="verify_revision")
+        if refusal is not None:
+            return refusal
+        return Success[None](outcome="SUCCESS", value=None)
+
+    def read_work_inventory(
+        self,
+        statements: Sequence[tuple[str, Executable]],
+        assemble: InventoryAssembler,
+    ) -> Result[DurableWorkInventory]:
+        """Read every named population inside one read-only session (one WAL
+        snapshot), copy each row into a plain ``dict``, release the session, then
+        hand the detached rows to ``assemble`` outside any transaction (B11). A
+        refused checkout, statement or fetch is the classified ``Failure`` naming
+        the population being read; nothing partial reaches ``assemble``."""
+        rows: dict[str, DetachedRows] = {}
+        reading = ""
+        try:
+            with self.read_only() as connection:
+                for name, statement in statements:
+                    reading = name
+                    rows[name] = tuple(
+                        {str(key): value for key, value in row.items()}
+                        for row in connection.execute(statement).mappings().all()
+                    )
+        except (DBAPIError, PoolTimeoutError) as error:
+            return self._read_refusal(error, operation=_WORK_INVENTORY, table=reading)
+        return assemble(rows)
+
+    def _read_refusal(
+        self,
+        error: DBAPIError | PoolTimeoutError,
+        *,
+        operation: str,
+        table: str = "",
+    ) -> Failure:
+        """A refused read through the single failure authority (plan 6.5)."""
+        details: dict[str, DiagnosticDetailValue] = {"operation": operation}
+        if table:
+            details["table"] = table
+        origin = getattr(error, "orig", None)
+        for name in ("sqlite_errorcode", "sqlite_errorname"):
+            value = getattr(origin, name, None)
+            if isinstance(value, int | str) and not isinstance(value, bool):
+                details[name] = value
+        return self.failure(
+            self.classify(error),
+            message=f"{operation} was refused by the database",
+            details=details,
+        )
 
     def close(self) -> None:
         """Dispose the pool, closing every connection; idempotent."""

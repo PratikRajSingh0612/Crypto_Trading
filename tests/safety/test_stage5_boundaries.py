@@ -31,7 +31,11 @@ Declared readings, so nothing is inferred silently:
   ``persistence/unit_of_work.py`` and ``persistence/repositories.py``; Task 5:
   ``sqlalchemy`` in ``persistence/reconciliation_source.py``). Every other
   pair, the same root in any other module included, still fails, and each
-  exempted module must really import its root.
+  exempted module must really import its root. Stage 10 plan section 2.6 (Task 1)
+  adds the runtime module's two pairs, ``time`` and ``secrets`` in
+  ``cli/runtime.py``, and one label-keyed ambient-clock exemption,
+  ``_AMBIENT_CLOCK_EXEMPTIONS``: the ``datetime.datetime.now`` read in
+  ``cli/runtime.py``. The environment scan takes no exemption.
 - "Stage 5 module" means exactly the eighteen paths plan section 2.7 tabulates,
   pinned here as a literal so a widened set cannot pass by omission. "Reads the
   filesystem or the environment at import time" is discharged statically as a
@@ -129,6 +133,8 @@ _INFRASTRUCTURE_EXEMPTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
         ("persistence/audit_sink.py", "sqlalchemy"),
         ("persistence/migrations/versions/r0002_stage9_artifacts.py", "sqlalchemy"),
         ("persistence/migrations/versions/r0002_stage9_artifacts.py", "alembic"),
+        ("cli/runtime.py", "time"),
+        ("cli/runtime.py", "secrets"),
     }
 )
 #: Resolved through the module's own import bindings, so ``from datetime import
@@ -136,6 +142,33 @@ _INFRASTRUCTURE_EXEMPTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
 #: resolve to a member of this set.
 _AMBIENT_CLOCK_READS: Final = frozenset(
     {"datetime.datetime.now", "datetime.datetime.utcnow", "datetime.date.today"}
+)
+#: Stage 10 plan section 2.6 (Task 1): the one whole-block, label-keyed exemption from
+#: the ambient-clock scan -- the runtime clock's aware UTC wall-clock read. Keyed on
+#: the exact module label and resolved read, so ``utcnow`` and ``date.today`` in the
+#: same module, the same read in a sibling and a planted in-memory module all fail.
+_AMBIENT_CLOCK_EXEMPTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
+    {("cli/runtime.py", "datetime.datetime.now")}
+)
+#: One planted module per ambient read, for the pair-by-pair exemption control.
+_CLOCK_READ_SOURCES: Final[dict[str, str]] = {
+    "datetime.datetime.now": "from datetime import datetime\ndatetime.now()\n",
+    "datetime.datetime.utcnow": "from datetime import datetime\ndatetime.utcnow()\n",
+    "datetime.date.today": "from datetime import date\ndate.today()\n",
+}
+#: Aliased spellings and the read each resolves to; every spelling must reach the
+#: same decision as its plain form.
+_ALIASED_CLOCK_SPELLINGS: Final[tuple[tuple[str, str], ...]] = (
+    ("from datetime import datetime as wall\nwall.now()\n", "datetime.datetime.now"),
+    ("import datetime\ndatetime.datetime.now()\n", "datetime.datetime.now"),
+    ("import datetime as dt\ndt.datetime.now()\n", "datetime.datetime.now"),
+    (
+        "from datetime import datetime as wall\nwall.utcnow()\n",
+        "datetime.datetime.utcnow",
+    ),
+    ("import datetime as dt\ndt.datetime.utcnow()\n", "datetime.datetime.utcnow"),
+    ("from datetime import date as day\nday.today()\n", "datetime.date.today"),
+    ("import datetime as dt\ndt.date.today()\n", "datetime.date.today"),
 )
 _FILESYSTEM_AND_ENVIRONMENT_ROOTS: Final = frozenset(
     {"os", "pathlib", "importlib", "io", "sys", "shutil", "tempfile", "glob"}
@@ -230,15 +263,24 @@ def _infrastructure_violations(tree: ast.AST, label: str) -> list[str]:
     ]
 
 
-def _ambient_clock_violations(tree: ast.AST, label: str) -> list[str]:
+def _ambient_clock_reads(tree: ast.AST) -> list[tuple[int, str]]:
+    """Every ambient clock read, with its line, before any exemption applies."""
     aliases = _import_aliases(tree)
-    violations: list[str] = []
+    reads: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute):
             resolved = _resolved_qualified_name(node, aliases)
-            if resolved in _AMBIENT_CLOCK_READS:
-                violations.append(f"{label}:{node.lineno}: ambient clock {resolved}")
-    return violations
+            if resolved is not None and resolved in _AMBIENT_CLOCK_READS:
+                reads.append((node.lineno, resolved))
+    return reads
+
+
+def _ambient_clock_violations(tree: ast.AST, label: str) -> list[str]:
+    return [
+        f"{label}:{line}: ambient clock {resolved}"
+        for line, resolved in _ambient_clock_reads(tree)
+        if (label, resolved) not in _AMBIENT_CLOCK_EXEMPTIONS
+    ]
 
 
 def _filesystem_violations(tree: ast.AST, label: str) -> list[str]:
@@ -587,7 +629,10 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
     process controller, ``subprocess`` in ``windows_api.py``, the planted
     ``process_supervision/probe.py`` -- and Stage 8 adds their three mirrors:
     ``sqlalchemy`` in ``experiments/ports.py``, a planted ``persistence/probe.py``
-    and ``time`` in ``persistence/database.py``.
+    and ``time`` in ``persistence/database.py``. Stage 10 plan section 2.6 (Task 1)
+    adds the runtime module's ``time`` and ``secrets`` pairs and their near misses:
+    ``random`` in ``cli/runtime.py``, both roots in the sibling ``cli/main.py`` and
+    ``secrets`` in a planted ``cli/probe.py``.
     """
     assert _INFRASTRUCTURE_EXEMPTIONS == frozenset(
         {
@@ -610,6 +655,10 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
             ("persistence/audit_sink.py", "sqlalchemy"),
             ("persistence/migrations/versions/r0002_stage9_artifacts.py", "sqlalchemy"),
             ("persistence/migrations/versions/r0002_stage9_artifacts.py", "alembic"),
+            # Stage 10 plan section 2.6 (Task 1): the runtime clock's and identity
+            # source's two roots, 17 -> 19.
+            ("cli/runtime.py", "time"),
+            ("cli/runtime.py", "secrets"),
         }
     )
     source = repository_root / "src/crypto_lab"
@@ -637,6 +686,10 @@ def test_each_infrastructure_exemption_licenses_exactly_its_pair(
         ("import sqlalchemy\n", "experiments/ports.py"),
         ("import sqlalchemy\n", "persistence/probe.py"),
         ("import time\n", "persistence/database.py"),
+        ("import random\n", "cli/runtime.py"),
+        ("import time\n", "cli/main.py"),
+        ("import secrets\n", "cli/main.py"),
+        ("import secrets\n", "cli/probe.py"),
     )
     for statement, label in controls:
         assert _infrastructure_violations(ast.parse(statement), label) != [], label
@@ -658,6 +711,49 @@ def test_the_ambient_clock_scan_detects_each_shape(source: str) -> None:
 def test_the_ambient_clock_scan_allows_an_injected_clock() -> None:
     source = "def f(clock):\n    return clock.now_utc()\n"
     assert _ambient_clock_violations(ast.parse(source), "probe.py") == []
+
+
+def test_each_ambient_clock_exemption_licenses_exactly_its_pair(
+    repository_root: Path,
+) -> None:
+    """The whole-block, label-keyed clock exemption, iterated pair by pair.
+
+    Stage 10 plan section 2.6 (Task 1): exactly the reviewed ``(module, read)`` pair
+    is exempt and it licenses nothing else. The exempted module must really perform
+    its licensed read, so the pair cannot outlive the read; every other ambient read
+    still fails in that module; the licensed read still fails in the sibling
+    ``cli/main.py`` and in a planted in-memory ``cli/probe.py`` (no such repository
+    file exists); aliased spellings resolve to the same decisions; and the exemption
+    grants no environment access. Import-time draws stay refused by the fresh-import
+    probe of ``tests/unit/cli/test_runtime.py`` and the import-time scan of
+    ``tests/safety/test_stage10_boundaries.py``.
+    """
+    assert _AMBIENT_CLOCK_EXEMPTIONS == frozenset(
+        {("cli/runtime.py", "datetime.datetime.now")}
+    )
+    source = repository_root / "src/crypto_lab"
+    for module, read in sorted(_AMBIENT_CLOCK_EXEMPTIONS):
+        tree = _parse(source / module)
+        assert read in {resolved for _, resolved in _ambient_clock_reads(tree)}
+        assert _ambient_clock_violations(tree, module) == []
+        for other in sorted(_AMBIENT_CLOCK_READS - {read}):
+            planted_other = ast.parse(_CLOCK_READ_SOURCES[other])
+            assert _ambient_clock_violations(planted_other, module) != [], other
+        sibling = f"{module.rpartition('/')[0]}/main.py"
+        planted = f"{module.partition('/')[0]}/probe.py"
+        assert (source / sibling).is_file()
+        assert not (source / planted).exists()
+        licensed = ast.parse(_CLOCK_READ_SOURCES[read])
+        for label in (sibling, planted):
+            assert _ambient_clock_violations(licensed, label) != [], label
+        for spelling, spelled_read in _ALIASED_CLOCK_SPELLINGS:
+            spelled = ast.parse(spelling)
+            exempt = (module, spelled_read) in _AMBIENT_CLOCK_EXEMPTIONS
+            assert (_ambient_clock_violations(spelled, module) == []) is exempt
+            for label in (sibling, planted):
+                assert _ambient_clock_violations(spelled, label) != [], spelling
+        environment = ast.parse("import os\nos.getenv('CRYPTO_LAB_CLOCK')\n")
+        assert _environment_access_violations(environment, module) != []
 
 
 @pytest.mark.parametrize(

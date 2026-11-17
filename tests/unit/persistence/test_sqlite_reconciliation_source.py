@@ -13,6 +13,9 @@ prove it); is served by the reconciliation-listing index (``EXPLAIN QUERY PLAN``
 names it); releases its read-only session on every path so nothing is open while
 the reconciler inspects a process; and returns validated records that stay usable
 after the database is closed. Every case runs against the file-backed database.
+Stage 10 plan Task 2 adds the application query port the same source implements
+(``work_inventory``); its complete, detached and fail-closed behaviour is proved in
+``test_sqlite_startup_queries.py``, and this module pins the port conformance.
 
 Test-local readings, declared rather than inferred silently:
 
@@ -60,6 +63,10 @@ from crypto_lab.domain.lifecycle import (
     ExperimentState,
 )
 from crypto_lab.domain.results import Failure, Success
+from crypto_lab.experiments.application_ports import (
+    ApplicationQueryPort,
+    DurableWorkInventory,
+)
 from crypto_lab.experiments.experiment_service import cancel_experiment
 from crypto_lab.experiments.requests import CancelExperimentRequest
 from crypto_lab.experiments.supervision_lifecycle import Stage5InvocationLifecycle
@@ -801,6 +808,37 @@ def test_no_connection_is_lent_while_the_reconciler_inspects_a_process(
     assert controller.checked_out_at_inspect == [0]
     assert _checked_out(database) == 0
     assert sqlite_harness.open_transactions() == ()
+
+
+def test_the_source_implements_the_application_query_port_without_writing(
+    sqlite_harness: SqliteHarness,
+) -> None:
+    """Stage 10 plan Task 2 (B11): the same source answers ``ApplicationQueryPort``
+    with the port's own signature; an empty database is an empty inventory, not a
+    failure; the seeded invocations come back complete in identity order; and the
+    read writes nothing and lends no connection once it has returned."""
+    database = sqlite_harness.database
+    source = SqliteReconciliationSource(database, FixedClock(INSTANT))
+    assert isinstance(source, ApplicationQueryPort)
+    assert isinstance(source, ReconciliationSource)
+    port = inspect.signature(ApplicationQueryPort.work_inventory)
+    implementation = inspect.signature(SqliteReconciliationSource.work_inventory)
+    assert tuple(implementation.parameters) == tuple(port.parameters)
+    before = total_changes(database)
+    empty = ok(source.work_inventory())
+    assert empty == DurableWorkInventory(
+        experiments=(), engine_runs=(), command_invocations=(), retry_decisions=()
+    )
+    assert total_changes(database) == before
+    _seed_all(sqlite_harness)
+    before = total_changes(database)
+    seeded = ok(source.work_inventory())
+    assert total_changes(database) == before
+    assert _checked_out(database) == 0
+    assert [record.invocation_id for record in seeded.command_invocations] == sorted(
+        record.invocation_id for record in RECONCILIATION_SEED
+    )
+    assert [run.run_id for run in seeded.engine_runs] == sorted((RUN_ID, OTHER_RUN_ID))
 
 
 @pytest.mark.parametrize("member", ["list_reconciliation_targets", "run_facts"])

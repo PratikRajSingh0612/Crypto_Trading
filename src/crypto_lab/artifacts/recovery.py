@@ -106,15 +106,42 @@ audit fact and is refused while any ``PREPARED`` or ``MOVED`` journal names a
 candidate of the entry (RV-18, 29.5:2192). Nothing here reads configuration,
 the environment, the current directory or a home directory; every root is the
 caller's.
+
+Stage 10 plan Task 2 (plan section 4.3, decision D07) adds one optional
+keyword-only selector, ``phase``, to ``reconcile_finalization`` so the startup
+coordinator can place the steps around process and run reconciliation. It is a
+call-time composition interface only: no CLI flag, canonical field, table or
+migration. Omitting it runs the complete pass above, unchanged. The closed values:
+
+- ``inventory``: step 1 classifies the open journals -- an unexpired lease is
+  counted ``deferred`` and an expired one is left for ``recover``; nothing is
+  resumed -- and step 2's one safe preliminary action runs: a ``FINALIZING``
+  candidate no open journal names is quarantined (RV-11, 29.2 step 4). No RESULT
+  group is validated, resumed or quarantined, no evidence is finalized, no root is
+  closed and no orphan or unregistered content is swept.
+- ``recover``: steps 1 and 2 of the complete pass, each over durable authority read
+  afresh at the call (every 29.3 RESULT gate and the independent 29.4 EVIDENCE path
+  as above).
+- ``sweep``: steps 3 and 4 and the overdue report (step 9).
+
+Every other value -- a case variant, padding, a combination, a non-string -- is
+refused with ``ValueError`` before any work. A selected phase returns the same
+report type with unchanged count meanings, and its summary is the same
+``RECONCILIATION_FINALIZATION_RESUMED`` row with exactly one more bounded detail,
+``phase``. A phase summary is never a complete-pass result, and the counts of
+several phases are not added together. Each phase obtains its own authority: a
+transient inventory never stands in for a lease revision, a registered mapping, a
+captured exit or a child-identity check, and acquiring dispatch ownership grants
+no journal takeover -- an unexpired lease stays deferred in every phase.
 """
 
 from __future__ import annotations
 
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from pydantic import InstanceOf
 from pydantic.experimental.missing_sentinel import MISSING
@@ -209,6 +236,9 @@ _S: Final = CandidateArtifactState
 _P: Final = CandidateArtifactProducerKind
 _F: Final = ArtifactFinalizationPurpose
 _J: Final = FinalizationJournalState
+#: Stage 10 plan section 4.3: the closed values of the phase selector.
+type _Phase = Literal["inventory", "recover", "sweep"]
+_PHASES: Final[tuple[str, ...]] = ("inventory", "recover", "sweep")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -408,18 +438,35 @@ class _Reconciler:
 
     # -- the pass ----------------------------------------------------------------
 
-    def run(self) -> Result[FinalizationReconciliationReport]:
-        for step in (
-            self._resume_open_journals,
-            self._reconcile_candidates,
-            self._quarantine_orphans_and_close_roots,
-            self._quarantine_unregistered_content,
-            self._report_overdue_quarantine,
-        ):
+    def run(
+        self, phase: _Phase | None = None
+    ) -> Result[FinalizationReconciliationReport]:
+        """The complete pass when ``phase`` is ``None``, else the selected phase's
+        steps (Stage 10 plan section 4.3); either way one summary row closes it."""
+        steps: tuple[Callable[[], Failure | None], ...]
+        if phase is None:
+            steps = (
+                self._resume_open_journals,
+                self._reconcile_candidates,
+                self._quarantine_orphans_and_close_roots,
+                self._quarantine_unregistered_content,
+                self._report_overdue_quarantine,
+            )
+        elif phase == "inventory":
+            steps = (self._classify_open_journals, self._quarantine_unmapped_finalizing)
+        elif phase == "recover":
+            steps = (self._resume_open_journals, self._reconcile_candidates)
+        else:
+            steps = (
+                self._quarantine_orphans_and_close_roots,
+                self._quarantine_unregistered_content,
+                self._report_overdue_quarantine,
+            )
+        for step in steps:
             failed = step()
             if failed is not None:
                 return failed
-        summary = self._summary()
+        summary = self._summary(phase)
         if summary is not None:
             return summary
         return Success[InstanceOf[FinalizationReconciliationReport]](
@@ -465,9 +512,23 @@ class _Reconciler:
             self._count_terminal(entry.finalization_id)
         return None
 
+    def _classify_open_journals(self) -> Failure | None:
+        """The ``inventory`` phase's step 1: an open journal under an unexpired lease
+        is counted ``deferred``; an expired one is left, unresumed, for ``recover``."""
+        entries = self._open_journals()
+        if isinstance(entries, Failure):
+            return entries
+        now = self._clock.now_utc()
+        self._counts.deferred += sum(
+            1 for entry in entries.value if entry.lease_expires_at_utc > now
+        )
+        return None
+
     # -- step 4: candidates ---------------------------------------------------------
 
-    def _reconcile_candidates(self) -> Failure | None:
+    def _unjournalled_recoverable(self) -> Failure | list[CandidateArtifact]:
+        """The recoverable candidates no open journal names, read in one
+        transaction released before anything acts on them."""
         transaction = self._factory()
         try:
             listed = transaction.candidate_artifacts.list_recoverable(
@@ -485,11 +546,38 @@ class _Reconciler:
             for entry in open_entries.value
             for candidate_id in entry.candidate_artifact_ids
         }
+        return [
+            candidate
+            for candidate in listed.value
+            if candidate.candidate_artifact_id not in open_ids
+        ]
+
+    def _quarantine_unmapped_finalizing(self) -> Failure | None:
+        """The ``inventory`` phase's one safe preliminary action (RV-11, 29.2 step
+        4): a ``FINALIZING`` candidate no open journal names can never resume, so it
+        is quarantined; every other recoverable candidate is left for ``recover``."""
+        candidates = self._unjournalled_recoverable()
+        if isinstance(candidates, Failure):
+            return candidates
+        for candidate in candidates:
+            if candidate.state is not _S.FINALIZING:
+                continue
+            failed = self._quarantine_candidate(
+                candidate,
+                ARTIFACT_VALIDATION_FAILED,
+                "a FINALIZING candidate with no journal and no reference (RV-11)",
+            )
+            if failed is not None:
+                return failed
+        return None
+
+    def _reconcile_candidates(self) -> Failure | None:
+        candidates = self._unjournalled_recoverable()
+        if isinstance(candidates, Failure):
+            return candidates
         result_groups: dict[tuple[str, str], list[CandidateArtifact]] = {}
         evidence_groups: dict[tuple[str, str, str, str], list[CandidateArtifact]] = {}
-        for candidate in listed.value:
-            if candidate.candidate_artifact_id in open_ids:
-                continue
+        for candidate in candidates:
             if candidate.state is _S.FINALIZING:
                 failed = self._quarantine_candidate(
                     candidate,
@@ -1302,22 +1390,27 @@ class _Reconciler:
             self._counts.overdue += 1
         return None
 
-    def _summary(self) -> Failure | None:
+    def _summary(self, phase: _Phase | None = None) -> Failure | None:
+        """The closing row: the eight counts, plus exactly ``phase`` for a selected
+        phase (Stage 10 plan section 4.3); the complete pass's set is unchanged."""
         report = self._counts.report()
+        details: dict[str, DiagnosticDetailValue] = {
+            "resumed": report.resumed,
+            "deferred": report.deferred,
+            "registered": report.registered,
+            "abandoned": report.abandoned,
+            "quarantined": report.quarantined,
+            "overdue": report.overdue,
+            "closed_roots": report.closed_roots,
+            "changes": report.changes,
+        }
+        if phase is not None:
+            details["phase"] = phase
         return self._audit_alone(
             "RECONCILIATION_FINALIZATION_RESUMED",
             "SUCCEEDED",
             "reconcile-finalization",
-            {
-                "resumed": report.resumed,
-                "deferred": report.deferred,
-                "registered": report.registered,
-                "abandoned": report.abandoned,
-                "quarantined": report.quarantined,
-                "overdue": report.overdue,
-                "closed_roots": report.closed_roots,
-                "changes": report.changes,
-            },
+            details,
         )
 
     def _audit_alone(
@@ -1418,15 +1511,20 @@ def reconcile_finalization(
     command_roots: CommandRootsLookup,
     token_material: TokenMaterialLookup,
     log: FinalizationLog | None = None,
+    phase: _Phase | None = None,
 ) -> Result[FinalizationReconciliationReport]:
     """The artifact half of startup reconciliation (29.2 steps 4, 6, 7, 9); see
     the module docstring. Precondition owed by the caller: the single local
     reconciliation lease of 29.2 step 3 is held and normal scheduling is not yet
     permitted (29.2 step 10) -- a Stage 10 composition fact this function cannot
     verify. Idempotent: a second pass over the same state appends one summary
-    row with ``changes == 0``."""
+    row with ``changes == 0``. ``phase`` selects one closed Stage 10 phase
+    (``inventory``, ``recover`` or ``sweep``); omitted, the complete pass runs, and
+    any other value is refused with ``ValueError`` before any work."""
     if not isinstance(runtime_root, Path) or not runtime_root.is_absolute():
         raise ValueError("runtime_root must be an absolute Path")
+    if phase is not None and (type(phase) is not str or phase not in _PHASES):
+        raise ValueError(f"phase must be one of {', '.join(_PHASES)}, or omitted")
     return _Reconciler(
         unit_of_work_factory=unit_of_work_factory,
         store=store,
@@ -1439,7 +1537,7 @@ def reconcile_finalization(
         command_roots=command_roots,
         token_material=token_material,
         log=log,
-    ).run()
+    ).run(phase)
 
 
 def purge_quarantine(

@@ -145,6 +145,11 @@ PACKAGE_MODULES: tuple[str, ...] = (
     "crypto_lab.cli.main",
     "crypto_lab.cli.__main__",
     "crypto_lab.schema_registry",
+    # Stage 10 plan section 6.11 (Task 1): appended after every pinned slice.
+    "crypto_lab.cli.runtime",
+    "crypto_lab.experiments.application_ports",
+    # Stage 10 plan section 6.11 (Task 2): the startup coordinator, appended after.
+    "crypto_lab.cli.startup",
 )
 _IMPORT_SENTINEL = "IMPORT_GUARDS_OK"
 _IMPORT_PROBE = """

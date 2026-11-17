@@ -16,12 +16,14 @@ from __future__ import annotations
 
 import ast
 import ctypes
-import gc
 import os
+import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from ctypes import wintypes
 from pathlib import Path
-from typing import Final, get_type_hints
+from typing import Any, Final, get_type_hints
 
 import pytest
 
@@ -136,6 +138,43 @@ _EXPORTED: Final = [
 #: The test's own probe of this process's handle table (``GetProcessHandleCount`` over
 #: the current-process pseudo-handle); test code may bind kernel32 itself.
 _PROBE = ctypes.WinDLL("kernel32", use_last_error=True)
+#: Plan Step 3 (owner ruling of 2026-11-14, section 1): the reviewed surface split into
+#: the handle creators, each with the resource class it yields, and every other name;
+#: pinned exhaustive and disjoint against ``_API_NAMES`` and the production surface.
+_REVIEWED_HANDLE_CREATORS: Final[Mapping[str, str]] = {
+    "OpenProcess": "process",
+    "CreateJobObjectW": "job",
+    "CreateToolhelp32Snapshot": "snapshot",
+    "OpenThread": "thread",
+}
+_REVIEWED_NON_CREATORS: Final = frozenset(
+    {
+        "GetProcessTimes",
+        "QueryFullProcessImageNameW",
+        "GetExitCodeProcess",
+        "WaitForSingleObject",
+        "CloseHandle",
+        "SetInformationJobObject",
+        "AssignProcessToJobObject",
+        "IsProcessInJob",
+        "TerminateJobObject",
+        "TerminateProcess",
+        "GenerateConsoleCtrlEvent",
+        "GetConsoleProcessList",
+        "Process32FirstW",
+        "Process32NextW",
+        "Thread32First",
+        "Thread32Next",
+        "ResumeThread",
+        "CancelSynchronousIo",
+    }
+)
+_SNAPSHOT_KINDS: Final[Mapping[int, str]] = {
+    0x00000002: "process_snapshot",
+    0x00000004: "thread_snapshot",
+}
+_THREAD_QUERY_LIMITED_INFORMATION: Final = 0x0800
+_INVALID_HANDLE: Final = (1 << (8 * ctypes.sizeof(ctypes.c_void_p))) - 1
 
 
 # --------------------------------------------------------------------------
@@ -143,11 +182,149 @@ _PROBE = ctypes.WinDLL("kernel32", use_last_error=True)
 # --------------------------------------------------------------------------
 
 
-def _open_handle_count() -> int:
-    gc.collect()
+def _diagnostic_handle_count() -> int | str:
+    """This process's handle-table size: unrelated lifetimes included, so only a
+    diagnostic beside the accounting. It forces no collection (a finalizer run here
+    could close a recorded handle and so decide the accounting) and a failed
+    collection is returned as its precise error, never raised: it neither establishes
+    nor vetoes resource-cleanup success."""
     count = ctypes.c_ulong(0)
-    assert _PROBE.GetProcessHandleCount(ctypes.c_void_p(-1), ctypes.byref(count))
+    try:
+        counted = _PROBE.GetProcessHandleCount(ctypes.c_void_p(-1), ctypes.byref(count))
+    except Exception as error:  # recorded explicitly; the accounting still decides
+        return f"GetProcessHandleCount raised {type(error).__name__}"
+    if not counted:
+        return f"GetProcessHandleCount failed: {ctypes.get_last_error()}"
     return count.value
+
+
+class _HandleRecord:
+    """One acquisition by a reviewed creator, by generation: a number reused later is
+    a new generation and a new lifetime."""
+
+    def __init__(self, generation: int, kind: str, value: int, route: str) -> None:
+        self.generation = generation
+        self.kind = kind
+        self.value = value
+        self.route = route
+        self.state = "open"
+        self.released_by = ""
+
+    def describe(self) -> str:
+        return f"{self.kind}#{self.generation} via {self.route} ({self.state})"
+
+
+class _Kernel32Ledger:
+    """Complete accounting at the kernel32 seam (owner ruling of 2026-11-14): every
+    successful reviewed creator records its handle by generation and only a successful
+    ``CloseHandle`` of that live number releases it; a number acquired again unreleased
+    marks the earlier lifetime lost; an unreviewed name is recorded as unclassified."""
+
+    def __init__(self) -> None:
+        self.records: list[_HandleRecord] = []
+        self.unrelated: list[int] = []
+        self.unclassified: list[str] = []
+        self.anomalies: list[str] = []
+        #: Every live table count (or the precise failure to collect it): diagnostics.
+        self.diagnostics: list[int | str] = []
+        self._live: dict[int, _HandleRecord] = {}
+
+    def mark(self) -> int:
+        self.diagnostics.append(_diagnostic_handle_count())
+        return len(self.records)
+
+    def created(self, name: str, args: tuple[Any, ...], handle: int) -> None:
+        kind = _REVIEWED_HANDLE_CREATORS[name]
+        if kind == "snapshot":
+            kind = _SNAPSHOT_KINDS.get(int(args[0]), kind)
+        stale = self._live.pop(handle, None)
+        if stale is not None:
+            stale.state = "lost"
+            self.anomalies.append(f"{stale.describe()}: acquired again unreleased")
+        record = _HandleRecord(len(self.records), kind, handle, name)
+        self.records.append(record)
+        self._live[handle] = record
+
+    def closed(self, handle: int) -> None:
+        record = self._live.pop(handle, None)
+        if record is None:
+            self.unrelated.append(handle)
+            return
+        record.state = "released"
+        record.released_by = "CloseHandle"
+
+    def unaccounted(self, start: int) -> list[_HandleRecord]:
+        return [record for record in self.records[start:] if record.state != "released"]
+
+    def require_balanced(self, start: int) -> None:
+        """Exactly zero unaccounted acquisitions since ``start`` and no unclassified
+        name, no tolerance. The verdict is taken first; the live table count is
+        collected only afterwards, recorded (a failed collection included) and named
+        in the message as a diagnostic that decides nothing."""
+        problems = [f"unclassified kernel32 name {name}" for name in self.unclassified]
+        problems.extend(self.anomalies)
+        problems.extend(
+            f"{record.describe()} is unaccounted" for record in self.unaccounted(start)
+        )
+        before = self.diagnostics[-1] if self.diagnostics else "not collected"
+        after = _diagnostic_handle_count()
+        self.diagnostics.append(after)
+        assert problems == [], (
+            "unaccounted resources: "
+            + "; ".join(problems)
+            + f" (live table {before} -> {after}, diagnostic only)"
+        )
+
+
+class _LedgerKernel32:
+    """The bound ``kernel32`` as ``windows_api`` reaches it inside a ledger window:
+    every name delegates to the real binding, recording in pure Python only, so the
+    last error the binding saved is untouched."""
+
+    def __init__(self, ledger: _Kernel32Ledger, bind: Callable[[], Any]) -> None:
+        self._ledger = ledger
+        self._bind = bind
+
+    def __getattr__(self, name: str) -> Any:
+        function = getattr(self._bind(), name)
+        ledger = self._ledger
+        if name in _REVIEWED_HANDLE_CREATORS:
+
+            def create(*args: Any) -> Any:
+                handle = function(*args)
+                if isinstance(handle, int) and handle not in (0, _INVALID_HANDLE):
+                    ledger.created(name, args, handle)
+                elif handle is not None and not isinstance(handle, int):
+                    # a creator result no rule reads as a handle or a failure
+                    ledger.anomalies.append(
+                        f"{name} returned a {type(handle).__name__}"
+                    )
+                return handle
+
+            return create
+        if name == "CloseHandle":
+
+            def close(handle: Any) -> Any:
+                result = function(handle)
+                if result:
+                    ledger.closed(int(handle))
+                return result
+
+            return close
+        if name not in _REVIEWED_NON_CREATORS:
+            ledger.unclassified.append(name)
+        return function
+
+
+@contextmanager
+def _kernel32_ledger() -> Iterator[_Kernel32Ledger]:
+    """The ledger seam on its own patch, so a test's ``monkeypatch.undo()`` inside the
+    window leaves it in place (a fault-injection proxy then wraps the ledger)."""
+    ledger = _Kernel32Ledger()
+    proxy = _LedgerKernel32(ledger, windows_api._kernel32)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(windows_api, "_kernel32", lambda: proxy)
+        yield ledger
 
 
 def _own_creation() -> int:
@@ -369,9 +546,15 @@ def test_the_descendant_walk_of_this_process_is_empty_and_leaks_no_handle(
     own_handle: int,
 ) -> None:
     creation = process_times(own_handle)
-    before = _open_handle_count()
-    assert descendants_of(os.getpid(), creation) == ()
-    assert _open_handle_count() == before
+    with _kernel32_ledger() as ledger:
+        start = ledger.mark()
+        assert descendants_of(os.getpid(), creation) == ()
+        # The owner ruling of 2026-11-14: the walk's one real process snapshot and every
+        # candidate handle it opened were released by a successful close, exactly.
+        ledger.require_balanced(start)
+        walked = ledger.records[start:]
+        assert [record.kind for record in walked].count("process_snapshot") == 1
+        assert {record.kind for record in walked} <= {"process_snapshot", "process"}
 
 
 def test_the_descendant_walk_returns_committed_descendant_identities() -> None:
@@ -519,14 +702,19 @@ def test_a_sub_millisecond_timeout_waits_one_millisecond_and_text_is_refused(
 def test_a_failed_job_limit_closes_the_new_job_and_raises_with_its_number(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    before = _open_handle_count()
-    _with_kernel32_override(monkeypatch, SetInformationJobObject=_failing(87))
-    with pytest.raises(WindowsApiError) as caught:
-        create_kill_on_close_job()
-    monkeypatch.undo()
+    with _kernel32_ledger() as ledger:
+        start = ledger.mark()
+        _with_kernel32_override(monkeypatch, SetInformationJobObject=_failing(87))
+        with pytest.raises(WindowsApiError) as caught:
+            create_kill_on_close_job()
+        monkeypatch.undo()
+        # The owner ruling of 2026-11-14: exactly the created job, closed for real.
+        (job,) = ledger.records[start:]
+        assert (job.route, job.kind) == ("CreateJobObjectW", "job")
+        assert (job.state, job.released_by) == ("released", "CloseHandle")
+        ledger.require_balanced(start)
     assert caught.value.function == "SetInformationJobObject"
     assert caught.value.winerror == 87
-    assert _open_handle_count() == before
 
 
 def test_a_failed_resume_names_resume_thread(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -550,17 +738,296 @@ def test_cancel_synchronous_io_is_false_when_the_thread_cannot_be_opened(
 def test_a_failed_process_snapshot_walk_raises_or_is_empty_by_its_number(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    before = _open_handle_count()
-    _with_kernel32_override(monkeypatch, Process32FirstW=_failing(87))
-    with pytest.raises(WindowsApiError) as caught:
-        descendants_of(os.getpid(), 1)
-    monkeypatch.undo()
-    assert caught.value.function == "Process32FirstW"
-    assert caught.value.winerror == 87
-    _with_kernel32_override(monkeypatch, Process32FirstW=_failing(18))
-    assert descendants_of(os.getpid(), 1) == ()  # ERROR_NO_MORE_FILES: no entries
-    monkeypatch.undo()
-    assert _open_handle_count() == before  # both snapshots were closed
+    with _kernel32_ledger() as ledger:
+        first = ledger.mark()
+        _with_kernel32_override(monkeypatch, Process32FirstW=_failing(87))
+        with pytest.raises(WindowsApiError) as caught:
+            descendants_of(os.getpid(), 1)
+        monkeypatch.undo()
+        assert caught.value.function == "Process32FirstW"
+        assert caught.value.winerror == 87
+        _require_one_released_snapshot(ledger, first)
+        ledger.require_balanced(first)
+        second = ledger.mark()
+        _with_kernel32_override(monkeypatch, Process32FirstW=_failing(18))
+        assert descendants_of(os.getpid(), 1) == ()  # ERROR_NO_MORE_FILES: no entries
+        monkeypatch.undo()
+        _require_one_released_snapshot(ledger, second)  # each snapshot on its own
+        ledger.require_balanced(second)
+
+
+def _require_one_released_snapshot(ledger: _Kernel32Ledger, start: int) -> None:
+    (snapshot,) = ledger.records[start:]
+    assert (snapshot.route, snapshot.kind) == (
+        "CreateToolhelp32Snapshot",
+        "process_snapshot",
+    )
+    assert (snapshot.state, snapshot.released_by) == ("released", "CloseHandle")
+
+
+#: One planted leak per reviewed creator class (both snapshot kinds): a real
+#: acquisition through the reviewed seam, deliberately not released.
+_PLANTED_CREATIONS: Final[Mapping[str, tuple[str, Callable[[], int]]]] = {
+    "process": ("OpenProcess", lambda: open_process_limited(os.getpid())),
+    "job": ("CreateJobObjectW", create_kill_on_close_job),
+    "process_snapshot": (
+        "CreateToolhelp32Snapshot",
+        lambda: int(windows_api._kernel32().CreateToolhelp32Snapshot(0x2, 0)),
+    ),
+    "thread_snapshot": (
+        "CreateToolhelp32Snapshot",
+        lambda: int(windows_api._kernel32().CreateToolhelp32Snapshot(0x4, 0)),
+    ),
+    "thread": (
+        "OpenThread",
+        lambda: int(
+            windows_api._kernel32().OpenThread(
+                _THREAD_QUERY_LIMITED_INFORMATION, False, threading.get_native_id()
+            )
+        ),
+    ),
+}
+
+
+def test_every_reviewed_handle_creator_has_resource_ledger_coverage() -> None:
+    """Plan Step 2 semantic control (owner ruling of 2026-11-14): the reviewed surface
+    is split into creators and non-creators exhaustively and disjointly, against
+    ``_API_NAMES`` and the production surface itself; then a planted leak through every
+    reviewed creator (both snapshot kinds) is detected, by route and class, while a
+    handle the window does not own is closed through the same seam -- which hides the
+    leak from the whole-process count the ruling replaces -- and the window balances
+    once the plant is reclaimed. The covered creators are observed, not derived from
+    the classification; a non-creator acquires nothing."""
+    creators = set(_REVIEWED_HANDLE_CREATORS)
+    assert creators.isdisjoint(_REVIEWED_NON_CREATORS)
+    assert creators | _REVIEWED_NON_CREATORS == _API_NAMES
+    assert _kernel32_attribute_names(_module_tree()) == _API_NAMES
+    covered: set[str] = set()
+    for kind, (route, plant) in _PLANTED_CREATIONS.items():
+        unrelated = open_process_limited(os.getpid())  # acquired before the window
+        with _kernel32_ledger() as ledger:
+            start = ledger.mark()
+            leaked = plant()
+            close_handle(unrelated)  # an unrelated closure through the same seam
+            try:
+                (record,) = ledger.unaccounted(start)
+                assert (record.route, record.kind, record.value) == (
+                    route,
+                    kind,
+                    leaked,
+                )
+                with pytest.raises(AssertionError, match="unaccounted"):
+                    ledger.require_balanced(start)
+            finally:
+                close_handle(leaked)  # reclaimed after the detecting assertion
+            ledger.require_balanced(start)
+            assert ledger.unrelated == [unrelated]
+            covered.add(record.route)
+    assert covered == creators
+    with _kernel32_ledger() as ledger:
+        start = ledger.mark()
+        assert console_process_count() >= 1
+        assert ledger.records[start:] == []
+        ledger.require_balanced(start)
+
+
+#: Every ``ctypes`` name the binding module may load outside an annotation: types and
+#: data helpers, none of which reaches a foreign function. ``WinDLL``, the one library
+#: binder, is admitted only inside ``_kernel32``; any other ``ctypes`` name -- another
+#: library loader (``windll``, ``CDLL``, ...), a function-pointer factory -- escapes.
+_CTYPES_DATA_NAMES: Final = frozenset(
+    {
+        "POINTER",
+        "Structure",
+        "byref",
+        "c_int",
+        "c_size_t",
+        "c_ulonglong",
+        "c_void_p",
+        "create_unicode_buffer",
+        "get_last_error",
+        "sizeof",
+    }
+)
+
+
+def _annotation_nodes(tree: ast.AST) -> set[int]:
+    """Every node inside an annotation (names there are never loaded at run time)."""
+    roots: list[ast.AST] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AnnAssign | ast.arg) and node.annotation is not None:
+            roots.append(node.annotation)
+        elif isinstance(node, ast.FunctionDef) and node.returns is not None:
+            roots.append(node.returns)
+    return {id(item) for root in roots for item in ast.walk(root)}
+
+
+def _foreign_library_escapes(
+    node: ast.AST, inside: set[int], annotations: set[int]
+) -> list[str]:
+    """A ``ctypes`` route to a library other than the one ``_kernel32`` binds: a
+    ``ctypes`` import form other than ``import ctypes`` and ``from ctypes import
+    wintypes``, a ``ctypes`` name outside the reviewed data names (``WinDLL`` only
+    inside the binder), or a ``wintypes`` name that is not a type."""
+    if isinstance(node, ast.Import):
+        return [
+            f"import {alias.name} at line {node.lineno}"
+            for alias in node.names
+            if alias.name.split(".")[0] == "ctypes"
+            and (alias.name, alias.asname) != ("ctypes", None)
+        ]
+    if isinstance(node, ast.ImportFrom):
+        if (node.module or "").split(".")[0] != "ctypes":
+            return []
+        forms = {(node.module, alias.name, alias.asname) for alias in node.names}
+        if forms == {("ctypes", "wintypes", None)}:
+            return []
+        return [f"from {node.module} import at line {node.lineno}"]
+    if not (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and id(node) not in annotations
+    ):
+        return []
+    if node.value.id == "ctypes":
+        if node.attr in _CTYPES_DATA_NAMES or (
+            node.attr == "WinDLL" and id(node) in inside
+        ):
+            return []
+        return [f"ctypes.{node.attr} loaded at line {node.lineno}"]
+    if node.value.id == "wintypes" and not isinstance(
+        getattr(wintypes, node.attr, None), type
+    ):
+        return [f"wintypes.{node.attr} loaded at line {node.lineno}"]
+    return []
+
+
+def _kernel32_route_escapes(tree: ast.AST) -> list[str]:
+    """Every way a module could reach kernel32 other than ``_kernel32().<name>(...)``
+    read on the spot: a ``_kernel32()`` result bound, passed or iterated instead of
+    read for one attribute; ``_kernel32`` itself used as a value; a reviewed name called
+    through any other object; the ``_KERNEL32`` slot read outside ``_kernel32``; and
+    every ``ctypes`` route to another library (``_foreign_library_escapes``)."""
+    parents = {
+        id(child): node
+        for node in ast.walk(tree)
+        for child in ast.iter_child_nodes(node)
+    }
+    binder = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_kernel32"
+    ]
+    inside = {id(item) for node in binder for item in ast.walk(node)}
+    annotations = _annotation_nodes(tree)
+    escapes: list[str] = []
+    for node in ast.walk(tree):
+        escapes.extend(_foreign_library_escapes(node, inside, annotations))
+        parent = parents.get(id(node))
+        if isinstance(node, ast.Name) and node.id == "_kernel32":
+            call = (
+                parent if isinstance(parent, ast.Call) and parent.func is node else None
+            )
+            reader = parents.get(id(call)) if call is not None else None
+            if not (isinstance(reader, ast.Attribute) and reader.value is call):
+                escapes.append(f"_kernel32 used at line {node.lineno}")
+        elif isinstance(node, ast.Name) and node.id == "_KERNEL32":
+            at_module = isinstance(tree, ast.Module) and any(
+                statement is parent for statement in tree.body
+            )
+            if id(node) not in inside and not at_module:
+                escapes.append(f"_KERNEL32 read at line {node.lineno}")
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _API_NAMES
+        ):
+            receiver = node.func.value
+            if not (
+                isinstance(receiver, ast.Call)
+                and isinstance(receiver.func, ast.Name)
+                and receiver.func.id == "_kernel32"
+            ):
+                escapes.append(f"{node.func.attr} called at line {node.lineno}")
+    return escapes
+
+
+def test_every_kernel32_call_of_the_module_passes_the_ledger_seam() -> None:
+    """Route completeness at the kernel32 seam (plan Step 3, owner ruling of
+    2026-11-14): the module reaches kernel32 only as ``_kernel32().<name>(...)`` --
+    never through a bound result, another object, a dynamic lookup or the slot itself
+    -- so every creator call passes the ledger's proxy, which records each handle and
+    fails on an unreviewed name or a creator result that is neither a handle nor a
+    failure; and it reaches no other library through ``ctypes`` (a closed set of data
+    names, the binder only inside ``_kernel32``, ``wintypes`` types only). Pinned on
+    the production module and shown to fail closed on planted escapes, while a
+    binder-only and annotation-only use stays admitted."""
+    assert _kernel32_route_escapes(_module_tree()) == []
+    planted = ast.parse(
+        "k = _kernel32()\n"
+        "k.OpenProcess(1, 0, 2)\n"
+        "getattr(_kernel32(), 'OpenThread')\n"
+        "_KERNEL32.CloseHandle(3)\n"
+        "binder = _kernel32\n"
+        "ctypes.windll.ntdll.NtClose(3)\n"
+        "ctypes.WinDLL('ntdll')\n"
+        "from ctypes import CDLL\n"
+        "import ctypes.util\n"
+        "wintypes.WinError\n"
+    )
+    assert sorted(_kernel32_route_escapes(planted)) == [
+        "CloseHandle called at line 4",
+        "OpenProcess called at line 2",
+        "_KERNEL32 read at line 4",
+        "_kernel32 used at line 1",
+        "_kernel32 used at line 3",
+        "_kernel32 used at line 5",
+        "ctypes.WinDLL loaded at line 7",
+        "ctypes.windll loaded at line 6",
+        "from ctypes import at line 8",
+        "import ctypes.util at line 9",
+        "wintypes.WinError loaded at line 10",
+    ]
+    admitted = ast.parse(
+        "def _kernel32() -> ctypes.WinDLL:\n"
+        "    return ctypes.WinDLL('kernel32', use_last_error=True)\n"
+        "slot: ctypes.WinDLL | None = None\n"
+        "size = ctypes.sizeof(wintypes.DWORD)\n"
+    )
+    assert _kernel32_route_escapes(admitted) == []
+    ledger = _Kernel32Ledger()
+    stand_in = _Kernel32Proxy(
+        windows_api._kernel32(), {"OpenThread": lambda *_args: "7"}
+    )
+    assert _LedgerKernel32(ledger, lambda: stand_in).OpenThread(1, 0, 2) == "7"
+    assert ledger.anomalies == ["OpenThread returned a str"]
+    assert ledger.records == []
+
+
+def test_a_failed_handle_count_diagnostic_neither_blocks_nor_decides_the_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Owner ruling of 2026-11-14: the live table count beside the kernel32 ledger is
+    a diagnostic. When collecting it fails (``GetProcessHandleCount`` answers FALSE
+    with error 5), the window still opens, a balanced window balances and an
+    unbalanced one fails by its unaccounted record; every failed collection stays
+    recorded. The planted handle is closed after the detecting assertion."""
+    probe = _Kernel32Proxy(_PROBE, {"GetProcessHandleCount": _failing(5)})
+    monkeypatch.setattr(sys.modules[__name__], "_PROBE", probe)
+    with _kernel32_ledger() as ledger:
+        start = ledger.mark()
+        close_handle(open_process_limited(os.getpid()))
+        ledger.require_balanced(start)
+        leaked = open_process_limited(os.getpid())
+        try:
+            with pytest.raises(
+                AssertionError, match=r"process#\d+ via OpenProcess \(open\) is unacc"
+            ):
+                ledger.require_balanced(start)
+        finally:
+            close_handle(leaked)  # reclaimed after the detecting assertion
+        ledger.require_balanced(start)
+    assert ledger.diagnostics == ["GetProcessHandleCount failed: 5"] * 4
 
 
 def test_a_descendant_identity_omits_an_unreadable_or_invalid_image() -> None:
