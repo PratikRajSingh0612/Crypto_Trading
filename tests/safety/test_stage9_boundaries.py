@@ -24,9 +24,10 @@ Declared readings, so nothing is inferred silently:
   branch table, so this guard pins that column: 25 Stage 9 source files, 135
   allowed source files, 48 schemas, 13 new schemas, 20 released names and 13
   deferred names. Stage 10 plan section 6.11 subtracts the separately named
-  cumulative Stage 10 set (``STAGE10_SOURCE_FILES``, two modules after Task 1)
-  from the source arithmetic, so the allowed count advances to 137 while the
-  twenty-five-file set and the 51 pre-Stage-5 modules are unchanged.
+  cumulative Stage 10 set (``STAGE10_SOURCE_FILES``, two modules after Task 1 and
+  three after Task 2) from the source arithmetic, so the allowed count advances to
+  137 and then 138 while the twenty-five-file set and the 51 pre-Stage-5 modules
+  are unchanged.
 - "``experiments`` imports ``artifacts``/``audit`` only from the three new
   modules" is an upper bound; the committed tree reaches them from exactly two,
   ``experiments/finalization.py`` (both) and ``experiments/run_manifest.py``
@@ -514,11 +515,12 @@ def test_stage_nine_modules_are_exactly_the_plan_paths(repository_root: Path) ->
     # The excluded branch: no Task 3 module, 135 files, and the planning base of
     # 110 minus the Stage 5-8 sets leaves the 51 pre-Stage-5 modules. Stage 10
     # plan section 6.11 (Task 1): the distinct cumulative Stage 10 set joins the
-    # allowlist, 135 -> 137, and is subtracted separately, so the remainder stays 51.
+    # allowlist, 135 -> 137, and is subtracted separately, so the remainder stays 51;
+    # Task 2 appends the startup module to that set, 137 -> 138.
     assert _TASK3_MODULE not in _ALLOWED_SOURCE_FILES
     assert not _source_path(repository_root, _TASK3_MODULE).exists()
-    assert len(_ALLOWED_SOURCE_FILES) == 137
-    assert len(_source_files(repository_root)) == 137
+    assert len(_ALLOWED_SOURCE_FILES) == 138
+    assert len(_source_files(repository_root)) == 138
     staged = set(STAGE9_SOURCE_FILES)
     for earlier in (
         STAGE5_SOURCE_FILES,
@@ -528,7 +530,7 @@ def test_stage_nine_modules_are_exactly_the_plan_paths(repository_root: Path) ->
     ):
         staged |= set(earlier)
     stage10 = set(STAGE10_SOURCE_FILES)
-    assert len(stage10) == 2
+    assert len(stage10) == 3
     assert stage10 <= _ALLOWED_SOURCE_FILES
     assert stage10.isdisjoint(staged)
     assert len(_ALLOWED_SOURCE_FILES - staged - stage10) == 51

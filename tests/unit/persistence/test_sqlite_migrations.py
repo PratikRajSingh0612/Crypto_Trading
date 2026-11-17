@@ -1043,7 +1043,7 @@ def test_verify_migrations_imports_no_subprocess_and_reads_no_environment() -> N
 def test_the_source_allowlist_and_import_roots_name_the_migration_modules() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert _TASK2_SOURCE_PATHS <= allowed
-    assert len(allowed) == 137  # Stage 10 Task 1 appended runtime and application ports
+    assert len(allowed) == 138  # Stage 10 Task 2 appended the startup module
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "alembic" in roots
     assert len(roots) == 33  # Stage 10 Task 1 added `time`, `secrets` and `signal`
@@ -1054,14 +1054,14 @@ def test_the_source_allowlist_and_import_roots_name_the_migration_modules() -> N
     assert modules[start + len(_TASK2_MODULES)] == (
         "crypto_lab.persistence.migrations.versions.r0002_stage9_artifacts"
     )
-    assert len(modules) == 137
+    assert len(modules) == 138
 
 
 def test_the_two_cross_pins_moved_to_the_task_two_sizes() -> None:
     for path in (_PREFLIGHT_TESTS, _RECONCILIATION_TESTS):
         source = path.read_text(encoding="utf-8")
-        assert "len(allowed) == 137" in source  # moved again by Stage 10 Task 1
-        assert "len(modules) == 137" in source
+        assert "len(allowed) == 138" in source  # moved again by Stage 10 Task 2
+        assert "len(modules) == 138" in source
     preflight = _PREFLIGHT_TESTS.read_text(encoding="utf-8")
     assert "len(roots) == 33" in preflight
 

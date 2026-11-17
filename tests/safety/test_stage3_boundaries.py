@@ -64,6 +64,7 @@ _ALLOWED_SOURCE_FILES = {
     "cli/__main__.py",
     "cli/main.py",
     "cli/runtime.py",
+    "cli/startup.py",
     "configuration/__init__.py",
     "configuration/loader.py",
     "configuration/models.py",

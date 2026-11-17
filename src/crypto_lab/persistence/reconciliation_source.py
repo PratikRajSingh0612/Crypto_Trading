@@ -32,13 +32,26 @@ artefact.
 A checkout or statement the database refuses -- a DBAPI error, or the pool's own
 timeout, which is not a DBAPI error -- is the classified persistence ``Failure``
 of plan 6.5, never an empty success. The clock is read only to stamp failures.
+
+Stage 10 plan Task 2 (Matrix B row B11) adds ``work_inventory``, which implements
+the application query port ``ApplicationQueryPort`` structurally: every experiment,
+engine run, command invocation and retry decision, each population ordered by its
+identity, read through ``SqliteDatabase.read_work_inventory`` -- one read-only
+session, released before any row is decoded -- then decoded through the Task 3
+codecs and assembled into one ``DurableWorkInventory``, whose validator checks the
+canonical order and that every run, invocation and decision names a record of the
+same inventory. A row that fails egress refuses the whole inventory with its own
+invariant, and a population whose relationships do not close is
+``CORE.INVARIANT_VIOLATION``; a partial or empty inventory never stands in for
+either. A fresh source over a reopened database reconstructs the same facts.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, Final
 
+from pydantic import ValidationError
 from sqlalchemy import Select, select
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.exc import DBAPIError
@@ -55,17 +68,20 @@ from crypto_lab.domain.lifecycle import (
 )
 from crypto_lab.domain.ports import Clock
 from crypto_lab.domain.results import Failure, Result, Success
+from crypto_lab.experiments.application_ports import DurableWorkInventory
 from crypto_lab.persistence.codecs import (
     decode_command_invocation,
     decode_engine_run,
     decode_experiment,
+    decode_retry_decision,
 )
-from crypto_lab.persistence.database import SqliteDatabase
+from crypto_lab.persistence.database import DetachedRows, SqliteDatabase
 from crypto_lab.persistence.diagnostics import INVARIANT_VIOLATION, persistence_failure
 from crypto_lab.persistence.schema import (
     CommandInvocationRow,
     EngineRunRow,
     ExperimentRow,
+    RetryDecisionRow,
 )
 from crypto_lab.process_supervision.models import RunReconciliationFacts
 
@@ -88,6 +104,9 @@ _RUN_PREFIX: Final = "run__"
 _EXPERIMENT_PREFIX: Final = "experiment__"
 _LISTING: Final = "list_reconciliation_targets"
 _FACTS: Final = "run_facts"
+_INVENTORY: Final = "work_inventory"
+#: The longest validation message an inventory refusal carries.
+_MAX_INVENTORY_MESSAGE: Final = 512
 
 #: Plan 4.5: the listing, served by ``ix_command_invocations_reconciliation_listing``.
 _TARGET_LISTING: Final[Select[tuple[CommandInvocationRow]]] = (
@@ -120,6 +139,37 @@ _RUN_FACTS: Final = select(
         == ExperimentRow.__table__.c.experiment_id,
     )
 )
+
+
+#: Stage 10 plan Task 2 (B11): the four populations of the durable work inventory,
+#: each complete and in canonical ascending identity order.
+_INVENTORY_STATEMENTS: Final[tuple[tuple[str, Select[Any]], ...]] = (
+    ("experiments", select(ExperimentRow).order_by(ExperimentRow.experiment_id)),
+    ("engine_runs", select(EngineRunRow).order_by(EngineRunRow.run_id)),
+    (
+        "command_invocations",
+        select(CommandInvocationRow).order_by(CommandInvocationRow.invocation_id),
+    ),
+    (
+        "retry_decisions",
+        select(RetryDecisionRow).order_by(RetryDecisionRow.predecessor_run_id),
+    ),
+)
+
+
+def _decoded[T](
+    rows: DetachedRows,
+    decode: Callable[..., Result[T]],
+    clock: Clock,
+) -> tuple[T, ...] | Failure:
+    """Every row through its codec; the first refusal refuses the population."""
+    records: list[T] = []
+    for row in rows:
+        decoded = decode(row, clock=clock)
+        if isinstance(decoded, Failure):
+            return decoded
+        records.append(decoded.value)
+    return tuple(records)
 
 
 def _values(row: RowMapping) -> dict[str, object]:
@@ -203,6 +253,52 @@ class SqliteReconciliationSource:
                 experiment_state=experiment.value.state,
             ),
         )
+
+    def work_inventory(self) -> Result[DurableWorkInventory]:
+        """The application query port (Stage 10 plan Task 2, B11): one complete,
+        detached inventory, or a ``Failure`` -- never an empty or partial one."""
+        return self._database.read_work_inventory(
+            _INVENTORY_STATEMENTS, self._assemble_inventory
+        )
+
+    def _assemble_inventory(
+        self, rows: Mapping[str, DetachedRows]
+    ) -> Result[DurableWorkInventory]:
+        """Decode the detached populations and validate them as one inventory,
+        outside any transaction."""
+        experiments = _decoded(rows["experiments"], decode_experiment, self._clock)
+        if isinstance(experiments, Failure):
+            return experiments
+        runs = _decoded(rows["engine_runs"], decode_engine_run, self._clock)
+        if isinstance(runs, Failure):
+            return runs
+        invocations = _decoded(
+            rows["command_invocations"], decode_command_invocation, self._clock
+        )
+        if isinstance(invocations, Failure):
+            return invocations
+        decisions = _decoded(
+            rows["retry_decisions"], decode_retry_decision, self._clock
+        )
+        if isinstance(decisions, Failure):
+            return decisions
+        try:
+            inventory = DurableWorkInventory(
+                experiments=experiments,
+                engine_runs=runs,
+                command_invocations=invocations,
+                retry_decisions=decisions,
+            )
+        except ValidationError as error:
+            # The first error's message alone: never the offending input values.
+            reason = str(error.errors()[0]["msg"])[:_MAX_INVENTORY_MESSAGE]
+            return persistence_failure(
+                INVARIANT_VIOLATION,
+                message=f"the durable work inventory is inconsistent: {reason}",
+                clock=self._clock,
+                details={"operation": _INVENTORY},
+            )
+        return Success[DurableWorkInventory](outcome="SUCCESS", value=inventory)
 
     # -- failures (plan 6.5) ---------------------------------------------------
 

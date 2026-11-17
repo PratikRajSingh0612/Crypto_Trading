@@ -1242,7 +1242,7 @@ def test_no_retained_projection_carries_the_raw_token(scripted: _Scripted) -> No
 def test_the_source_allowlist_and_import_roots_name_the_supervisor_module() -> None:
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert "process_supervision/supervisor.py" in allowed
-    assert len(allowed) == 137  # Stage 10 Task 1 appended runtime and application ports
+    assert len(allowed) == 138  # Stage 10 Task 2 appended the startup module
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "asyncio" in roots
     assert len(roots) == 33  # Stage 10 Task 1 added time, secrets and signal
@@ -1251,7 +1251,7 @@ def test_the_source_allowlist_and_import_roots_name_the_supervisor_module() -> N
     assert modules.index("crypto_lab.process_supervision.supervisor") == (
         modules.index("crypto_lab.process_supervision.windows_process") + 1
     )
-    assert len(modules) == 137  # Stage 10 Task 1 appended runtime and application ports
+    assert len(modules) == 138  # Stage 10 Task 2 appended the startup module
 
 
 def test_the_task_five_pin_keeps_its_eleven_names_and_pins_the_nine_doubles() -> None:

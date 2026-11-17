@@ -31,6 +31,15 @@ Declared readings, so nothing is inferred silently:
 - "Inward only" means the ports module imports ``domain``, ``adapters`` and the
   Stage 5 ``experiments.ports`` alone among first-party modules, through absolute
   imports, and no concrete infrastructure root.
+
+Task 2 (plan section 6.3) appends ``cli/startup.py`` to the set and pins its whole
+import-root set and its exact first-party module set beside the Task 1 modules. It
+also pins two negative properties of the startup coordinator, each with planted
+controls through the same scanner: it reaches the artifact reconciler, the
+migration runner and every other first-party module through public names only --
+no imported or attribute-accessed name with a leading underscore -- and it exposes
+no migration-script override: no parameter, keyword or attribute named
+``script_location`` appears in it.
 """
 
 from __future__ import annotations
@@ -60,12 +69,15 @@ from test_stage7_boundaries import (
 )
 from test_stage8_boundaries import STAGE8_SOURCE_FILES
 
-#: Plan section 6.1: the source modules Stage 10 adds, in task order (Task 1: two).
+#: Plan section 6.1: the source modules Stage 10 adds, in task order (Task 1: two;
+#: Task 2: the startup coordinator).
 STAGE10_SOURCE_FILES: Final[tuple[str, ...]] = (
     "cli/runtime.py",
     "experiments/application_ports.py",
+    "cli/startup.py",
 )
 _RUNTIME_MODULE: Final = "cli/runtime.py"
+_STARTUP_MODULE: Final = "cli/startup.py"
 _RUNTIME_PACKAGE: Final = "crypto_lab.cli.runtime"
 _APPLICATION_PORTS_MODULE: Final = "experiments/application_ports.py"
 _WINDOWS_API_MODULE: Final = "process_supervision/windows_api.py"
@@ -77,7 +89,7 @@ _RUNTIME_ROOT_CONFINEMENT: Final[Mapping[str, frozenset[str]]] = {
     "time": frozenset({_RUNTIME_MODULE}),
     "ctypes": frozenset({_WINDOWS_API_MODULE, _RUNTIME_MODULE}),
 }
-#: The complete import-root sets of the two Task 1 modules.
+#: The complete import-root sets of the Stage 10 modules (Task 1: two; Task 2: one).
 _MODULE_IMPORT_ROOTS: Final[Mapping[str, frozenset[str]]] = {
     _RUNTIME_MODULE: frozenset(
         {
@@ -100,7 +112,46 @@ _MODULE_IMPORT_ROOTS: Final[Mapping[str, frozenset[str]]] = {
     _APPLICATION_PORTS_MODULE: frozenset(
         {"__future__", "crypto_lab", "pydantic", "typing"}
     ),
+    _STARTUP_MODULE: frozenset(
+        {
+            "__future__",
+            "collections",
+            "crypto_lab",
+            "dataclasses",
+            "enum",
+            "pathlib",
+            "typing",
+        }
+    ),
 }
+#: Plan section 6.3 (Task 2): the exact first-party modules the startup coordinator
+#: composes -- the public artifact reconciler, the Task 1 runtime and ports, the
+#: normal and maintenance openers and the schema registry, nothing else.
+_STARTUP_IMPORTS: Final = frozenset(
+    {
+        "crypto_lab.artifacts.hashing",
+        "crypto_lab.artifacts.journal",
+        "crypto_lab.artifacts.models",
+        "crypto_lab.artifacts.ports",
+        "crypto_lab.artifacts.recovery",
+        "crypto_lab.artifacts.store",
+        "crypto_lab.cli.runtime",
+        "crypto_lab.domain.command_invocation",
+        "crypto_lab.domain.diagnostics",
+        "crypto_lab.domain.engine_run",
+        "crypto_lab.domain.lifecycle",
+        "crypto_lab.domain.ports",
+        "crypto_lab.domain.results",
+        "crypto_lab.experiments.application_ports",
+        "crypto_lab.persistence.database",
+        "crypto_lab.persistence.diagnostics",
+        "crypto_lab.persistence.migration_runner",
+        "crypto_lab.process_supervision.models",
+        "crypto_lab.process_supervision.ports",
+        "crypto_lab.schema_registry",
+    }
+)
+_SCRIPT_OVERRIDE: Final = "script_location"
 #: Plan section 6.11: roots neither Task 1 module may import.
 _STAGE10_DENIED_ROOTS: Final = frozenset(
     {
@@ -265,6 +316,54 @@ def _import_time_violations(tree: ast.Module, label: str) -> list[str]:
     return sorted(set(violations))
 
 
+def _private_reach_violations(tree: ast.AST, label: str) -> list[str]:
+    """A first-party name with a leading underscore: imported (absolutely or
+    relatively), or reached as an attribute of a first-party binding."""
+    violations: list[str] = []
+    bound: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (
+            node.level > 0 or (node.module or "").startswith("crypto_lab")
+        ):
+            for alias in node.names:
+                if alias.name.startswith("_"):
+                    violations.append(
+                        f"{label}:{node.lineno}: imports private {alias.name}"
+                    )
+                bound.add(alias.asname or alias.name)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.startswith("crypto_lab"):
+                    bound.add(alias.asname or alias.name.partition(".")[0])
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Attribute):
+            continue
+        if not node.attr.startswith("_") or node.attr.startswith("__"):
+            continue
+        base: ast.expr = node.value
+        while isinstance(base, ast.Attribute):
+            base = base.value
+        if isinstance(base, ast.Name) and base.id in bound:
+            violations.append(f"{label}:{node.lineno}: reaches private {node.attr}")
+    return violations
+
+
+def _script_override_violations(tree: ast.AST, label: str) -> list[str]:
+    """Any parameter, keyword, attribute or name spelled ``script_location``."""
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        spelled = (
+            (isinstance(node, ast.keyword) and node.arg == _SCRIPT_OVERRIDE)
+            or (isinstance(node, ast.arg) and node.arg == _SCRIPT_OVERRIDE)
+            or (isinstance(node, ast.Attribute) and node.attr == _SCRIPT_OVERRIDE)
+            or (isinstance(node, ast.Name) and node.id == _SCRIPT_OVERRIDE)
+        )
+        if spelled:
+            line = getattr(node, "lineno", 0)
+            violations.append(f"{label}:{line}: migration script override")
+    return violations
+
+
 def _application_port_violations(tree: ast.AST, label: str) -> list[str]:
     violations = [
         f"{label}: infrastructure root {root}"
@@ -293,8 +392,10 @@ def _application_port_violations(tree: ast.AST, label: str) -> list[str]:
 def test_the_stage_ten_source_files_are_exactly_the_task_one_paths(
     repository_root: Path,
 ) -> None:
-    assert len(STAGE10_SOURCE_FILES) == 2
-    assert len(set(STAGE10_SOURCE_FILES)) == 2
+    """The name is historical: Task 2 appends the startup module, 2 -> 3."""
+    assert len(STAGE10_SOURCE_FILES) == 3
+    assert len(set(STAGE10_SOURCE_FILES)) == 3
+    assert STAGE10_SOURCE_FILES[2] == _STARTUP_MODULE
     assert set(STAGE10_SOURCE_FILES) <= _ALLOWED_SOURCE_FILES
     for earlier in (
         STAGE5_SOURCE_FILES,
@@ -441,3 +542,66 @@ def test_application_ports_are_inward_only(repository_root: Path) -> None:
         "from pydantic import model_validator\n"
     )
     assert _application_port_violations(ast.parse(legitimate), label) == []
+
+
+def test_startup_reaches_first_party_modules_through_public_names_only(
+    repository_root: Path,
+) -> None:
+    """Plan section 6.3 (Task 2): the startup coordinator calls the public recovery
+    interface, never the private reconciler, and composes exactly its pinned
+    first-party modules."""
+    label = _STARTUP_MODULE
+    tree = _parse(_source_path(repository_root, label))
+    assert _private_reach_violations(tree, label) == []
+    first_party = {
+        name
+        for name in _imported_names(tree, _module_package(label))
+        if name.startswith("crypto_lab")
+    }
+    assert first_party == _STARTUP_IMPORTS
+    planted = (
+        "from crypto_lab.artifacts.recovery import _Reconciler\n",
+        "from crypto_lab.artifacts import recovery\nrecovery._Reconciler(**k).run()\n",
+        (
+            "import crypto_lab.artifacts.recovery\n"
+            "crypto_lab.artifacts.recovery._Reconciler\n"
+        ),
+        "from crypto_lab.artifacts import recovery as r\nr._drive(x)\n",
+        "from crypto_lab.persistence.migration_runner import _admitting\n",
+        (
+            "from crypto_lab.persistence.database import SqliteDatabase\n"
+            "SqliteDatabase._apply_revision_policy\n"
+        ),
+        "from .runtime import _kernel32\n",
+    )
+    for source in planted:
+        assert _private_reach_violations(ast.parse(source), label) != [], source
+    legitimate = (
+        "from crypto_lab.artifacts.recovery import reconcile_finalization\n"
+        "from crypto_lab.cli.runtime import DispatchOwner\n"
+        "reconcile_finalization(phase='inventory')\n"
+        "self._owner = owner\n"
+        "phase.owner.released\n"
+        "DispatchOwner.__slots__\n"
+    )
+    assert _private_reach_violations(ast.parse(legitimate), label) == []
+
+
+def test_startup_exposes_no_migration_script_override(repository_root: Path) -> None:
+    """Plan section 4.4 and Task 2 GREEN 9: maintenance migrates only through the
+    packaged script directory; no parameter, keyword, attribute or name of the
+    startup coordinator carries a script location."""
+    label = _STARTUP_MODULE
+    tree = _parse(_source_path(repository_root, label))
+    assert _script_override_violations(tree, label) == []
+    planted = (
+        "apply_migrations(database, script_location=Path('elsewhere'))\n",
+        "def maintain(path, *, script_location=None):\n    return path\n",
+        "config.script_location = location\n",
+        "script_location = Path('elsewhere')\n",
+        "expected_head(script_location=location)\n",
+    )
+    for source in planted:
+        assert _script_override_violations(ast.parse(source), label) != [], source
+    legitimate = "applied = apply_migrations(database)\nhead = expected_head()\n"
+    assert _script_override_violations(ast.parse(legitimate), label) == []

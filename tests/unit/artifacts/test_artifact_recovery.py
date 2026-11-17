@@ -6,12 +6,22 @@ The memory harness composes the same ``reconcile_finalization`` over the memory
 store and a real store under ``tmp_path``, so the planted states and the
 expected actions read identically to the SQLite rows; the memory registrar and
 validator are the Task 6 doubles, so no RESULT success is reachable here.
+
+Stage 10 plan Task 2 adds the closed keyword-only phase selector of the same public
+entry point (plan section 4.3): ``inventory`` classifies and performs only the safe
+preliminary RV-11 quarantine, ``recover`` rereads durable authority and resumes
+eligible purpose-specific work, ``sweep`` runs the orphan, unregistered-content and
+overdue steps; the omitted selector keeps the complete pass and its summary detail
+set, and a selected phase appends the same summary action with exactly one more
+detail key, ``phase``.
 """
 
 from __future__ import annotations
 
 import _winapi
+import dataclasses
 import hashlib
+import inspect
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -56,6 +66,12 @@ from crypto_lab.artifacts.store import (
     ArtifactStore,
     QuarantineMetadata,
 )
+from crypto_lab.cli.runtime import (
+    DispatchOwner,
+    DispatchRelease,
+    acquire_dispatch_owner,
+    release_dispatch_owner,
+)
 from crypto_lab.domain.canonical_json import canonical_json_bytes
 from crypto_lab.domain.command_invocation import CommandInvocationRecord
 from crypto_lab.domain.hashing import _uuid4_shaped, sha256_bytes
@@ -82,6 +98,7 @@ from doubles.artifacts import (
     SYSTEM_OWNER,
     THIRD_CANDIDATE_ID,
     CrashingProbe,
+    DurableState,
     FinalizationCrash,
     MemoryCandidateArtifactRepository,
     MemoryDiagnosticWriter,
@@ -2249,3 +2266,264 @@ def test_rv9_unregistered_blob_under_a_case_renamed_shard_is_quarantined(
     assert after.audit_actions.count("RECONCILIATION_ORPHAN_QUARANTINED") == 1
     assert _ok(harness.recover()).changes == 0
     assert harness.durable().quarantine_entries == (entry,)
+
+
+# --------------------------------------------------------------------------
+# Stage 10 plan Task 2: the closed phase selector of the public entry point
+# --------------------------------------------------------------------------
+
+#: Stage 10 plan section 4.3: the complete pass's summary detail keys, which the
+#: omitted selector keeps exactly; a selected phase adds ``phase`` alone.
+_SUMMARY_DETAIL_KEYS = frozenset(
+    {
+        "resumed",
+        "deferred",
+        "registered",
+        "abandoned",
+        "quarantined",
+        "overdue",
+        "closed_roots",
+        "changes",
+    }
+)
+_SELECTED_PHASES = ("inventory", "recover", "sweep")
+_SUMMARY_ACTION = "RECONCILIATION_FINALIZATION_RESUMED"
+
+
+def _reconcile_phase(
+    harness: MemoryFinalizationHarness, phase: Any
+) -> Result[FinalizationReconciliationReport]:
+    """The public entry point over the memory harness with an explicit selector."""
+    return reconcile_finalization(
+        unit_of_work_factory=harness.unit_of_work.begin,
+        store=harness.roots.store,
+        hasher=harness.hasher,
+        registrar=harness.registrar,
+        recovery_validator=harness.validator,
+        auditor=harness.auditor,
+        clock=harness.clock,
+        runtime_root=harness.roots.runtime_root,
+        command_roots=harness.command_roots,
+        token_material=harness.token_material,
+        log=harness.log,
+        phase=phase,
+    )
+
+
+def _without_audit(state: DurableState) -> DurableState:
+    return dataclasses.replace(state, audit_events=())
+
+
+def _summary_details(state: DurableState) -> list[dict[str, Any]]:
+    return [
+        dict(event.details)
+        for event in state.audit_events
+        if event.action.value == _SUMMARY_ACTION
+    ]
+
+
+def _takeovers(state: DurableState) -> int:
+    return sum(
+        1
+        for event in state.audit_events
+        if event.action.value == "FINALIZATION_LEASE_ACQUIRED"
+        and event.details.get("takeover") is True
+    )
+
+
+def test_artifact_phase_selector_is_closed(harness: MemoryFinalizationHarness) -> None:
+    """The selector is keyword-only and optional; every value outside the closed
+    three -- case variants, padding, combinations, non-strings -- is refused
+    before any work: no transaction stays open, no audit row is appended and the
+    unregistered blob the sweep would quarantine stays where it is."""
+    parameter = inspect.signature(reconcile_finalization).parameters["phase"]
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    assert parameter.default is None
+    harness.plant_run()
+    blob = _plant_stray_blob(harness)
+    before = harness.durable()
+    refused: tuple[object, ...] = (
+        "INVENTORY",
+        "Recover",
+        "all",
+        "complete",
+        "",
+        " sweep",
+        "sweep ",
+        "inventory,sweep",
+        True,
+        0,
+        1.0,
+        b"sweep",
+        ("sweep",),
+    )
+    for value in refused:
+        with pytest.raises(ValueError, match="phase"):
+            _reconcile_phase(harness, value)
+    assert harness.durable() == before
+    assert blob.is_file()
+    assert harness.unit_of_work.open_transactions() == ()
+
+
+def test_inventory_never_promotes_results_or_sweeps_orphans(
+    harness: MemoryFinalizationHarness, tmp_path: Path
+) -> None:
+    """``inventory`` classifies and changes nothing a later phase owns: a
+    recoverable RESULT group whose validation would pass is not validated,
+    resumed or quarantined, a registered mapping and its blob stay, the orphan
+    command root and the unregistered blob are not swept, and the one row it
+    appends is the summary labelled ``inventory``. Its one safe preliminary
+    action is RV-11: a FINALIZING candidate no journal names is quarantined."""
+    plan = harness.plant_result_prestate()
+    harness.validator.plant(_planted_facts())
+    evidence = harness.plant_evidence_prestate()
+    assert _ok(harness.finalize(evidence.request)).journal_state == "REGISTERED"
+    orphan = harness.roots.runtime_root / _ORPHAN_INVOCATION_ID
+    orphan.mkdir()
+    (orphan / "request.json").write_bytes(b'{"orphan": true}')
+    stray = _plant_stray_blob(harness)
+    before = harness.durable()
+    assert len(before.refs) == 1
+    report = _ok(_reconcile_phase(harness, "inventory"))
+    assert dataclasses.asdict(report) == {key: 0 for key in _SUMMARY_DETAIL_KEYS}
+    assert harness.validator.calls == []
+    assert harness.registrar.result_calls == 0
+    after = harness.durable()
+    assert _without_audit(after) == _without_audit(before)
+    assert set(after.candidate_states) >= {
+        candidate.candidate_artifact_id for candidate in plan.candidates
+    }
+    assert all(
+        after.candidate_states[candidate.candidate_artifact_id] == "CANDIDATE"
+        for candidate in plan.candidates
+    )
+    assert orphan.is_dir()
+    assert stray.is_file()
+    assert after.audit_events[: len(before.audit_events)] == before.audit_events
+    (appended,) = after.audit_events[len(before.audit_events) :]
+    assert appended.action.value == _SUMMARY_ACTION
+    assert appended.details["phase"] == "inventory"
+    # The safe preliminary RV-11 quarantine, in a harness of its own.
+    second = MemoryFinalizationHarness(tmp_path / "rv11")
+    staged, candidate_id = _unmapped_finalizing(second)
+    preliminary = _ok(_reconcile_phase(second, "inventory"))
+    assert (preliminary.quarantined, preliminary.changes) == (1, 1)
+    assert (preliminary.resumed, preliminary.registered) == (0, 0)
+    assert second.durable().candidate_states[candidate_id] == "QUARANTINED"
+    assert not staged.exists()
+
+
+def test_recover_follows_process_and_run_reconciliation(
+    harness: MemoryFinalizationHarness,
+) -> None:
+    """``recover`` reads the invocation afresh on every call and keeps every 29.3
+    gate: beside a live child (``RUNNING``) or a terminal invocation without a
+    captured exit (``TIMED_OUT``) the RESULT group is neither validated nor
+    resumed; once process reconciliation has made the run command durably
+    ``EXITED`` the same phase validates it (and the Task 6 registrar abandons it,
+    so no success is reachable)."""
+    plan = harness.plant_result_prestate()
+    harness.validator.plant(_planted_facts())
+    # Each commit publishes a new table view, so the planting reads it afresh.
+    for unresolved in (
+        CommandInvocationState.RUNNING,
+        CommandInvocationState.TIMED_OUT,
+    ):
+        harness.store_data.tables.invocations[INVOCATION_ID] = sample_invocation(
+            unresolved, kind=CommandKind.RUN
+        )
+        before = harness.durable()
+        assert before.invocation is not None
+        assert before.invocation.state is unresolved
+        _ok(_reconcile_phase(harness, "inventory"))
+        report = _ok(_reconcile_phase(harness, "recover"))
+        assert (report.resumed, report.registered, report.changes) == (0, 0, 0)
+        assert harness.validator.calls == [], unresolved
+        assert _without_audit(harness.durable()) == _without_audit(before)
+    # Process reconciliation's outcome: the captured exit is now durable.
+    harness.store_data.tables.invocations[INVOCATION_ID] = plan.invocation
+    report = _ok(_reconcile_phase(harness, "recover"))
+    assert len(harness.validator.calls) == 1
+    assert (report.resumed, report.registered, report.abandoned) == (1, 0, 1)
+    assert harness.registrar.result_calls == 1
+    after = harness.durable()
+    assert after.run_manifests == ()
+    assert after.refs == ()
+    assert after.run_state == "FAILED"
+
+
+def test_unexpired_journal_remains_deferred(
+    harness: MemoryFinalizationHarness, tmp_path: Path
+) -> None:
+    """A ``PREPARED`` journal under an unexpired lease stays deferred through every
+    selected phase while a fresh dispatch owner is held: acquiring ownership
+    supplies no takeover authority, so the journal, its candidates and their
+    bytes are untouched. Once the lease has expired, ``recover`` takes it over
+    through the existing audited compare-and-swap."""
+    plan = harness.plant_result_prestate()
+    with pytest.raises(FinalizationCrash):
+        harness.finalize(plan.request, probe=CrashingProbe("after_prepared"))
+    before = harness.durable()
+    (prepared,) = before.journal
+    assert prepared.state.value == "PREPARED"
+    assert _takeovers(before) == 0
+    dispatch_target = tmp_path / "dispatch.sqlite3"
+    dispatch_target.write_bytes(b"")
+    owner = acquire_dispatch_owner(dispatch_target)
+    assert isinstance(owner, DispatchOwner)
+    try:
+        for phase in _SELECTED_PHASES:
+            report = _ok(_reconcile_phase(harness, phase))
+            expected_deferred = 0 if phase == "sweep" else 1
+            assert report.deferred == expected_deferred, phase
+            assert (report.resumed, report.registered, report.changes) == (0, 0, 0)
+        assert _without_audit(harness.durable()) == _without_audit(before)
+    finally:
+        assert release_dispatch_owner(owner) is DispatchRelease.RELEASED
+    harness.advance_clock(RESULT_LEASE_SECONDS + 1)
+    taken = _ok(_reconcile_phase(harness, "recover"))
+    assert (taken.resumed, taken.deferred) == (1, 0)
+    after = harness.durable()
+    assert _takeovers(after) == 1
+    assert after.journal[0].state.value != "PREPARED"
+
+
+def test_selected_phase_summary_has_only_the_bounded_phase_addition(
+    harness: MemoryFinalizationHarness,
+) -> None:
+    """The omitted selector keeps the complete pass's eight summary details; each
+    selected phase returns the same report type, its summary carries the same
+    eight counts with unchanged meanings plus exactly ``phase``, and only the
+    phase that owns a step performs it (the unregistered blob is the sweep's)."""
+    harness.plant_run()
+    _plant_stray_blob(harness)
+    complete = _ok(harness.recover())
+    assert isinstance(complete, FinalizationReconciliationReport)
+    assert complete.quarantined == 1
+    (default_details,) = _summary_details(harness.durable())
+    assert set(default_details) == _SUMMARY_DETAIL_KEYS
+    assert default_details == dataclasses.asdict(complete)
+    second_stray = b"a second unregistered blob\n"
+    second_digest = hashlib.sha256(second_stray).hexdigest()
+    target = harness.roots.store.finalized_path_for(second_digest)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(second_stray)
+    expected_quarantined = {"inventory": 0, "recover": 0, "sweep": 1}
+    for phase in _SELECTED_PHASES:
+        report = _ok(_reconcile_phase(harness, phase))
+        assert type(report) is FinalizationReconciliationReport
+        details = _summary_details(harness.durable())[-1]
+        assert set(details) == _SUMMARY_DETAIL_KEYS | {"phase"}
+        assert details["phase"] == phase
+        counts = {key: value for key, value in details.items() if key != "phase"}
+        assert counts == dataclasses.asdict(report)
+        assert report.quarantined == expected_quarantined[phase], phase
+        assert report.changes == report.quarantined
+    assert not target.exists()
+    summaries = _summary_details(harness.durable())
+    assert [details.get("phase") for details in summaries] == [
+        None,
+        "inventory",
+        "recover",
+        "sweep",
+    ]

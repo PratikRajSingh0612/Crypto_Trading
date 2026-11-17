@@ -2041,7 +2041,9 @@ def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
     pinned exactly. Stage 10 Task 1 (Stage 10 plan section 6.11) moved the two
     census sizes 135 -> 137 with its runtime and application-port modules and the
     roots 30 -> 33 with ``time``, ``secrets`` and ``signal``; the deferred names,
-    the Task 4 slice and the ``os`` confinement are unchanged.
+    the Task 4 slice and the ``os`` confinement are unchanged. Stage 10 Task 2
+    moved the two census sizes 137 -> 138 with its startup module; the roots, the
+    deferred names, the Task 4 slice and the ``os`` confinement are unchanged.
     """
     allowed = _literal(_STAGE3_GUARD, "_ALLOWED_SOURCE_FILES")
     assert {
@@ -2050,7 +2052,7 @@ def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
         "artifacts/validation.py",
         "artifacts/store.py",
     } <= allowed
-    assert len(allowed) == 137
+    assert len(allowed) == 138
     roots = _literal(_STAGE3_GUARD, "_ALLOWED_IMPORT_ROOTS")
     assert "os" in roots
     assert len(roots) == 33
@@ -2065,4 +2067,4 @@ def test_the_guard_literals_moved_to_the_task_four_sizes() -> None:
         "crypto_lab.artifacts.validation",
         "crypto_lab.artifacts.store",
     )
-    assert len(modules) == 137
+    assert len(modules) == 138
