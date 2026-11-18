@@ -157,7 +157,7 @@ _ROOT_CONFINEMENT: Final[Mapping[str, frozenset[str]]] = {
     "queue": frozenset({"process_supervision/readers.py"}),
     "ctypes": frozenset({"process_supervision/windows_api.py", "cli/runtime.py"}),
     "subprocess": frozenset({"process_supervision/windows_process.py"}),
-    "asyncio": frozenset({"process_supervision/supervisor.py"}),
+    "asyncio": frozenset({"process_supervision/supervisor.py", "cli/execution.py"}),
 }
 #: The one ``Popen`` importer and the reviewed shape of its one call (plan 2.6, 11).
 _POPEN_MODULE: Final = "process_supervision/windows_process.py"
@@ -676,8 +676,10 @@ def test_process_supervision_and_experiments_keep_the_dependency_direction(
         scanned += 1
     assert violations == []
     # Stage 9 plan section 2.6 (Task 7): the three application-integration modules.
-    # Stage 10 plan section 6.11 (Task 1): `experiments/application_ports.py`, 14 -> 15.
-    assert scanned == 12 + 16
+    # Stage 10 plan section 6.11 (Task 1): `experiments/application_ports.py`, 14 -> 15;
+    # Task 3: `experiments/application.py`, 15 -> 16;
+    # Task 4: `experiments/scheduler.py`, 16 -> 17.
+    assert scanned == 12 + 17
 
 
 def test_the_word_sandbox_appears_only_in_the_package_docstring_negative_sentence(

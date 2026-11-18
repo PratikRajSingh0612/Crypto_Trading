@@ -76,10 +76,14 @@ STAGE10_SOURCE_FILES: Final[tuple[str, ...]] = (
     "experiments/application_ports.py",
     "cli/startup.py",
     "experiments/application.py",
+    "experiments/scheduler.py",
+    "cli/execution.py",
 )
 _RUNTIME_MODULE: Final = "cli/runtime.py"
 _STARTUP_MODULE: Final = "cli/startup.py"
 _APPLICATION_MODULE: Final = "experiments/application.py"
+_SCHEDULER_MODULE: Final = "experiments/scheduler.py"
+_EXECUTION_MODULE: Final = "cli/execution.py"
 _RUNTIME_PACKAGE: Final = "crypto_lab.cli.runtime"
 _APPLICATION_PORTS_MODULE: Final = "experiments/application_ports.py"
 _WINDOWS_API_MODULE: Final = "process_supervision/windows_api.py"
@@ -134,6 +138,23 @@ _MODULE_IMPORT_ROOTS: Final[Mapping[str, frozenset[str]]] = {
             "crypto_lab",
             "datetime",
             "pydantic",
+            "typing",
+        }
+    ),
+    _SCHEDULER_MODULE: frozenset(
+        {
+            "__future__",
+            "collections",
+            "crypto_lab",
+            "datetime",
+            "typing",
+        }
+    ),
+    _EXECUTION_MODULE: frozenset(
+        {
+            "__future__",
+            "asyncio",
+            "crypto_lab",
             "typing",
         }
     ),
@@ -406,9 +427,11 @@ def _application_port_violations(tree: ast.AST, label: str) -> list[str]:
 def test_the_stage_ten_source_files_are_exactly_the_task_one_paths(
     repository_root: Path,
 ) -> None:
-    """The name is historical: Task 2 appends the startup module, 2 -> 3."""
-    assert len(STAGE10_SOURCE_FILES) == 4
-    assert len(set(STAGE10_SOURCE_FILES)) == 4
+    """The name is historical: Task 2 appends startup (2->3),
+    Task 3 appends application (3->4), Task 4 appends scheduler and execution (4->6).
+    """
+    assert len(STAGE10_SOURCE_FILES) == 6
+    assert len(set(STAGE10_SOURCE_FILES)) == 6
     assert STAGE10_SOURCE_FILES[2] == _STARTUP_MODULE
     assert set(STAGE10_SOURCE_FILES) <= _ALLOWED_SOURCE_FILES
     for earlier in (
@@ -428,7 +451,12 @@ def test_runtime_roots_are_module_scoped(repository_root: Path) -> None:
     assert _confinement_violations(roots_by_module, _RUNTIME_ROOT_CONFINEMENT) == []
     for label, expected in _MODULE_IMPORT_ROOTS.items():
         assert roots_by_module[label] == expected, label
-        assert expected.isdisjoint(_STAGE10_DENIED_ROOTS), label
+        denied = (
+            _STAGE10_DENIED_ROOTS - {"asyncio"}
+            if label == _EXECUTION_MODULE
+            else _STAGE10_DENIED_ROOTS
+        )
+        assert expected.isdisjoint(denied), label
     assert _RUNTIME_ONLY_ROOTS <= roots_by_module[_RUNTIME_MODULE]
     reach: list[str] = []
     for label in sorted(roots_by_module):
