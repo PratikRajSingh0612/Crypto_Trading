@@ -677,7 +677,7 @@ def test_process_supervision_and_experiments_keep_the_dependency_direction(
     assert violations == []
     # Stage 9 plan section 2.6 (Task 7): the three application-integration modules.
     # Stage 10 plan section 6.11 (Task 1): `experiments/application_ports.py`, 14 -> 15.
-    assert scanned == 12 + 15
+    assert scanned == 12 + 16
 
 
 def test_the_word_sandbox_appears_only_in_the_package_docstring_negative_sentence(

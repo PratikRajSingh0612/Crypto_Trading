@@ -932,9 +932,9 @@ def test_the_stage_eight_source_files_are_exactly_the_fifteen_plan_paths(
     # Stage 9 Task 7 (Stage 9 plan section 2.6, the Task-3-excluded branch), plus
     # the runtime and application-port modules of Stage 10 Task 1 (Stage 10 plan
     # section 6.11), 135 -> 137, and the startup module of Stage 10 Task 2,
-    # 137 -> 138.
-    assert len(_ALLOWED_SOURCE_FILES) == 138
-    assert len(_source_files(repository_root)) == 138
+    # 138 -> 139.
+    assert len(_ALLOWED_SOURCE_FILES) == 139
+    assert len(_source_files(repository_root)) == 139
     assert set(_STAGE9_PERSISTENCE_FILES) <= _ALLOWED_SOURCE_FILES
     assert set(_STAGE9_PERSISTENCE_FILES).isdisjoint(STAGE8_SOURCE_FILES)
     on_disk = {
@@ -1197,8 +1197,8 @@ def test_every_reconciled_census_value_holds(repository_root: Path) -> None:
     # the rest is unchanged. Stage 10 plan section 6.11, Task 1: paths 135 -> 137,
     # import roots 30 -> 33 (`time`, `secrets`, `signal`), exemption pairs
     # 17 -> 19 (`cli/runtime.py` with `time` and `secrets`); Task 2: paths
-    # 137 -> 138 (`cli/startup.py`), roots and pairs unchanged at 33 and 19.
-    assert len(_ALLOWED_SOURCE_FILES) == 138
+    # 138 -> 139 (`experiments/application.py`), roots and pairs unchanged at 33 and 19.
+    assert len(_ALLOWED_SOURCE_FILES) == 139
     assert len(_ALLOWED_IMPORT_ROOTS) == 33
     assert len(_DEFERRED_DEFINITIONS) == 13
     assert len(_INFRASTRUCTURE_EXEMPTIONS) == 19

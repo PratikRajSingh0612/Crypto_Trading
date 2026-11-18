@@ -100,6 +100,7 @@ _ALLOWED_SOURCE_FILES = {
     "domain/versioning.py",
     "experiments/__init__.py",
     "experiments/aggregation.py",
+    "experiments/application.py",
     "experiments/application_ports.py",
     "experiments/comparison.py",
     "experiments/diagnostics.py",

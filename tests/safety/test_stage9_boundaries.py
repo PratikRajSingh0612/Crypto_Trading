@@ -519,8 +519,8 @@ def test_stage_nine_modules_are_exactly_the_plan_paths(repository_root: Path) ->
     # Task 2 appends the startup module to that set, 137 -> 138.
     assert _TASK3_MODULE not in _ALLOWED_SOURCE_FILES
     assert not _source_path(repository_root, _TASK3_MODULE).exists()
-    assert len(_ALLOWED_SOURCE_FILES) == 138
-    assert len(_source_files(repository_root)) == 138
+    assert len(_ALLOWED_SOURCE_FILES) == 139
+    assert len(_source_files(repository_root)) == 139
     staged = set(STAGE9_SOURCE_FILES)
     for earlier in (
         STAGE5_SOURCE_FILES,
@@ -530,7 +530,7 @@ def test_stage_nine_modules_are_exactly_the_plan_paths(repository_root: Path) ->
     ):
         staged |= set(earlier)
     stage10 = set(STAGE10_SOURCE_FILES)
-    assert len(stage10) == 3
+    assert len(stage10) == 4
     assert stage10 <= _ALLOWED_SOURCE_FILES
     assert stage10.isdisjoint(staged)
     assert len(_ALLOWED_SOURCE_FILES - staged - stage10) == 51

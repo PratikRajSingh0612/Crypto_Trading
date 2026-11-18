@@ -121,6 +121,8 @@ _ALLOWED_FOR_EXPERIMENTS: tuple[str, ...] = (
     "crypto_lab.experiments",
     "crypto_lab.artifacts",
     "crypto_lab.audit",
+    "crypto_lab.strategy",
+    "crypto_lab.datasets",
 )
 #: Section 27.1: ``adapters`` may depend on canonical domain types alone.
 _ALLOWED_FOR_ADAPTERS: tuple[str, ...] = ("crypto_lab.domain", "crypto_lab.adapters")
@@ -698,15 +700,15 @@ def test_the_scanner_rejects_every_package_prohibited_for_experiments(
 def test_the_experiments_allowlist_rejects_a_table_permitted_out_of_scope_edge(
     tmp_path: Path,
 ) -> None:
-    """The allowlist is a scope closure: ``strategy`` is permitted by section 27.1
-    and still outside it, so a planted edge must surface as unexpected."""
+    """The allowlist is a scope closure: ``process_supervision`` is outside it,
+    so a planted edge must surface as unexpected."""
     package_root = _write_package(
-        tmp_path, _EXPERIMENTS, "from crypto_lab.strategy import models\n"
+        tmp_path, _EXPERIMENTS, "from crypto_lab.process_supervision import models\n"
     )
 
     reached = _allowed_project_imports(package_root, _EXPERIMENTS)
 
-    assert reached == ("crypto_lab.strategy",)
+    assert reached == ("crypto_lab.process_supervision",)
     assert not any(
         _is_within(reached[0], allowed) for allowed in _ALLOWED_FOR_EXPERIMENTS
     )

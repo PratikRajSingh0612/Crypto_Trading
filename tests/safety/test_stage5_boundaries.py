@@ -180,8 +180,6 @@ _TEST_DOUBLE_ROOTS: Final = frozenset({"doubles", "tests"})
 #: application layer must never import.
 _OUT_OF_SCOPE_PACKAGES: Final[tuple[str, ...]] = (
     "crypto_lab.process_supervision",
-    "crypto_lab.datasets",
-    "crypto_lab.strategy",
     "crypto_lab.persistence",
     "crypto_lab.cli",
 )
@@ -799,7 +797,10 @@ def test_the_test_double_scan_ignores_docstring_text() -> None:
 @pytest.mark.parametrize(
     ("source", "expected"),
     [
-        ("from crypto_lab.datasets import models\n", "crypto_lab.datasets"),
+        (
+            "from crypto_lab.process_supervision import models\n",
+            "crypto_lab.process_supervision",
+        ),
         (
             "import crypto_lab.persistence.database\n",
             "crypto_lab.persistence.database",
@@ -807,8 +808,8 @@ def test_the_test_double_scan_ignores_docstring_text() -> None:
         ("from ..process_supervision import x\n", "crypto_lab.process_supervision"),
         ("from crypto_lab import cli\n", "crypto_lab.cli"),
         (
-            "from crypto_lab.strategy.models import StrategySpec\n",
-            "crypto_lab.strategy",
+            "from crypto_lab.process_supervision.models import LaunchSpecification\n",
+            "crypto_lab.process_supervision",
         ),
     ],
 )

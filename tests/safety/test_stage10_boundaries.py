@@ -75,9 +75,11 @@ STAGE10_SOURCE_FILES: Final[tuple[str, ...]] = (
     "cli/runtime.py",
     "experiments/application_ports.py",
     "cli/startup.py",
+    "experiments/application.py",
 )
 _RUNTIME_MODULE: Final = "cli/runtime.py"
 _STARTUP_MODULE: Final = "cli/startup.py"
+_APPLICATION_MODULE: Final = "experiments/application.py"
 _RUNTIME_PACKAGE: Final = "crypto_lab.cli.runtime"
 _APPLICATION_PORTS_MODULE: Final = "experiments/application_ports.py"
 _WINDOWS_API_MODULE: Final = "process_supervision/windows_api.py"
@@ -120,6 +122,18 @@ _MODULE_IMPORT_ROOTS: Final[Mapping[str, frozenset[str]]] = {
             "dataclasses",
             "enum",
             "pathlib",
+            "typing",
+        }
+    ),
+    _APPLICATION_MODULE: frozenset(
+        {
+            "__future__",
+            "collections",
+            "contextlib",
+            "copy",
+            "crypto_lab",
+            "datetime",
+            "pydantic",
             "typing",
         }
     ),
@@ -393,8 +407,8 @@ def test_the_stage_ten_source_files_are_exactly_the_task_one_paths(
     repository_root: Path,
 ) -> None:
     """The name is historical: Task 2 appends the startup module, 2 -> 3."""
-    assert len(STAGE10_SOURCE_FILES) == 3
-    assert len(set(STAGE10_SOURCE_FILES)) == 3
+    assert len(STAGE10_SOURCE_FILES) == 4
+    assert len(set(STAGE10_SOURCE_FILES)) == 4
     assert STAGE10_SOURCE_FILES[2] == _STARTUP_MODULE
     assert set(STAGE10_SOURCE_FILES) <= _ALLOWED_SOURCE_FILES
     for earlier in (
